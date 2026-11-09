@@ -101,6 +101,10 @@ final class SessionBoardTests: XCTestCase {
 
     func testTitleIgnoresRedactedPrompts() {
         XCTAssertNil(SessionBoard.title(from: "<REDACTED>"))
+        XCTAssertNil(SessionBoard.title(from: "<agent-message from=\"a402ec81\">\nreport"))
+        XCTAssertNil(SessionBoard.title(from: "<task-notification>x</task-notification>"))
+        XCTAssertNil(SessionBoard.title(from: "<command-name>/clear</command-name>"))
+        XCTAssertEqual(SessionBoard.title(from: "Fix <Button> padding"), "Fix <Button> padding")
         XCTAssertNil(SessionBoard.title(from: "   \n  "))
         XCTAssertEqual(SessionBoard.title(from: String(repeating: "a", count: 100))?.count, 80)
     }

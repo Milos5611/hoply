@@ -131,3 +131,25 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(PricingCalibration.check(wrong, table: table).filter(\.isOff).map(\.model), ["claude-opus-5-5"])
     }
 }
+
+final class ModelNameTests: XCTestCase {
+    func testDisplayNames() {
+        XCTAssertEqual(ModelName.display("claude-opus-5-5"), "Opus 5.5")
+        XCTAssertEqual(ModelName.display("claude-opus-5"), "Opus 5")
+        XCTAssertEqual(ModelName.display("claude-haiku-4-5-20251001"), "Haiku 4.5")
+        XCTAssertEqual(ModelName.display("anthropic.claude-sonnet-4-6"), "Sonnet 4.6")
+        XCTAssertEqual(ModelName.display("us.anthropic.claude-sonnet-5-5[1m]"), "Sonnet 5.5")
+        XCTAssertEqual(ModelName.display("claude-fable-5-1"), "Fable 5.1")
+        XCTAssertEqual(ModelName.display("Qwen3.8-Flash-Next"), "Qwen3.8-Flash-Next")
+        XCTAssertEqual(ModelName.display("openrouter/qwen3-coder"), "qwen3-coder")
+        XCTAssertEqual(ModelName.display(""), "Unknown model")
+    }
+
+    func testFamilies() {
+        XCTAssertEqual(ModelName.family("claude-opus-5-5"), .opus)
+        XCTAssertEqual(ModelName.family("claude-haiku-5-5"), .haiku)
+        XCTAssertEqual(ModelName.family("Qwen3.8-Flash-Next"), .other)
+        XCTAssertEqual(ModelName.family("Qwen3.8-Flash-Next", isLocal: true), .local)
+        XCTAssertEqual(ModelName.family("claude-nova-1"), .other)
+    }
+}

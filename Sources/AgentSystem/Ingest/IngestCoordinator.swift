@@ -163,7 +163,7 @@ public actor IngestCoordinator {
     private func drain() async {
         guard !draining, !stopped else { return }
         draining = true
-        while !pending.isEmpty {
+        while !pending.isEmpty, !stopped {
             await process(pending.removeFirst())
         }
         draining = false
@@ -199,7 +199,7 @@ public actor IngestCoordinator {
                     progress.bytesDone += chunk.bytesConsumed
                     emit()
                 }
-                _ = 0
+                if stopped { return }
                 if chunk.atEnd || chunk.bytesConsumed == 0 { break }
             }
         } catch {

@@ -140,7 +140,9 @@ public struct SessionBoard: Sendable {
             .components(separatedBy: .newlines)
             .first?
             .trimmingCharacters(in: .whitespaces) ?? ""
-        guard !firstLine.isEmpty, firstLine != "<REDACTED>" else { return nil }
+        // Harness-injected turns (`<agent-message …>`, `<task-notification>`, `<command-name>`) also arrive
+        // as prompts; skipping them lets the next typed prompt name the session.
+        guard !firstLine.isEmpty, !firstLine.hasPrefix("<") else { return nil }
         return firstLine.count > 80 ? String(firstLine.prefix(79)) + "…" : firstLine
     }
 

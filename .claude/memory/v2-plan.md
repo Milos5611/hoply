@@ -10,7 +10,7 @@ metadata:
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. **M2 built** (core + UI, see "M2 core outcome" / "M2 UI outcome"); finishing cleanup (backfill cancel, chart logic → AgentKit), then user live checks. Next: M3. **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M6 → M7 → M8 → M1.** Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. **M2 built** (core + UI, see "M2 core outcome" / "M2 UI outcome"); cleanup done (backfill cancel via `IngestCoordinator.stop()`, chart logic in `AgentKit/Usage/SpendChart`, `ModelName` display names); only the user live checks remain. Next: M3. **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M6 → M7 → M8 → M1.** Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -249,6 +249,7 @@ Rules for the data:
 - `DashboardWindowController` (single `NSWindow`, `.regular` policy while open) with Overview, Sessions, Spending; also "Open Dashboard" in the status item's right-click menu. Settings gains a History section (status, Reindex, local patterns, reference model, Claude dir).
 - Snapshots render the Dashboard with a stand-in sidebar (`DashboardView(plainSidebar: true)`): the real `NavigationSplitView` draws black offscreen. Money grouping fixed to `en_US`.
 - Live run on real data: 133 files backfilled in ~8 s; 82 sessions, $578 API-equiv, 0 unpriced.
+- Cleanup: `stop()` ends in-flight reads after the current batch and drops queued files (tested); `SpendChartData` (ranking, "Other" fold, unpriced days) is pure AgentKit; `ModelName.display` gives "Opus 5.5"-style labels (`ModelName.family` exists but is unused so far). Harness-injected prompts (`<…>`) no longer name sessions.
 - Unverified (user): live glass sidebar/toolbar, hover, Reduce Transparency, Dock icon on open/close, ⌘W, ~1 s hook→tail cost update, app-menu "Settings…" opens the empty SwiftUI `Settings` scene under `.regular`.
 
 **ZGX facts (checked 2026-11-09 from this Mac):**

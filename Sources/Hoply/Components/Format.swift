@@ -38,12 +38,7 @@ enum Format {
     }
 
     static func model(_ id: String) -> String {
-        guard !id.isEmpty else { return "Unknown model" }
-        var name = id.split(separator: "/").last.map(String.init) ?? id
-        if name.hasPrefix("anthropic.") { name.removeFirst("anthropic.".count) }
-        if name.hasPrefix("claude-") { name.removeFirst("claude-".count) }
-        if let range = name.range(of: #"-\d{8}$"#, options: .regularExpression) { name.removeSubrange(range) }
-        return name
+        ModelName.display(id)
     }
 
     static func bytes(_ count: Int64) -> String {
