@@ -3,7 +3,7 @@ import Foundation
 /// The ledger schema. `migrations[i]` takes `PRAGMA user_version` from i to i + 1. Never edit a shipped
 /// migration; append a new one.
 public enum Schema {
-    public static let migrations: [String] = [v1]
+    public static let migrations: [String] = [v1, v2]
 
     /// Timestamps are unix seconds (REAL). Token columns are never NULL; cost columns are NULL when unpriced.
     static let v1 = """
@@ -117,6 +117,15 @@ public enum Schema {
         project_id INTEGER,
         detail TEXT
     );
+    """
+
+    /// M3: `native_usd` is an agent's own price (Copilot CLI: AIU × $0.01); rows that have it are never re-priced.
+    /// `premium_requests` books a Copilot turn's premium requests (its highest request multiplier) on the turn's
+    /// earliest call, so every total stays a plain `SUM`.
+    static let v2 = """
+    ALTER TABLE usage ADD COLUMN native_usd REAL;
+    ALTER TABLE usage ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0;
+    CREATE INDEX usage_turn ON usage(source, session_id, turn_index) WHERE request_multiplier IS NOT NULL;
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {

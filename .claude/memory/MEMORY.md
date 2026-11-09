@@ -1,4 +1,4 @@
-- [Hoply v2 plan](v2-plan.md) — approved 2026-11-09, M0 + M0.5 + M2 built; order M2→M8 then M1 (Cloudflare last): glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
+- [Hoply v2 plan](v2-plan.md) — approved 2026-11-09, M0 + M0.5 + M2 + M3 built, next M4; order M2→M8 then M1 (Cloudflare last): glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
 - [No deletes](no-deletes.md) — never delete project files; avoid `rm` in shell commands, overwrite instead
 - [Comments only on complex parts](comments-only-complex.md) — comment non-obvious why only; never restate code or document obvious members
 - [Mizu is the UI bar](ui-mizu-reference.md) — user compares the panel with Mizu's real screenshots; check UI with --snapshot before reporting

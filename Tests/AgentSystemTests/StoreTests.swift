@@ -202,7 +202,7 @@ final class StoreTests: XCTestCase {
         let secondPage = try await reader.sessions(in: month, limit: 2, offset: 2)
         XCTAssertEqual(secondPage.sessions.map(\.key.id), ["old"])
         let projectID = try XCTUnwrap(firstPage.sessions.first?.project?.id)
-        let demoOnly = try await reader.sessions(in: month, projectID: projectID)
+        let demoOnly = try await reader.sessions(in: month, project: .project(projectID))
         XCTAssertEqual(demoOnly.totalCount, 2)
 
         let byModel = try await reader.dailySpend(days: 7, split: .model, now: now, calendar: calendar)

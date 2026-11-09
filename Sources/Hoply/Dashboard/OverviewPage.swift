@@ -26,8 +26,14 @@ struct OverviewPage: View {
                         .frame(height: 230)
                 }
                 HStack(alignment: .top, spacing: 12) {
-                    DashboardCard(title: "Top projects", subtitle: "30 days") {
-                        BreakdownList(slices: overview?.projects ?? [], kind: .project)
+                    DashboardCard(title: "Top projects", subtitle: "30 days", trailing: {
+                        Button("Projects") { model.history.select(.projects) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 12))
+                    }) {
+                        BreakdownList(slices: overview?.projects ?? [], kind: .project) { slice in
+                            model.history.openProject(slice.project, range: .month)
+                        }
                     }
                     DashboardCard(title: "Top models", subtitle: "30 days") {
                         BreakdownList(slices: overview?.models ?? [], kind: .model)

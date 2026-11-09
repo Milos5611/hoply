@@ -19,6 +19,8 @@ final class AppModel {
     private(set) var launchAtLogin = false
     private(set) var activity = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
     private(set) var throughput = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
+    /// Ledger projects of the live sessions' cwds, so worktrees and subfolders of one repo share a panel card.
+    private(set) var projectsByCwd: [String: ProjectRef] = [:]
     var showingSettings = false
     let history = History()
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
@@ -29,11 +31,16 @@ final class AppModel {
     @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
     @ObservationIgnored private var lastSnapshot: VLLMSnapshot?
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
+    @ObservationIgnored private var resolvingCwds: Set<String> = []
+    @ObservationIgnored private var unresolvedCwds: Set<String> = []
 
     var attentionCount: Int { sessions.filter { $0.state.needsAttention }.count }
     var workingCount: Int { sessions.filter { $0.state == .working }.count }
     var activeCount: Int { sessions.filter { $0.state != .ended }.count }
-    var grouping: SessionGrouping { SessionGrouping(sessions: sessions) }
+    /// With History off there are no ledger projects, so sessions group per cwd.
+    var grouping: SessionGrouping {
+        SessionGrouping(sessions: sessions, projects: history.unavailableReason == nil ? projectsByCwd : [:])
+    }
     var vllmOnline: Bool { vllm != nil && vllmError == nil }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
@@ -47,6 +54,9 @@ final class AppModel {
 
         server.onEvents = { [weak self] events in
             Task { @MainActor in self?.ingest(events) }
+        }
+        server.onUsage = { [weak self] usage in
+            Task { @MainActor in self?.history.record(usage) }
         }
         server.onStatus = { [weak self] status in
             Task { @MainActor in self?.serverStatus = status }
@@ -89,12 +99,37 @@ final class AppModel {
             if shouldNotify(change) { notifier.post(change.session) }
         }
         history.tail(Set(events.compactMap(\.transcriptPath)))
+        if events.contains(where: { $0.key.source == .copilotCLI && $0.fromHook }) {
+            history.pollCopilot()
+        }
         publishSessions()
     }
 
     private func publishSessions() {
         sessions = board.ordered
         history.track(sessions.map(\.key))
+        resolveProjects()
+    }
+
+    /// Runs on every publish (at least every 5 s), so cwds seen before the ledger opened resolve once it has.
+    private func resolveProjects() {
+        guard history.isReady else { return }
+        let cwds = Set(sessions.compactMap(\.cwd).filter { !$0.isEmpty })
+            .subtracting(projectsByCwd.keys).subtracting(resolvingCwds).subtracting(unresolvedCwds)
+        guard !cwds.isEmpty else { return }
+        resolvingCwds.formUnion(cwds)
+        Task {
+            let found = await history.resolveProjects(Array(cwds))
+            resolvingCwds.subtract(cwds)
+            guard let found else { return }
+            unresolvedCwds.formUnion(cwds.subtracting(found.keys))
+            if !found.isEmpty { projectsByCwd.merge(found) { _, new in new } }
+        }
+    }
+
+    /// The ledger project's title when the cwd is resolved, else the cwd's folder name.
+    func projectTitle(for session: AgentSession) -> String? {
+        session.cwd.flatMap { projectsByCwd[$0]?.title } ?? session.project
     }
 
     func ledgerTotals(for key: SessionKey) -> LedgerTotals? {
@@ -218,7 +253,8 @@ final class AppModel {
         if updated.notificationsEnabled && !old.notificationsEnabled {
             notifier.requestAuthorization()
         }
-        if updated.claudeConfigDir != old.claudeConfigDir {
+        if updated.claudeConfigDir != old.claudeConfigDir || updated.copilotHome != old.copilotHome {
+            unresolvedCwds = []
             history.reopen(LedgerConfiguration(settings: updated))
         } else if updated.localModelPatterns != old.localModelPatterns || updated.referenceModel != old.referenceModel {
             history.updatePricing(localModelPatterns: updated.localModelPatterns, referenceModel: updated.referenceModel)
@@ -261,6 +297,7 @@ extension AppModel {
         model.claudeLimits = PreviewData.claudeLimits(now: now)
         model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
         model.history.show(PreviewData.history(now: now))
+        model.projectsByCwd = PreviewData.projectsByCwd
         return model
     }
 }

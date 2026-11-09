@@ -75,6 +75,7 @@ struct StatStrip: View {
 }
 
 struct WaitingCard: View {
+    @Environment(AppModel.self) private var model
     let sessions: [AgentSession]
 
     var body: some View {
@@ -89,7 +90,7 @@ struct WaitingCard: View {
                     CountChip(value: sessions.count, label: sessions.count == 1 ? "session" : "sessions", tint: .orange)
                 }
                 ForEach(sessions) { session in
-                    SessionRow(session: session, showsProject: true)
+                    SessionRow(session: session, place: model.projectTitle(for: session).map(SessionPlace.project))
                 }
             }
         }
@@ -103,7 +104,7 @@ struct ProjectCard: View {
         Card(prominent: group.isWorking) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    IconTile(symbol: group.path == nil ? "questionmark.folder" : "folder.fill", tint: .blue, size: 34)
+                    icon
                     VStack(alignment: .leading, spacing: 1) {
                         Text(group.name)
                             .font(.system(size: 14, weight: .semibold))
@@ -123,7 +124,7 @@ struct ProjectCard: View {
                     }
                 }
                 ForEach(group.sessions) { session in
-                    SessionRow(session: session)
+                    SessionRow(session: session, place: SessionPlace(cwd: session.cwd, root: group.path))
                 }
                 if let path = group.path {
                     HStack(spacing: 8) {
@@ -140,11 +141,21 @@ struct ProjectCard: View {
         }
     }
 
+    /// A resolved project shows its kind; an unresolved cwd (History off or not resolved yet) a plain folder.
+    @ViewBuilder
+    private var icon: some View {
+        if let project = group.project {
+            IconTile(projectKind: project.kind, size: 34)
+        } else {
+            IconTile(symbol: group.path == nil ? "questionmark.folder" : "folder.fill", tint: .blue, size: 34)
+        }
+    }
+
     private var subtitle: String {
         let count = group.sessions.count
         let agents = count == 1 ? "1 agent" : "\(count) agents"
         guard let path = group.path else { return agents }
-        return "\((path as NSString).abbreviatingWithTildeInPath) · \(agents)"
+        return "\(Format.path(path)) · \(agents)"
     }
 }
 

@@ -23,13 +23,16 @@ public enum TelemetryMapper {
         return nil
     }
 
-    static func event(from record: TelemetryRecord, now: Date) -> AgentEvent? {
-        guard let source = source(of: record) else { return nil }
-        let sessionID = record.first(sessionKeys)?.string
+    static func sessionID(of record: TelemetryRecord, source: AgentSource) -> String {
+        record.first(sessionKeys)?.string
             ?? record.resource["service.instance.id"]?.string
             ?? record.resource["service.name"]?.string
             ?? source.rawValue
-        let key = SessionKey(source: source, id: sessionID)
+    }
+
+    static func event(from record: TelemetryRecord, now: Date) -> AgentEvent? {
+        guard let source = source(of: record) else { return nil }
+        let key = SessionKey(source: source, id: sessionID(of: record, source: source))
         let model = record.first(modelKeys)?.string
         let time = record.time ?? now
         let kind: AgentEvent.Kind
@@ -86,14 +89,10 @@ public enum TelemetryMapper {
 
     /// Copilot (CLI, VS Code, JetBrains) emits OpenTelemetry GenAI semantic conventions.
     static func genAIKind(_ record: TelemetryRecord) -> AgentEvent.Kind {
-        let input = record["gen_ai.usage.input_tokens"]?.int
-        let output = record["gen_ai.usage.output_tokens"]?.int
-        let operation = record["gen_ai.operation.name"]?.string?.lowercased()
-        // Only count model calls; agent/turn spans can repeat the same totals.
-        if input != nil || output != nil, operation == nil || operation == "chat" || operation == "text_completion" {
-            let cache = record["gen_ai.usage.cache_read.input_tokens"]?.int
-                ?? record["gen_ai.usage.cache_read_input_tokens"]?.int ?? 0
-            return .usage(.init(inputTokens: input ?? 0, outputTokens: output ?? 0, cacheTokens: cache))
+        if isGenAIModelCall(record) {
+            let cache = record.first(genAICacheReadKeys)?.int ?? 0
+            return .usage(.init(inputTokens: record["gen_ai.usage.input_tokens"]?.int ?? 0,
+                                outputTokens: record["gen_ai.usage.output_tokens"]?.int ?? 0, cacheTokens: cache))
         }
         if let tool = record["gen_ai.tool.name"]?.string {
             return .toolFinished(tool)
@@ -103,5 +102,14 @@ public enum TelemetryMapper {
             return .toolFinished(tool.isEmpty ? nil : tool)
         }
         return .activity
+    }
+
+    static let genAICacheReadKeys = ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"]
+
+    /// Only model calls carry usage worth counting; agent and turn spans can repeat the same totals.
+    static func isGenAIModelCall(_ record: TelemetryRecord) -> Bool {
+        let operation = record["gen_ai.operation.name"]?.string?.lowercased()
+        guard record["gen_ai.usage.input_tokens"] != nil || record["gen_ai.usage.output_tokens"] != nil else { return false }
+        return operation == nil || operation == "chat" || operation == "text_completion"
     }
 }

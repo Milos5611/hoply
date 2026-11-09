@@ -7,9 +7,11 @@ public struct IngestUpdate: Sendable, Equatable {
     public var changedSessions: Set<SessionKey>
 }
 
-/// Owns transcript ingestion: backfill (newest files first), FSEvents tailing, a periodic stat-only rescan,
-/// and immediate tails requested by hooks. Files are processed one at a time, so a file's cursor and turn
-/// count are never updated by two readers at once.
+/// Owns ledger ingestion. Claude transcripts: backfill (newest files first), FSEvents tailing, a periodic
+/// stat-only rescan, and immediate tails requested by hooks; files are processed one at a time, so a file's
+/// cursor and turn count are never updated by two readers at once. Copilot CLI's session store: polled, and
+/// read only when the database or its WAL changed. Telemetry usage (Copilot IDE, Qwen Code): recorded as it
+/// arrives. All three report through `updates`.
 public actor IngestCoordinator {
     /// Single consumer. Progress during backfill is throttled to about four updates a second.
     public nonisolated let updates: AsyncStream<IngestUpdate>
@@ -18,8 +20,11 @@ public actor IngestCoordinator {
     private let continuation: AsyncStream<IngestUpdate>.Continuation
     private let store: Store
     private let claude: ClaudeTranscriptIngester
+    private let copilot: CopilotStoreIngester?
     private let watch: Bool
     private let rescanInterval: Duration
+    private let copilotPollInterval: Duration
+    private let copilotBatchSize: Int
     private let chunkBytes: Int
     private var cursors: [String: FileCursor] = [:]
     private var pending: [String] = []
@@ -34,13 +39,25 @@ public actor IngestCoordinator {
     private var watcher: DirectoryWatcher?
     private var rescanTask: Task<Void, Never>?
     private var lastEmit: ContinuousClock.Instant?
+    private var copilotCursor: FileCursor?
+    private var copilotSignature: CopilotStoreIngester.Signature?
+    /// The session rows last written, so a poll only rewrites sessions whose metadata moved.
+    private var copilotSessions: [String: CopilotSession] = [:]
+    private var copilotPolling = false
+    private var copilotTask: Task<Void, Never>?
+    private var recording = 0
+    private var telemetryCwds: [SessionKey: String] = [:]
 
-    public init(store: Store, claude: ClaudeTranscriptIngester = ClaudeTranscriptIngester(), watch: Bool = true,
-                rescanInterval: Duration = .seconds(60), chunkBytes: Int = 4 << 20) {
+    public init(store: Store, claude: ClaudeTranscriptIngester = ClaudeTranscriptIngester(),
+                copilot: CopilotStoreIngester? = nil, watch: Bool = true, rescanInterval: Duration = .seconds(60),
+                copilotPollInterval: Duration = .seconds(10), copilotBatchSize: Int = 500, chunkBytes: Int = 4 << 20) {
         self.store = store
         self.claude = claude
+        self.copilot = copilot
         self.watch = watch
         self.rescanInterval = rescanInterval
+        self.copilotPollInterval = copilotPollInterval
+        self.copilotBatchSize = max(copilotBatchSize, 1)
         self.chunkBytes = chunkBytes
         (updates, continuation) = AsyncStream.makeStream(of: IngestUpdate.self)
     }
@@ -48,10 +65,12 @@ public actor IngestCoordinator {
     deinit {
         watcher?.stop()
         rescanTask?.cancel()
+        copilotTask?.cancel()
         continuation.finish()
     }
 
-    /// Loads cursors, starts watching, then backfills. Returns when the backfill queue is empty.
+    /// Loads cursors, starts watching and polling, reads Copilot's store once, then backfills transcripts.
+    /// Returns when the backfill queue is empty.
     public func start() async {
         guard !started else { return }
         started = true
@@ -59,6 +78,7 @@ public actor IngestCoordinator {
         let generation = runGeneration
         do {
             cursors = try await store.cursors(source: .claudeCode)
+            if let copilot { copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath] }
         } catch {
             progress.lastError = "Could not read ingest cursors: \(error)"
         }
@@ -73,8 +93,21 @@ public actor IngestCoordinator {
                     await self.rescan()
                 }
             }
+            if copilot != nil {
+                let interval = copilotPollInterval
+                copilotTask = Task { [weak self] in
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: interval)
+                        guard !Task.isCancelled, let self else { return }
+                        await self.pollCopilot()
+                    }
+                }
+            }
         }
+        // Runs at the backfill's first suspension, so its progress update still comes first.
+        let initialPoll = Task { await self.pollCopilot() }
         await backfill()
+        await initialPoll.value
     }
 
     /// Stops watching and rescanning, drops queued files and ends in-flight reads after their current batch,
@@ -88,8 +121,10 @@ public actor IngestCoordinator {
         watcher = nil
         rescanTask?.cancel()
         rescanTask = nil
+        copilotTask?.cancel()
+        copilotTask = nil
         pending.removeAll()
-        if draining || cursorResets > 0 {
+        if isBusy {
             await withCheckedContinuation { idleWaiters.append($0) }
         }
         backfillRemaining.removeAll()
@@ -117,14 +152,22 @@ public actor IngestCoordinator {
         await drain()
     }
 
-    /// Re-reads every transcript from the start. Only cursors are reset; ledger rows are never deleted.
+    /// Re-reads every transcript and Copilot's whole store. Only cursors are reset; ledger rows are never deleted.
     public func reindex() async {
         guard !stopped else { return }
         cursorResets += 1
+        // New polls wait for the reset; one already running must not save its cursor or signature after it.
+        while copilotPolling { try? await Task.sleep(for: .milliseconds(10)) }
         var reset = false
         do {
             try await store.resetCursors(source: .claudeCode)
             cursors = try await store.cursors(source: .claudeCode)
+            if let copilot {
+                try await store.resetCursors(source: .copilotCLI)
+                copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath]
+                copilotSignature = nil
+                copilotSessions = [:]
+            }
             reset = true
         } catch {
             progress.lastError = "Reindex failed: \(error)"
@@ -132,14 +175,119 @@ public actor IngestCoordinator {
         }
         cursorResets -= 1
         resumeIdleWaiters()
-        if reset { await backfill() }
+        if reset {
+            await pollCopilot()
+            await backfill()
+        }
     }
 
-    /// For tests and shutdown: waits until queued files are processed.
+    /// For tests and shutdown: waits until queued files, a Copilot poll and telemetry writes are done.
     public func waitUntilIdle() async {
-        while draining || !pending.isEmpty {
+        while isBusy || !pending.isEmpty {
             try? await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    // MARK: - Copilot CLI
+
+    /// Reads new rows from Copilot CLI's session store, if its database or WAL changed since the last read.
+    /// Runs every 10 s while started; call it when a Copilot CLI hook arrives to pick up a turn sooner.
+    public func pollCopilot() async {
+        guard let copilot, started, !stopped, !copilotPolling, cursorResets == 0 else { return }
+        let signature = copilot.signature()
+        guard signature != copilotSignature else { return }
+        copilotPolling = true
+        let generation = runGeneration
+        let previous = progress.copilot
+        var status: CopilotStoreStatus
+        do {
+            let schemaVersion = try await readCopilot(copilot, signature: signature, generation: generation)
+            status = .ready(schemaVersion: schemaVersion)
+            if generation == runGeneration { copilotSignature = signature }
+        } catch let error as CopilotStoreError {
+            switch error {
+            case .notFound:
+                status = .notFound
+                copilotSignature = signature
+            case .unsupported(let detail):
+                status = .unsupported(detail)
+                copilotSignature = signature
+            case .changedWhileReading:
+                status = progress.copilot
+            }
+        } catch {
+            status = .failed("\(error)")
+        }
+        copilotPolling = false
+        resumeIdleWaiters()
+        progress.copilot = status
+        if previous != status || !pendingChanges.isEmpty { emit(force: true) }
+    }
+
+    /// Returns the store's schema version. Each batch is written with its cursor (the last event id) in one
+    /// transaction. A lower maximum id than the cursor, or a new inode, means the database was recreated, so
+    /// reading restarts at 0; the upserts make that safe.
+    private func readCopilot(_ copilot: CopilotStoreIngester, signature: CopilotStoreIngester.Signature,
+                             generation: Int) async throws -> Int? {
+        let connection = try copilot.open()
+        let database = signature.database ?? FileStat(inode: 0, size: 0, modified: .distantPast)
+        var after = copilotCursor?.offset ?? 0
+        if let cursor = copilotCursor, cursor.inode != database.inode { after = 0 }
+        if try connection.maxEventID() < after { after = 0 }
+        while !stopped, generation == runGeneration {
+            let events = try connection.events(after: after, limit: copilotBatchSize)
+            guard let last = events.last else { break }
+            let sessions = try connection.sessions(ids: Array(Set(events.map(\.sessionID))))
+            let file = FileCursor(inode: database.inode, size: database.size, offset: last.id, headHash: 0)
+            let changed = try await store.apply(CopilotUsageMapper.batch(events: events, sessions: sessions),
+                                                cursor: IngestCursor(source: .copilotCLI, path: copilot.databasePath,
+                                                                     file: file))
+            after = last.id
+            copilotCursor = file
+            pendingChanges.formUnion(changed)
+            copilotSessions.merge(sessions) { _, new in new }
+            if events.count < copilotBatchSize { break }
+        }
+        guard !stopped, generation == runGeneration else { return connection.schemaVersion }
+        let moved = try connection.sessions().values.filter { copilotSessions[$0.id] != $0 }.sorted { $0.id < $1.id }
+        if !moved.isEmpty {
+            pendingChanges.formUnion(try await store.apply(LedgerBatch(sessions: moved.map {
+                CopilotUsageMapper.sessionUpdate($0)
+            })))
+            for session in moved { copilotSessions[session.id] = session }
+        }
+        return connection.schemaVersion
+    }
+
+    // MARK: - Telemetry
+
+    /// Persists telemetry usage for sources whose ledger is their OTel (others are dropped). A record without
+    /// a cwd gets its session's known cwd, else its process's (`process.pid`), else stays "Unassigned".
+    public func record(_ usage: [UsageRecord]) async {
+        var records = usage.filter { UsageAuthority.persistsTelemetry(from: $0.source) }
+        guard !records.isEmpty, !stopped else { return }
+        recording += 1
+        for record in records {
+            if let cwd = record.cwd { telemetryCwds[SessionKey(source: record.source, id: record.sessionID)] = cwd }
+        }
+        for index in records.indices where records[index].cwd == nil {
+            let key = SessionKey(source: records[index].source, id: records[index].sessionID)
+            if let known = telemetryCwds[key] {
+                records[index].cwd = known
+            } else if let pid = records[index].processID,
+                      let cwd = ProcessDirectory.cwd(of: pid, notStartedAfter: records[index].timestamp) {
+                records[index].cwd = cwd
+                telemetryCwds[key] = cwd
+            }
+        }
+        do {
+            pendingChanges.formUnion(try await store.apply(TelemetryUsage.ledgerBatch(records)))
+        } catch {
+            progress.lastError = "Telemetry usage: \(error)"
+        }
+        recording -= 1
+        resumeIdleWaiters()
+        emit(force: true)
     }
 
     // MARK: - Work queue
@@ -150,7 +298,7 @@ public actor IngestCoordinator {
         backfillRemaining = Set(work.map(\.path))
         progress = IngestProgress(filesDone: 0, filesTotal: work.count, bytesDone: 0,
                                   bytesTotal: work.reduce(0) { $0 + unreadBytes($1) }, isBackfilling: !work.isEmpty,
-                                  lastError: progress.lastError)
+                                  lastError: progress.lastError, copilot: progress.copilot)
         emit(force: true)
         for file in work { enqueue(file.path) }
         await drain()
@@ -172,8 +320,10 @@ public actor IngestCoordinator {
         emit(force: true)
     }
 
+    private var isBusy: Bool { draining || cursorResets > 0 || copilotPolling || recording > 0 }
+
     private func resumeIdleWaiters() {
-        guard !draining, cursorResets == 0 else { return }
+        guard !isBusy else { return }
         let waiters = idleWaiters
         idleWaiters = []
         for waiter in waiters { waiter.resume() }

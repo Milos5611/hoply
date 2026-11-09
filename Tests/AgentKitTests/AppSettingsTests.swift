@@ -30,6 +30,15 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.claudeLimitsEnabled)
     }
 
+    func testCopilotHomeDecodesLenientlyAndRoundTrips() {
+        XCTAssertEqual(AppSettings.decode(Data(v1JSON.utf8)).copilotHome, "", "older settings mean the default")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"copilotHome":42,"vllmName":"ZGX"}"#.utf8)).copilotHome, "")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"copilotHome":42,"vllmName":"ZGX"}"#.utf8)).vllmName, "ZGX")
+        var settings = AppSettings()
+        settings.copilotHome = "~/scratch/copilot"
+        XCTAssertEqual(AppSettings.decode(settings.encoded()).copilotHome, "~/scratch/copilot")
+    }
+
     func testGarbageOrMissingDataGivesDefaults() {
         XCTAssertEqual(AppSettings.decode(nil), AppSettings())
         XCTAssertEqual(AppSettings.decode(Data("[1,2".utf8)), AppSettings())

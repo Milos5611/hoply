@@ -63,6 +63,10 @@ final class ProjectRegistry {
         return entry
     }
 
+    func cachedEntry(for cwd: String) -> Entry? {
+        cache[cwd]
+    }
+
     func invalidate() {
         cache = [:]
     }

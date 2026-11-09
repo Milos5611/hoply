@@ -3,6 +3,7 @@ import Foundation
 
 enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     case overview
+    case projects
     case sessions
     case spending
 
@@ -11,6 +12,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .overview: return "Overview"
+        case .projects: return "Projects"
         case .sessions: return "Sessions"
         case .spending: return "Spending"
         }
@@ -19,6 +21,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .overview: return "square.grid.2x2"
+        case .projects: return "folder"
         case .sessions: return "list.bullet.rectangle"
         case .spending: return "chart.bar.xaxis"
         }
@@ -33,6 +36,7 @@ enum HistoryRange: String, CaseIterable, Identifiable, Hashable {
     case all
 
     static let spendingRanges: [HistoryRange] = [.week, .month, .quarter]
+    static let projectRanges: [HistoryRange] = [.week, .month, .quarter, .all]
 
     var id: String { rawValue }
 
@@ -54,6 +58,10 @@ enum HistoryRange: String, CaseIterable, Identifiable, Hashable {
         case .quarter: return "90 days"
         case .all: return "All time"
         }
+    }
+
+    var shortLabel: String {
+        self == .all ? "All" : label
     }
 
     func interval(now: Date = Date()) -> DateInterval {

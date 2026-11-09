@@ -35,7 +35,9 @@ struct SpendingPage: View {
                 }
                 HStack(alignment: .top, spacing: 12) {
                     DashboardCard(title: "By project", subtitle: history.spendingRange.label) {
-                        BreakdownList(slices: spending?.projects ?? [], kind: .project)
+                        BreakdownList(slices: spending?.projects ?? [], kind: .project) { slice in
+                            model.history.openProject(slice.project, range: history.spendingRange)
+                        }
                     }
                     DashboardCard(title: "By model", subtitle: history.spendingRange.label) {
                         BreakdownList(slices: spending?.models ?? [], kind: .model)

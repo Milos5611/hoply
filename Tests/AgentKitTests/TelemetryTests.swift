@@ -34,6 +34,44 @@ final class OTLPDecoderTests: XCTestCase {
         XCTAssertEqual(json[0].signal, .span)
     }
 
+    func testTraceAndSpanIDsAndRawTimesMatchAcrossEncodings() throws {
+        let json = try OTLPDecoder.decode(path: "/v1/traces", body: Fixture.data("copilot_spans.json"), encoding: .json)
+        let proto = try OTLPDecoder.decode(path: "/v1/traces", body: Fixture.data("copilot_spans.pb"), encoding: .protobuf)
+        XCTAssertEqual(proto.map(\.traceID), ["3cabd6c553b33d8c33f2d6b9275ac68e", "009f27f7aedb3349a20e8c18ffc661e6"])
+        XCTAssertEqual(proto.map(\.spanID), ["f73cc1dca94eaac6", "f1e98fca0a8a93b8"])
+        XCTAssertEqual(proto.map(\.timeUnixNano), [1_794_228_002_000_000_000, 1_794_228_003_500_000_000], "span end time")
+        XCTAssertEqual(json.map(\.traceID), proto.map(\.traceID))
+        XCTAssertEqual(json.map(\.spanID), proto.map(\.spanID))
+        XCTAssertEqual(json.map(\.timeUnixNano), proto.map(\.timeUnixNano))
+
+        for name in ["claude_logs", "qwen_logs"] {
+            let logsJSON = try OTLPDecoder.decode(path: "/v1/logs", body: Fixture.data("\(name).json"), encoding: .json)
+            let logsProto = try OTLPDecoder.decode(path: "/v1/logs", body: Fixture.data("\(name).pb"), encoding: .protobuf)
+            XCTAssertEqual(logsJSON.map(\.timeUnixNano), logsProto.map(\.timeUnixNano), name)
+            XCTAssertTrue(logsJSON.allSatisfy { $0.timeUnixNano != nil }, name)
+        }
+        let qwen = try OTLPDecoder.decode(path: "/v1/logs", body: Fixture.data("qwen_logs.pb"), encoding: .protobuf)
+        XCTAssertEqual(qwen.last?.timeUnixNano, 3_588_457_252_476_097_900, "exact, not rounded through Date")
+    }
+
+    func testJSONIDsInBase64UppercaseOrZeroAreNormalized() throws {
+        func span(trace: String, span: String) -> Data {
+            Data(#"{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"\#(trace)","spanId":"\#(span)","name":"x","endTimeUnixNano":"5"}]}]}]}"#.utf8)
+        }
+        let base64 = try OTLPDecoder.decode(path: "/v1/traces", body: span(trace: "PKvWxVOzPYwz8ta5J1rGjg==",
+                                                                           span: "9zzB3KlOqsY="), encoding: .json)
+        XCTAssertEqual(base64.first?.traceID, "3cabd6c553b33d8c33f2d6b9275ac68e")
+        XCTAssertEqual(base64.first?.spanID, "f73cc1dca94eaac6")
+        XCTAssertEqual(base64.first?.timeUnixNano, 5)
+        let upper = try OTLPDecoder.decode(path: "/v1/traces", body: span(trace: "3CABD6C553B33D8C33F2D6B9275AC68E",
+                                                                          span: "F73CC1DCA94EAAC6"), encoding: .json)
+        XCTAssertEqual(upper.first?.traceID, "3cabd6c553b33d8c33f2d6b9275ac68e")
+        let zero = try OTLPDecoder.decode(path: "/v1/traces", body: span(trace: "00000000000000000000000000000000",
+                                                                         span: ""), encoding: .json)
+        XCTAssertNil(zero.first?.traceID)
+        XCTAssertNil(zero.first?.spanID)
+    }
+
     func testMalformedProtobufThrows() {
         // Field 1, length-delimited, claims 127 bytes that are not there.
         XCTAssertThrowsError(try OTLPDecoder.decode(path: "/v1/logs", body: Data([0x0A, 0x7F, 0x01]), encoding: .protobuf))

@@ -9,8 +9,17 @@ public struct HubRouter: Sendable {
     public struct Outcome: Sendable {
         public var response: HTTPResponse
         public var events: [AgentEvent]
+        /// Ledger rows for sources whose usage history is their telemetry (`UsageAuthority`).
+        public var usage: [UsageRecord]
         /// Short description for the activity log, nil for routine requests.
         public var note: String?
+
+        public init(response: HTTPResponse, events: [AgentEvent], usage: [UsageRecord] = [], note: String?) {
+            self.response = response
+            self.events = events
+            self.usage = usage
+            self.note = note
+        }
     }
 
     public init() {}
@@ -55,7 +64,8 @@ public struct HubRouter: Sendable {
         do {
             let records = try OTLPDecoder.decode(path: request.path, body: request.body,
                                                  encoding: isJSON ? .json : .protobuf)
-            return Outcome(response: ok, events: TelemetryMapper.events(from: records, now: now), note: nil)
+            return Outcome(response: ok, events: TelemetryMapper.events(from: records, now: now),
+                           usage: TelemetryUsage.records(from: records), note: nil)
         } catch OTLPError.unknownSignal {
             return Outcome(response: .notFound, events: [], note: "Unknown OTLP path \(request.path)")
         } catch {

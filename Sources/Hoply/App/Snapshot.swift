@@ -30,9 +30,13 @@ enum Snapshot {
                     var preview = PreviewData.history(now: now)
                     if page == .overview { preview.progress = PreviewData.backfilling }
                     model.history.show(preview, page: page)
-                    try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model, appearance: looks,
+                    try render(DashboardView(plainSidebar: true).frame(width: 1180, height: page == .projects ? 880 : 760),
+                               model: model, appearance: looks,
                                to: directory.appendingPathComponent("dashboard-\(page.rawValue)-\(name).png"))
                 }
+                model.history.showProjectDetail(PreviewData.history(now: now))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1260), model: model, appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))
             }
             print(directory.path)
         } catch {

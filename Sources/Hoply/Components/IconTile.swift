@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 
 struct IconTile: View {
@@ -15,5 +16,31 @@ struct IconTile: View {
             .frame(width: size, height: size)
             .background(shape.fill(colorScheme == .dark ? Color.white.opacity(0.10) : .white))
             .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+}
+
+extension IconTile {
+    /// A ledger project's tile; `kind == nil` is Unassigned (usage no project claimed).
+    init(projectKind kind: ProjectKind?, size: CGFloat = 30) {
+        self.init(symbol: Self.symbol(for: kind), tint: Self.tint(for: kind), size: size)
+    }
+
+    static func symbol(for kind: ProjectKind?) -> String {
+        switch kind {
+        case .repo: return "folder.fill"
+        case .folder: return "folder"
+        case .home: return "house.fill"
+        case .scratch: return "scribble"
+        case nil: return "questionmark.folder"
+        }
+    }
+
+    static func tint(for kind: ProjectKind?) -> Color {
+        switch kind {
+        case .repo, .folder: return .blue
+        case .home: return .indigo
+        case .scratch: return .orange
+        case nil: return .secondary
+        }
     }
 }

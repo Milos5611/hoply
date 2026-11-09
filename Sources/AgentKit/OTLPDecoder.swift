@@ -47,10 +47,13 @@ public enum OTLPDecoder {
                         let bodyValue = object(record, ["body"]).map(jsonAnyValue)
                         let eventName = string(record, ["eventName", "event_name"])
                         let name = nonEmpty(eventName) ?? nonEmpty(attributes["event.name"]?.string) ?? bodyValue?.string ?? ""
-                        let time = nanosToDate(record["timeUnixNano"] ?? record["time_unix_nano"])
-                            ?? nanosToDate(record["observedTimeUnixNano"] ?? record["observed_time_unix_nano"])
+                        let nanos = nanos(record["timeUnixNano"] ?? record["time_unix_nano"])
+                            ?? nanos(record["observedTimeUnixNano"] ?? record["observed_time_unix_nano"])
                         records.append(TelemetryRecord(signal: .log, name: name, attributes: attributes,
-                                                       resource: resource, time: time))
+                                                       resource: resource, time: date(nanos),
+                                                       traceID: jsonID(record, ["traceId", "trace_id"]),
+                                                       spanID: jsonID(record, ["spanId", "span_id"]),
+                                                       timeUnixNano: nanos))
                     }
                 }
             }
@@ -61,10 +64,13 @@ public enum OTLPDecoder {
                     for span in objects(scopeSpans, ["spans"]) {
                         let attributes = jsonAttributes(objects(span, ["attributes"]))
                         let name = string(span, ["name"]) ?? ""
-                        let time = nanosToDate(span["endTimeUnixNano"] ?? span["end_time_unix_nano"])
-                            ?? nanosToDate(span["startTimeUnixNano"] ?? span["start_time_unix_nano"])
+                        let nanos = nanos(span["endTimeUnixNano"] ?? span["end_time_unix_nano"])
+                            ?? nanos(span["startTimeUnixNano"] ?? span["start_time_unix_nano"])
                         records.append(TelemetryRecord(signal: .span, name: name, attributes: attributes,
-                                                       resource: resource, time: time))
+                                                       resource: resource, time: date(nanos),
+                                                       traceID: jsonID(span, ["traceId", "trace_id"]),
+                                                       spanID: jsonID(span, ["spanId", "span_id"]),
+                                                       timeUnixNano: nanos))
                     }
                 }
             }
@@ -142,14 +148,35 @@ public enum OTLPDecoder {
         return text
     }
 
-    private static func nanosToDate(_ raw: Any?) -> Date? {
+    private static func nanos(_ raw: Any?) -> UInt64? {
         var nanos: UInt64 = 0
         if let text = raw as? String, let value = UInt64(text) {
             nanos = value
         } else if let number = raw as? NSNumber {
             nanos = number.uint64Value
         }
-        return nanos == 0 ? nil : Date(timeIntervalSince1970: Double(nanos) / 1_000_000_000)
+        return nanos == 0 ? nil : nanos
+    }
+
+    private static func date(_ nanos: UInt64?) -> Date? {
+        nanos.map { Date(timeIntervalSince1970: Double($0) / 1_000_000_000) }
+    }
+
+    /// OTLP/JSON specifies hex trace and span IDs, but some exporters send the protobuf bytes as base64.
+    private static func jsonID(_ dict: [String: Any], _ keys: [String]) -> String? {
+        guard let text = nonEmpty(string(dict, keys)) else { return nil }
+        if text.count.isMultiple(of: 2), text.allSatisfy(\.isHexDigit) {
+            return hexID(text.lowercased())
+        }
+        return Data(base64Encoded: text).flatMap { hexID([UInt8]($0)) }
+    }
+
+    static func hexID(_ bytes: [UInt8]) -> String? {
+        hexID(bytes.map { String(format: "%02x", $0) }.joined())
+    }
+
+    private static func hexID(_ hex: String) -> String? {
+        hex.isEmpty || hex.allSatisfy({ $0 == "0" }) ? nil : hex
     }
 
     // MARK: - Protobuf
@@ -202,10 +229,14 @@ public enum OTLPDecoder {
         var body: AttributeValue?
         var attributes: [String: AttributeValue] = [:]
         var eventName = ""
+        var traceID: [UInt8] = []
+        var spanID: [UInt8] = []
         while let tag = try reader.readTag() {
             switch (tag.field, tag.wireType) {
             case (1, 1): time = try reader.readFixed64()
             case (11, 1): observed = try reader.readFixed64()
+            case (9, 2): traceID = try reader.readLengthDelimited()
+            case (10, 2): spanID = try reader.readLengthDelimited()
             case (5, 2): body = try pbAnyValue(reader.readLengthDelimited())
             case (6, 2):
                 let pair = try pbKeyValue(reader.readLengthDelimited())
@@ -215,9 +246,9 @@ public enum OTLPDecoder {
             }
         }
         let name = !eventName.isEmpty ? eventName : (attributes["event.name"]?.string ?? body?.string ?? "")
-        let nanos = time != 0 ? time : observed
-        let date = nanos == 0 ? nil : Date(timeIntervalSince1970: Double(nanos) / 1_000_000_000)
-        return TelemetryRecord(signal: .log, name: name, attributes: attributes, resource: resource, time: date)
+        let nanos: UInt64? = time != 0 ? time : (observed != 0 ? observed : nil)
+        return TelemetryRecord(signal: .log, name: name, attributes: attributes, resource: resource, time: date(nanos),
+                               traceID: hexID(traceID), spanID: hexID(spanID), timeUnixNano: nanos)
     }
 
     private static func pbSpan(_ bytes: [UInt8], resource: [String: AttributeValue]) throws -> TelemetryRecord {
@@ -226,8 +257,12 @@ public enum OTLPDecoder {
         var start: UInt64 = 0
         var end: UInt64 = 0
         var attributes: [String: AttributeValue] = [:]
+        var traceID: [UInt8] = []
+        var spanID: [UInt8] = []
         while let tag = try reader.readTag() {
             switch (tag.field, tag.wireType) {
+            case (1, 2): traceID = try reader.readLengthDelimited()
+            case (2, 2): spanID = try reader.readLengthDelimited()
             case (5, 2): name = String(decoding: try reader.readLengthDelimited(), as: UTF8.self)
             case (7, 1): start = try reader.readFixed64()
             case (8, 1): end = try reader.readFixed64()
@@ -237,9 +272,9 @@ public enum OTLPDecoder {
             default: try reader.skip(wireType: tag.wireType)
             }
         }
-        let nanos = end != 0 ? end : start
-        let date = nanos == 0 ? nil : Date(timeIntervalSince1970: Double(nanos) / 1_000_000_000)
-        return TelemetryRecord(signal: .span, name: name, attributes: attributes, resource: resource, time: date)
+        let nanos: UInt64? = end != 0 ? end : (start != 0 ? start : nil)
+        return TelemetryRecord(signal: .span, name: name, attributes: attributes, resource: resource, time: date(nanos),
+                               traceID: hexID(traceID), spanID: hexID(spanID), timeUnixNano: nanos)
     }
 
     private static func pbResource(_ bytes: [UInt8]) throws -> [String: AttributeValue] {

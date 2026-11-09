@@ -11,7 +11,9 @@ final class RealTranscriptsTests: XCTestCase {
                           "Set HOPLY_REAL_TRANSCRIPTS=1 to ingest the real ~/.claude")
         let directory = try TempDirectory()
         let databasePath = directory.path("hoply.sqlite")
-        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: databasePath, pricingOverridesURL: nil,
+        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: databasePath,
+                                                                   copilotHome: directory.path("copilot"),
+                                                                   pricingOverridesURL: nil,
                                                                    watchForChanges: false))
         let started = Date()
         await ledger.ingest.start()

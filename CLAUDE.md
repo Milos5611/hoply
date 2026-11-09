@@ -18,9 +18,10 @@ swift test                                                    # all tests (Agent
 swift test --filter SessionBoardTests                         # one test class
 swift test --filter SessionBoardTests/testClaudeLifecycle     # one test
 HOPLY_REAL_TRANSCRIPTS=1 swift test --filter RealTranscriptsTests  # opt-in: ingest the real ~/.claude (read-only) into a temp DB, compare with cost-state
+HOPLY_REAL_COPILOT=1 swift test --filter RealCopilotTests          # opt-in: ingest a temp copy of ~/.copilot/session-store.db, compare with its own sums
 swift run Hoply                                               # run unbundled; icon appears in the menu bar
 swift run Hoply --snapshot build/snapshots                    # render sample data to PNGs: panel (light, dark, full height, settings) + Dashboard pages
-scripts/simulate.sh                                           # with the app running: post fake hook/OTLP traffic (DELAY=0 for no pauses)
+scripts/simulate.sh                                           # with the app running: post fake hook/OTLP traffic (DELAY=0 for no pauses); its Qwen/Copilot IDE usage becomes permanent ledger rows (sim-* sessions)
 scripts/install.sh [--uninstall]                              # release build → ~/Applications/Hoply.app, open it, connect Claude Code + Copilot CLI
 HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh            # sign with a stable self-signed cert instead of ad-hoc
 curl -s http://127.0.0.1:4318/health
@@ -33,17 +34,17 @@ Notifications and "Launch at login" only work in the bundled `.app` (`AppModel.i
 Three targets:
 
 - **`AgentKit`**: platform-neutral core: HTTP parsing, routing, OTLP decoding, event mapping, the session state machine, Prometheus/vLLM, Claude limits, `AppSettings` (tolerant decoding). No UI and no new I/O. `HubServer` (wrapped in `#if canImport(Network)`) and `ClaudeLimitsClient` are the existing I/O exceptions.
-  - `Usage/`: `UsageRecord`/`TokenCounts`, `ClaudeTranscriptParser` (+ `ClaudeTranscriptBatch`), `LedgerBatch` (the Store's write unit) and the read-API value types (`LedgerTotals`, `SessionSummary`, `DailySpendSeries`, `SpendSlice`, `SpendOverview`, `IngestProgress`).
+  - `Usage/`: `UsageRecord`/`TokenCounts`, `UsageAuthority` (which ledger each source uses), `ClaudeTranscriptParser` (+ `ClaudeTranscriptBatch`), `CopilotUsageMapper` (Copilot store rows → ledger rows), `TelemetryUsage` (OTLP records → ledger rows), `LedgerBatch` (the Store's write unit) and the read-API value types (`LedgerTotals`, `SessionSummary`, `ProjectSummary`/`ProjectFilter`, `DailySpendSeries`, `SpendSlice`, `SpendOverview`, `IngestProgress`/`CopilotStoreStatus`).
   - `Pricing/`: `PricingTable`, `BundledPricing` (JSON in a Swift string literal), `PricingCalibration`. `Projects/`: `ProjectResolver` (filesystem injected through `ProjectFileSystem`) and `SessionGrouping`. `Support/`: `Timestamps`, `FNV1a`, `JSONLines`.
 - **`AgentSystem`**: macOS I/O adapters that feed AgentKit types. No UI.
-  - `SQLite/SQLiteConnection` (prepared statements, transactions). `Store/`: `Schema` (migrations + `VACUUM INTO` backups), the `Store` actor (the only writer) and the `StoreReader` actor (read-only connection, all read queries).
-  - `Ingest/`: `FileTailer`, `DirectoryWatcher` (FSEvents), `ClaudeTranscriptIngester`, `IngestCoordinator`. `Projects/ProjectRegistry` (+ `LocalProjectFileSystem`). `Pricing/PricingOverrides` loads `pricing.json`. `Ledger` bundles store, reader and coordinator for the app.
+  - `SQLite/SQLiteConnection` (prepared statements, transactions, read-only in-memory snapshots). `Store/`: `Schema` (migrations + `VACUUM INTO` backups), the `Store` actor (the only writer) and the `StoreReader` actor (read-only connection, all read queries).
+  - `Ingest/`: `FileTailer`, `DirectoryWatcher` (FSEvents), `ClaudeTranscriptIngester`, `CopilotStoreIngester`, `IngestCoordinator`. `Projects/ProjectRegistry` (+ `LocalProjectFileSystem`). `Processes/ProcessDirectory` (a pid's cwd through libproc). `Pricing/PricingOverrides` loads `pricing.json`. `Ledger` bundles store, reader and coordinator for the app.
 - **`Hoply`**: the menu bar app (SwiftUI views in AppKit hosts), built with default `MainActor` isolation. `StatusItemController` owns an `NSStatusItem` and an `NSPopover` hosting `PanelView`. It replaced `MenuBarExtra`, which code can't open or close and which draws an opaque window. `AppModel` (`@Observable`) owns all state and is injected with `.environment(model)`; views read it through `@Environment(AppModel.self)`. Folders:
   - `App/`: entry point, `AppModel`, `StatusItemController`, `DashboardWindowController` (one reusable `NSWindow`; activation policy `.regular` while open, `.accessory` after), settings storage, and `PreviewData` + `Snapshot` for `--snapshot` (preview ledger data never opens the real DB).
   - `Models/`: `History`, the app's view of the usage ledger (see "Usage ledger" below).
   - `Services/`: `Notifier`, `WorkspaceActions` (Finder, Terminal, pasteboard).
-  - `Panel/`: the 448×600 panel. Header (Dashboard, notifications, settings), a stat strip, then "Waiting on you", project cards (grouped by `SessionGrouping`), and a widget strip (Claude limits, local model, Today). Session rows and Today show ledger totals; the footer shows backfill progress. Settings live here too, including History (status, Reindex, local model patterns, reference model, Claude dir).
-  - `Dashboard/`: `DashboardView` (`NavigationSplitView`) with the Overview, Sessions and Spending pages, `SpendChart` (Swift Charts, `chartXSelection` hover) and shared Dashboard components.
+  - `Panel/`: the 448×600 panel. Header (Dashboard, notifications, settings), a stat strip, then "Waiting on you", project cards (`SessionGrouping` over `AppModel.projectsByCwd`, so a repo's worktrees and subfolders share a card; rows name the worktree or subfolder), and a widget strip (Claude limits, local model, Today). Session rows and Today show ledger totals, plus premium requests and AIU for Copilot; the footer shows backfill progress. Settings live here too, including History (status, Copilot store status, Reindex, local model patterns, reference model, Claude dir, Copilot dir).
+  - `Dashboard/`: `DashboardView` (`NavigationSplitView`) with the Overview, Projects (tile list, then a detail with chart, breakdowns and sessions), Sessions and Spending pages, `SpendChart` (Swift Charts, `chartXSelection` hover) and shared Dashboard components. Overview "Top projects" and Spending "By project" rows open a project's detail (`History.openProject`).
   - `Components/`: `Card` (the white rounded surface), `StatTile`, `WidgetTile`, `RingGauge`, `MiniBars`, `StackedBar`, `IconTile`, `SourceBadge`, `StatePill`, `CountChip`, `TileButtonStyle`, `SectionTitle`, `Hint`, `LabeledRow`, `Meter`, `Metric`, `Format`.
   - v2 adds `Palette/` (M8).
 
@@ -54,29 +55,46 @@ Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories
 ### Request → panel data flow
 
 1. `HubServer`: an `NWListener` restricted to the loopback interface; it also rejects non-loopback peers. It buffers bytes until `HTTPRequestParser` (Content-Length and chunked, handles `Expect: 100-continue`) returns a complete request. Each connection serves one request, then closes.
-2. `HubRouter.handle` is pure: request in, `Outcome` (response + `[AgentEvent]` + optional note) out.
-   - `POST /v1/logs|traces` → `OTLPDecoder` (JSON or protobuf, sniffed when Content-Type is missing) → flat `[TelemetryRecord]` → `TelemetryMapper` → events. `/v1/metrics` is accepted and ignored. Compressed bodies get 415; gRPC is not supported.
+2. `HubRouter.handle` is pure: request in, `Outcome` (response + `[AgentEvent]` + `[UsageRecord]` to persist + optional note) out.
+   - `POST /v1/logs|traces` → `OTLPDecoder` (JSON or protobuf, sniffed when Content-Type is missing) → flat `[TelemetryRecord]` (with lowercase-hex `traceID`/`spanID` and the exact `timeUnixNano`) → `TelemetryMapper` → events, and `TelemetryUsage` → ledger rows for telemetry-ledger sources only. `/v1/metrics` is accepted and ignored. Compressed bodies get 415; gRPC is not supported.
    - `POST /hooks/<source>[/<event>]` → `HookMapper`. Claude Code sends `hook_event_name` in the body. Copilot CLI payloads have no event name, so its setup script puts the event in the URL path. The path name wins.
-3. `HubServer` callbacks (`onEvents`, `onStatus`, `onNote`) fire on a private dispatch queue. `AppModel` hops to the main actor and feeds events to `SessionBoard`.
+3. `HubServer` callbacks (`onEvents`, `onUsage`, `onStatus`, `onNote`) fire on a private dispatch queue. `AppModel` hops to the main actor and feeds events to `SessionBoard`; `onUsage` batches go through `History.record` (in arrival order, held while the ledger opens) to `Ledger.record`.
 4. `SessionBoard` (a pure value type) applies each `AgentEvent` to an `AgentSession` keyed by `(AgentSource, sessionID)` and returns a `StateChange`. `AppModel.shouldNotify` decides on macOS notifications from that change.
 
 `AgentEvent` is the normalization boundary. Every source, whether hook or telemetry, maps into its `Kind` cases. `SessionBoard` never sees raw payloads.
 
-### Usage ledger (v2, M2)
+### Usage ledger (v2, M2–M3)
 
-SQLite at `~/Library/Application Support/Hoply/hoply.sqlite` (WAL). One source of truth per agent; for Claude Code that is its transcripts, never its OTel.
+SQLite at `~/Library/Application Support/Hoply/hoply.sqlite` (WAL). One source of truth per agent (`UsageAuthority.ledger(for:)`): Claude Code = its transcripts, Copilot CLI = its `session-store.db`, Copilot IDE and Qwen Code = their OTel, persisted by Hoply. Claude Code and Copilot CLI OTel is live display only and never persisted.
+
+Claude Code:
 
 1. `IngestCoordinator` discovers `<claude config>/projects/*/*.jsonl` and `*/*/subagents/*.jsonl`, backfills newest first, then tails on FSEvents (0.5 s), on a 60 s stat-only rescan, and at once when a hook carries `transcript_path` (`AgentEvent.transcriptPath` → `tailTranscript(atPath:)`). One file at a time.
 2. `FileTailer` reads complete lines past an `ingest_cursors` row (inode, size, offset, FNV of the first 512 bytes) and restarts at 0 on rotation, truncation or a rewritten head.
 3. `ClaudeTranscriptParser` skips known bulky types by prefix (`api-request*`, `file-history-*`, `last-prompt`…), merges repeated content blocks per `cc:<message.id>:<requestId>` (field-wise max), drops `<synthetic>`, and never keeps prompt text.
 4. `Store.apply` writes a `LedgerBatch` plus its cursor in one transaction.
-5. In the app, `History` opens the `Ledger` at launch (failure → "History off", the rest keeps working), is the single consumer of `IngestCoordinator.updates`, and re-queries `StoreReader` at most once a second during backfill (150 ms otherwise). It serves the live sessions' totals, today by source and the visible Dashboard page. `AppModel.ingest` forwards hook `transcriptPath`s to `History.tail`. A `claudeConfigDir` change reopens the ledger; local-pattern or reference-model changes call `Ledger.updatePricing`.
+
+Copilot CLI (`CopilotStoreIngester`, `<copilotHome>/session-store.db`, `copilotHome` setting, `""` = `$COPILOT_HOME` or `~/.copilot`):
+1. `IngestCoordinator.pollCopilot()` runs at start, every 10 s, and on request (`Ledger.pollCopilot()`, for Copilot CLI hooks). It skips the read unless the db or `-wal` changed (inode, size, mtime). One poll at a time; a fresh connection per poll, so Copilot's own last close can still checkpoint.
+2. With a `-wal` present the db is opened in place with `file:…?mode=ro` + `query_only` (never `immutable`, which hides WAL content); SQLite may create a missing `-shm` (its wal-index). Without a `-wal` (Copilot's SQLite removes it on a clean close) macOS's SQLite refuses `mode=ro`, so the main file is read into a read-only in-memory snapshot (`SQLiteConnection(snapshot:)`) and nothing is created in `~/.copilot`.
+3. `PRAGMA table_info` checks the required columns (`schema_version` 7 known); missing ones → `CopilotStoreStatus.unsupported`, no read, no crash. Optional columns read as NULL.
+4. Events are read `WHERE id > cursor ORDER BY id` in batches of 500; each batch + its cursor (`ingest_cursors`, source `copilot-cli`, path = db path, `offset` = last event id) is one `Store.apply`. A lower `MAX(id)` or a new inode restarts at 0. After the events, session rows whose cwd/branch/summary/turn count moved are rewritten.
+5. `CopilotUsageMapper`: uncached input = the `input` entry of `token_details_json`, else `input_tokens − cache_read − cache_write` (Copilot's `input_tokens` includes both). Cache writes count as 5 minute writes. Dedupe key `cp:<session>:<id>:<created_at>`. Title = first line of `summary` (not empty, not `<…>`), turns = rows in `turns`.
+
+Telemetry (Copilot IDE, Qwen Code): `TelemetryUsage` keys spans `otel:<trace>:<span>` and Qwen `api_response` logs `qw:<session>:<prompt_id>:<timeUnixNano>`, so re-sent batches upsert onto the same rows; records without a stable identity are skipped. `Ledger.record` fills a missing cwd from the session's earlier records, else from `process.pid` (`ProcessDirectory`, rejecting `/` and pids started after the record), else the row stays "Unassigned" (`project_id` NULL). The `hoply.cwd` resource attribute (user-set through `OTEL_RESOURCE_ATTRIBUTES`) always wins.
+
+Every ingest path (transcripts, Copilot polls, `Ledger.record`) reports through the single `IngestCoordinator.updates` stream.
+
+In the app:
+5. `History` opens the `Ledger` at launch (failure → "History off", the rest keeps working), is the single consumer of `IngestCoordinator.updates`, and re-queries `StoreReader` at most once a second during backfill (150 ms otherwise). It serves the live sessions' totals, today by source and the visible Dashboard page. `AppModel.ingest` forwards hook `transcriptPath`s to `History.tail` and calls `History.pollCopilot` on Copilot CLI hooks. `AppModel` resolves unseen live-session cwds through `History.resolveProjects` in the background and caches them in `projectsByCwd`; with History off the panel groups per cwd. A `claudeConfigDir` or `copilotHome` change reopens the ledger; local-pattern or reference-model changes call `Ledger.updatePricing`.
 
 Rules (easy to break):
 - The panel and the Dashboard read the same ledger totals and plot `apiEquivUSD`. `hasUnpriced` renders as "unpriced" (or "$x+"), never $0 (`Format.spend`).
 - Usage rows are upserted (`ON CONFLICT(dedupe_key)` with `max(…)`), never deleted. "Reindex" only resets cursors. Totals are always `GROUP BY` over `usage`.
 - Cost is computed in Swift after the upsert (`RETURNING`), so a call whose blocks arrive in two reads is priced on the merged counts. A new `pricing_rev` (content hash of table + local patterns + reference model) re-prices every row in one transaction.
 - Unknown non-local model → `cost_usd` NULL (unpriced), never $0. Local models (`AppSettings.localModelPatterns`) → $0, with `api_equiv_usd` at `referenceModel`.
+- Native pricing: a row with `native_usd` (Copilot CLI: `total_nano_aiu ÷ 1e11`, since 1 AIU = $0.01 at API list price) uses it as both cost and API-equivalent, carries `pricing_rev = 'native'`, and is never re-priced. `native_cost` holds the AIU. A NULL `total_nano_aiu` falls back to the price table.
+- `premium_requests` books each Copilot turn's premium requests (the highest `request_multiplier` among its calls) on the turn's earliest call and 0 on the rest; `Store.apply` recomputes the touched turns. `LedgerTotals.aiu`/`.premiumRequests` are plain sums, so they are right for any range, project or session.
 - `sessions.turns` counts typed prompts. A batch that starts at offset 0 of a main transcript replaces the count, a tail adds to it; subagent files never touch it.
 - Claude Code copies earlier calls into a continued session's file. The session with the earlier `first_at` keeps such a call, whatever the read order.
 - `~/.claude` and `~/.copilot` are read-only. Tests use temp directories only.
@@ -90,7 +108,7 @@ Rules (easy to break):
 
 ### Source detection
 
-`SessionGrouping` (AgentKit) splits sessions into waiting-on-you plus per-cwd project groups, and `RollingSeries` keeps the in-memory sparkline buckets. Both are stand-ins until the panel groups by `ProjectResolver` projects (M3) and the `samples` table lands (M5).
+`SessionGrouping(sessions:projects:)` (AgentKit) splits sessions into waiting-on-you plus project groups. `projects` maps each session cwd to its ledger project (`Ledger.resolveProjects`, so worktrees and subfolders of a repo share one group, id `project:<id>`); a cwd not in the map groups on its own, so the panel never waits for the ledger. `RollingSeries` keeps the in-memory sparkline buckets until the `samples` table lands (M5).
 
 `TelemetryMapper.source(of:)` picks the `AgentSource` from `service.name` and the record name. Session IDs come from a list of candidate attribute keys (`sessionKeys`). To add a source, update `AgentSource`, `TelemetryMapper` and/or `HookMapper`, and add a connect/disconnect pair to `scripts/install.sh`.
 
@@ -102,9 +120,9 @@ Rules (easy to break):
 
 ## Tests and fixtures
 
-`Tests/AgentKitTests/Fixtures/` holds real payloads captured from the official OpenTelemetry JS exporters. Several come as `.json` + `.pb` pairs, and tests assert both decode identically. Load fixtures with the `Fixture` helper in `Support.swift`. Hook fixtures are a JSON dictionary of named payloads (`Fixture.hookPayloads`).
+`Tests/AgentKitTests/Fixtures/` holds real payloads captured from the official OpenTelemetry JS exporters. Several come as `.json` + `.pb` pairs, and tests assert both decode identically, trace/span ids and `timeUnixNano` included (`copilot_spans.json` carries the `.pb` capture's ids). Load fixtures with the `Fixture` helper in `Support.swift`. Hook fixtures are a JSON dictionary of named payloads (`Fixture.hookPayloads`).
 
-`claude_transcript.jsonl` is real transcript line shapes with synthetic ids and `"x"` for all text (it ends in a deliberately partial line). `claude_calibration.jsonl` is one real session's assistant lines stripped to ids and usage, plus its `cost-state`; `PricingTests` checks the ledger total lands within 2%. `AgentSystemTests` build their transcripts inline in temp directories (`TempDirectory` in `Support.swift`).
+`claude_transcript.jsonl` is real transcript line shapes with synthetic ids and `"x"` for all text (it ends in a deliberately partial line). `claude_calibration.jsonl` is one real session's assistant lines stripped to ids and usage, plus its `cost-state`; `PricingTests` checks the ledger total lands within 2%. `AgentSystemTests` build their transcripts inline in temp directories (`TempDirectory` in `Support.swift`), and Copilot stores with `CopilotDatabase` (`CopilotStoreTests.swift`), which uses Copilot's schema_version 7 DDL verbatim. Apple's SQLite keeps `-wal`/`-shm` after the last close, so a test that needs them absent copies only the main file.
 
 ## Setup scripts
 

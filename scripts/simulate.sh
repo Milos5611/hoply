@@ -16,10 +16,20 @@ post() {
 }
 step() { echo "→ $1"; sleep "$DELAY"; }
 now_ns() { echo "$(date +%s)000000000"; }
+hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; } # random bytes as lowercase hex, like OTel trace/span ids
+attr() { printf ',{"key":"%s","value":{"%s":"%s"}}' "$1" "$2" "$3"; } # key, stringValue|intValue, value
 
-otlp_log() { # service, session, event name, extra attributes JSON (array items)
-  printf '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"%s"}}]},"scopeLogs":[{"scope":{"name":"sim"},"logRecords":[{"timeUnixNano":"%s","eventName":"%s","attributes":[{"key":"session.id","value":{"stringValue":"%s"}}%s]}]}]}]}' \
-    "$1" "$(now_ns)" "$3" "$2" "${4:-}"
+otlp_log() { # service, session, event name, extra attributes JSON (array items), extra resource attributes JSON
+  printf '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"%s"}}%s]},"scopeLogs":[{"scope":{"name":"sim"},"logRecords":[{"timeUnixNano":"%s","eventName":"%s","attributes":[{"key":"session.id","value":{"stringValue":"%s"}}%s]}]}]}]}' \
+    "$1" "${5:-}" "$(now_ns)" "$3" "$2" "${4:-}"
+}
+
+otlp_chat_span() { # service, conversation id, model, input tokens, output tokens
+  local start; start="$(now_ns)"
+  printf '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"%s"}}]},"scopeSpans":[{"scope":{"name":"sim"},"spans":[{"traceId":"%s","spanId":"%s","name":"chat %s","kind":3,"startTimeUnixNano":"%s","endTimeUnixNano":"%s","attributes":[{"key":"gen_ai.operation.name","value":{"stringValue":"chat"}}%s%s%s%s]}]}]}]}' \
+    "$1" "$(hex 16)" "$(hex 8)" "$3" "$start" "$start" "$(attr gen_ai.conversation.id stringValue "$2")" \
+    "$(attr gen_ai.request.model stringValue "$3")" "$(attr gen_ai.usage.input_tokens intValue "$4")" \
+    "$(attr gen_ai.usage.output_tokens intValue "$5")"
 }
 
 CLAUDE_CWD="$HOME/Project/fiba"
@@ -37,9 +47,21 @@ post /hooks/copilot-cli/sessionStart "{\"sessionId\":\"sim-copilot\",\"timestamp
 post /hooks/copilot-cli/preToolUse "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"toolName\":\"bash\",\"toolArgs\":\"{}\"}"
 step "Copilot CLI is working"
 
-post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.user_prompt ',{"key":"prompt","value":{"stringValue":"Write unit tests for the Prometheus parser"}}')"
-post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.api_response ',{"key":"model","value":{"stringValue":"qwen3-coder"}},{"key":"input_token_count","value":{"intValue":"2400"}},{"key":"output_token_count","value":{"intValue":"610"}}')"
-step "Qwen Code is working (goes idle after ~45 s of silence)"
+# Qwen Code and Copilot IDE have no local history: their OTel is the ledger. hoply.cwd (set by the user through
+# OTEL_RESOURCE_ATTRIBUTES) names the project; without it Hoply asks the process.pid for its cwd.
+QWEN_RESOURCE="$(attr hoply.cwd stringValue "$CLAUDE_CWD")$(attr process.pid intValue $$)"
+post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.user_prompt "$(attr prompt stringValue 'Write unit tests for the Prometheus parser')" "$QWEN_RESOURCE")"
+QWEN_RESPONSE="$(otlp_log qwen-code sim-qwen qwen-code.api_response "$(attr model stringValue qwen3-coder)$(attr prompt_id stringValue sim-p1)$(attr input_token_count intValue 2400)$(attr output_token_count intValue 610)" "$QWEN_RESOURCE")"
+post /v1/logs "$QWEN_RESPONSE"
+post /v1/logs "$QWEN_RESPONSE" # re-sent batch: same prompt_id and timeUnixNano, so the ledger keeps one row
+post /v1/logs "$(otlp_log qwen-code sim-qwen-pid qwen-code.api_response "$(attr model stringValue qwen3-coder)$(attr prompt_id stringValue sim-p2)$(attr input_token_count intValue 900)$(attr output_token_count intValue 120)" "$(attr process.pid intValue $$)")"
+step "Qwen Code is working (sim-qwen in $CLAUDE_CWD; sim-qwen-pid in this shell's cwd via process.pid)"
+
+COPILOT_IDE_SPAN="$(otlp_chat_span copilot-chat sim-copilot-ide claude-sonnet-5 18400 920)"
+post /v1/traces "$COPILOT_IDE_SPAN"
+post /v1/traces "$COPILOT_IDE_SPAN" # re-sent batch: same trace and span id, so the ledger keeps one row
+post /v1/traces "$(otlp_chat_span copilot-chat sim-copilot-ide claude-sonnet-5 21000 450)"
+step "Copilot in the IDE made two model calls (Unassigned: no hoply.cwd)"
 
 post /hooks/claude-code "{\"hook_event_name\":\"Notification\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\"}"
 step "Claude Code needs permission"

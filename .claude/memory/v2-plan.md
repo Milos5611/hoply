@@ -5,12 +5,12 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 65b7a48e-4bed-4913-a456-69fcc04298ea
-  modified: 2026-11-09T16:33:19.508Z
+  modified: 2026-11-09T16:56:16.264Z
 ---
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. **M2 built** (core + UI, see "M2 core outcome" / "M2 UI outcome"); cleanup done (backfill cancel via `IngestCoordinator.stop()`, chart logic in `AgentKit/Usage/SpendChart`, `ModelName` display names); only the user live checks remain. Next: M3. **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M6 → M7 → M8 → M1.** Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0**, **M0.5 panel look** and **M2** are done and committed (user live check of M2 passed on real data; glass look deferred, see "Known issues"). **M3** is done (core + UI, uncommitted until the user reviews it). **Next: M4.** **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M6 → M7 → M8 → M1.** Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -251,6 +251,46 @@ Rules for the data:
 - Live run on real data: 133 files backfilled in ~8 s; 82 sessions, $578 API-equiv, 0 unpriced.
 - Cleanup: `stop()` ends in-flight reads after the current batch and drops queued files (tested); `SpendChartData` (ranking, "Other" fold, unpriced days) is pure AgentKit; `ModelName.display` gives "Opus 5.5"-style labels (`ModelName.family` exists but is unused so far). Harness-injected prompts (`<…>`) no longer name sessions.
 - Unverified (user): live glass sidebar/toolbar, hover, Reduce Transparency, Dock icon on open/close, ⌘W, ~1 s hook→tail cost update, app-menu "Settings…" opens the empty SwiftUI `Settings` scene under `.regular`.
+
+**M3 core outcome (2026-11-09):** AgentKit, AgentSystem, tests, `simulate.sh` and docs. The UI half (wiring and the Projects page) is pending.
+- **API for the UI:** `Ledger.record(_:)` (feed it `HubServer.onUsage`), `Ledger.pollCopilot()` (call on Copilot CLI hooks), `Ledger.resolveProjects(_ cwds:) -> [String: ProjectRef]`, then `SessionGrouping(sessions:projects:)`. `StoreReader.projects(in:topModels:) -> [ProjectSummary]`, `dailySpend(…, project: ProjectFilter?)`, `sessions(in:source:project:…)` (`projectID:` became `project: .project(id)` or `.unassigned`). `LedgerTotals` gained `aiu` and `premiumRequests`, so every totals query returns them. `IngestProgress.copilot: CopilotStoreStatus`. Setting `copilotHome` (`""` = `$COPILOT_HOME`, else `~/.copilot`), carried by `LedgerConfiguration(settings:)`.
+- **Schema v2** (migration 2, with the usual `VACUUM INTO` backup): `usage.native_usd` (the agent's own USD; such rows have `pricing_rev = 'native'` and are never re-priced), `usage.premium_requests` (a turn's highest multiplier, booked on its earliest call so totals stay plain sums; recomputed for the turns a batch touches), and a partial index `usage_turn`.
+- **Copilot store access:** macOS's SQLite refuses `mode=ro` when `-wal`/`-shm` are absent, and creates nothing. Copilot's own (Node-bundled) SQLite removes them on a clean close. In that state the main file is read into a read-only in-memory snapshot (`sqlite3_deserialize`, header patched to rollback mode in the copy). With a `-wal`, the file is opened in place with `mode=ro`; SQLite then creates a missing `-shm` itself. Connections are opened per poll, so Hoply never blocks Copilot's checkpoint-on-close. A test checks that the db and WAL bytes stay unchanged.
+- **Deviations:**
+  - The uncached-input fallback subtracts cache reads **and** cache writes: in all 284 real rows, `input_tokens = input + cache_read + cache_write`.
+  - `PricingTable.normalize` maps `claude-haiku-4.5` to `claude-haiku-4-5`, so NULL-AIU rows price through the table. Copilot's native USD equals the bundled list price exactly (tested on real Haiku 4.5 and Opus 5 rows).
+  - Copilot sessions without any usage event stay out of the ledger.
+  - Qwen `input_token_count` includes cached tokens, which are subtracted. Thoughts are added to the output only when `total_token_count` shows they come on top of it (Gemini style).
+  - GenAI spans: uncached input = input − cache read − cache creation.
+  - The pid fallback ignores cwd `/` (GUI apps such as an IDE) and pids started after the record. Telemetry sessions get no turn count.
+  - `copilot_spans.json` now carries the `.pb` capture's trace/span ids, so the parity test covers ids.
+- **Real data (`HOPLY_REAL_COPILOT=1`, temp copy of `~/.copilot/session-store.db`):** 284 events, 5 sessions with usage (8 rows in `sessions`), $28.5927 = 2859.27 AIU, 182.66 premium requests. The ledger matches exactly. Read in 0.01 s. Projects: fiba $18.35, FIBA3x3.RuleEngine $10.16, Home $0.09. `HOPLY_REAL_TRANSCRIPTS=1` is unchanged: 138 files in 4.1 s, 42 of 79 within 2%.
+- **Tests:** AgentKitTests 112 (+21), AgentSystemTests 54 (+23, 2 opt-in skips), all green.
+- **Deferred:** manual Assign/merge of projects (`path_map.origin = 'user'`), which also covers re-homing Unassigned telemetry. Copilot monthly allowance and $ per premium request settings (M4 with Limits). Qwen turn counts from `user_prompt` logs.
+
+**M3 UI outcome (2026-11-09):**
+- **Wiring:** `HubServer.onUsage` → `History.record` → `Ledger.record`. Batches are chained in arrival order (a record without a cwd borrows its session's earlier cwd). While the ledger opens they wait in a bounded backlog (5,000 records); if it fails to open they are dropped. Copilot CLI hook events call `History.pollCopilot`. A `copilotHome` change reopens the ledger, like `claudeConfigDir`.
+- **Panel grouping:** `AppModel.projectsByCwd` caches `Ledger.resolveProjects` results. Unseen live-session cwds resolve in a background task on every publish (at least every 5 s), so cwds seen before the ledger opened resolve later. Misses are not retried until the next reopen. With History off, `grouping` gets an empty map, so sessions group per cwd. Project cards use the project title, root and kind icon. Rows inside a card name their linked worktree (branch glyph) or subfolder instead of the source name, so the state never truncates. "Waiting on you" rows show the resolved project title.
+- **Projects page** (`Dashboard/ProjectsPage.swift`, sidebar between Overview and Sessions):
+  - The list has a 7 / 30 / 90 days / All picker and two-column tiles: kind icon, title, root (+ worktree count), spend with share of range, per-source stacked bar with legend, tokens / sessions / branches / last active, top models, and Copilot units. Unassigned is a separate, quieter full-width row at the end, with the `hoply.cwd` hint.
+  - The detail has a back button, the range picker, Reveal in Finder / Open in Terminal / Copy path (hidden for Unassigned), and four tiles (Spend, Sessions, Tokens, then Copilot, Ran locally or Branches, whichever applies). Below them: a daily spend chart by model (`dailySpend(project:)`), By source and By model breakdowns, and the project's sessions (`SessionTable` + `Pager` + `SessionDetail`).
+  - Overview "Top projects" and Spending "By project" rows open the detail and carry their range over (`History.openProject(_:range:)`).
+- **Copilot units** (`Format.copilot`, "182.7 premium req · 2,859 AIU") appear on panel session rows (compact "req"), the Sessions table cost column, the session detail caption, project and model breakdown rows, project tiles, source legends and the detail's Copilot tile.
+- **Settings → History:** "Copilot dir" (placeholder `~/.copilot`) and a Copilot CLI status line from `IngestProgress.copilot` (not read yet / no session store found / up to date / unsupported schema / last read failed; details in the tooltip). Reindex help now names the Copilot store.
+- **Deviations:**
+  - Core change: `ProjectSummary.firstActive` (`MIN(ts)` in `StoreReader.projects`, asserted in `TelemetryLedgerTests`). With it, the "All" chart starts at the project's first usage, with a 30-day minimum. Without it the UI would have had to guess a day count.
+  - The Sessions table gained a source badge. Untitled (telemetry) sessions read "<Source> session", and an unknown turn count shows "–".
+  - `BreakdownList` rows were factored into `BreakdownRow`; `RowButtonStyle` (`.row`) adds the hover highlight for clickable rows.
+- **Snapshots** (`build/snapshots/`, light + dark): `panel-*` (fiba card holds a `landing-hero` worktree session; hoply holds a Copilot CLI session in `Sources/AgentSystem` with premium req / AIU; Qwen ledger totals), `panel-settings-*` (Copilot dir and status), `dashboard-projects-*` (6 projects + Unassigned), `dashboard-project-detail-*` (fiba, 1180×1260), plus overview, sessions and spending. `PreviewData` builds every Dashboard figure from one set of usage streams (Claude, Qwen, Copilot CLI, Copilot IDE × project shares), so Overview, Spending and Projects agree.
+- **Tests:** AgentKitTests 112, AgentSystemTests 54 (2 opt-in skips), all green.
+- **Unverified live:**
+  - `simulate.sh` was not run, because the user's own `swift run` instance was listening, and since M3 its Qwen and Copilot IDE spans become permanent ledger rows (fake `sim-*` sessions under `~/Project/fiba`) that Hoply never deletes. Run it only against a throwaway ledger, or accept those rows.
+  - Hover highlight on tiles and rows; the panel's project grouping on real hooks (worktree / subfolder merge); `pollCopilot` on a live Copilot CLI turn; the Projects pages on real data. A read-only check of the real ledger showed Copilot CLI at $28.59 / 2,859.27 AIU / 182.66 premium req, and fiba, FIBA3x3.RuleEngine and Home mixing Copilot and Claude.
+
+**Known issues (deferred bug fixes):**
+- **Not glass (user, 2026-11-09, live screenshots):** the panel draws as a flat light-grey popover with white cards, and the Dashboard sidebar/toolbar look like plain opaque chrome, not Liquid Glass. The user said it "doesn't look bad", so it waits; fix it in the M4 polish pass, checking live rather than with `--snapshot` (which can't show glass).
+
+**Copilot CLI facts (checked 2026-11-09, `~/.copilot/session-store.db`, `schema_version` 7):** 8 sessions, 284 `assistant_usage_events` (2026-09-11 → 09-17), 16 turns, 182.66 premium requests. `token_details_json` lists `{tokenType, tokenCount, costPerBatch, batchSize}` per input / cache_read / cache_write / output, where `costPerBatch` is nano-AIU per 1M tokens. **1 AIU = $0.01 at API list price** (Haiku 4.5: 100 / 500 AIU per 1M = $1 / $5), so `total_nano_aiu / 1e11` is Copilot's own API-equivalent USD, ≈ $28.6 in total. `input_tokens` includes cache reads; the `input` detail is the uncached count.
 
 **ZGX facts (checked 2026-11-09 from this Mac):**
 - Host `zgx-ff24` is at 192.168.40.141.

@@ -88,6 +88,27 @@ public final class SQLiteConnection {
         }
     }
 
+    /// A read-only in-memory copy of a database file's bytes; nothing touches the file system. A WAL-mode image
+    /// is switched to rollback mode in the copy, since an in-memory database has no WAL to read.
+    public convenience init(snapshot data: Data) throws {
+        try self.init(path: ":memory:")
+        var bytes = [UInt8](data)
+        if bytes.count >= 100, bytes[18] == 2, bytes[19] == 2 {
+            bytes[18] = 1
+            bytes[19] = 1
+        }
+        guard let buffer = sqlite3_malloc64(sqlite3_uint64(max(bytes.count, 1))) else {
+            throw SQLiteError(code: SQLITE_NOMEM, message: "out of memory")
+        }
+        bytes.withUnsafeBytes { raw in
+            if let base = raw.baseAddress { buffer.copyMemory(from: base, byteCount: raw.count) }
+        }
+        let status = sqlite3_deserialize(handle, "main", buffer.assumingMemoryBound(to: UInt8.self),
+                                         sqlite3_int64(bytes.count), sqlite3_int64(bytes.count),
+                                         UInt32(SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_READONLY))
+        guard status == SQLITE_OK else { throw SQLiteError(code: status, message: lastErrorMessage) }
+    }
+
     deinit {
         for statement in statements.values { sqlite3_finalize(statement) }
         sqlite3_close_v2(handle)

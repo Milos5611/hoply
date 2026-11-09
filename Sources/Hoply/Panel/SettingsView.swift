@@ -39,7 +39,7 @@ struct SettingsView: View {
                 }
 
                 HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
-                                claudeConfigDir: $draft.claudeConfigDir)
+                                claudeConfigDir: $draft.claudeConfigDir, copilotHome: $draft.copilotHome)
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -101,6 +101,7 @@ struct SettingsView: View {
         let reference = updated.referenceModel.trimmingCharacters(in: .whitespaces)
         updated.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference
         updated.claudeConfigDir = updated.claudeConfigDir.trimmingCharacters(in: .whitespaces)
+        updated.copilotHome = updated.copilotHome.trimmingCharacters(in: .whitespaces)
         model.apply(updated)
         model.showingSettings = false
     }
@@ -130,6 +131,7 @@ struct HistorySettings: View {
     @Binding var patternsText: String
     @Binding var referenceModel: String
     @Binding var claudeConfigDir: String
+    @Binding var copilotHome: String
 
     var body: some View {
         let history = model.history
@@ -147,7 +149,7 @@ struct HistorySettings: View {
                     Button("Reindex") { model.history.reindex() }
                         .buttonStyle(.bordered)
                         .disabled(!history.isReady || history.progress.isBackfilling)
-                        .help("Re-read every Claude Code transcript. History is never deleted.")
+                        .help("Re-read every Claude Code transcript and Copilot CLI's session store. History is never deleted.")
                 }
                 if history.progress.isBackfilling {
                     ProgressView(value: history.progress.fraction)
@@ -159,6 +161,18 @@ struct HistorySettings: View {
                         .foregroundStyle(.red)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if history.isReady {
+                    let copilot = copilotStatus(history.progress.copilot)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle()
+                            .fill(copilot.color)
+                            .frame(width: 7, height: 7)
+                        Text(copilot.text)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .help(copilot.detail ?? "Copilot CLI's session-store.db, read every 10 seconds")
                 }
                 LabeledRow("Local models") {
                     TextField("qwen, llama", text: $patternsText)
@@ -172,7 +186,11 @@ struct HistorySettings: View {
                     TextField("~/.claude", text: $claudeConfigDir)
                         .textFieldStyle(.roundedBorder)
                 }
-                Hint("Usage comes from Claude Code's transcripts. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads every transcript without deleting history.")
+                LabeledRow("Copilot dir") {
+                    TextField("~/.copilot", text: $copilotHome)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads the transcripts and the Copilot store without deleting history.")
             }
         }
     }
@@ -189,6 +207,16 @@ struct HistorySettings: View {
                 return "Indexing \(progress.filesDone) of \(progress.filesTotal) transcripts · \(Format.percent(progress.fraction))"
             }
             return progress.filesTotal > 0 ? "Up to date · indexed \(progress.filesTotal) transcripts" : "Up to date"
+        }
+    }
+
+    private func copilotStatus(_ status: CopilotStoreStatus) -> (text: String, color: Color, detail: String?) {
+        switch status {
+        case .idle: return ("Copilot CLI: not read yet", .secondary, nil)
+        case .notFound: return ("Copilot CLI: no session store found", .secondary, nil)
+        case .ready: return ("Copilot CLI: up to date", .green, nil)
+        case .unsupported(let detail): return ("Copilot CLI: unsupported schema, not read", .orange, detail)
+        case .failed(let message): return ("Copilot CLI: last read failed", .red, message)
         }
     }
 

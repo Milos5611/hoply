@@ -9,14 +9,20 @@ public struct LedgerTotals: Sendable, Equatable, Hashable {
     public var calls: Int
     /// At least one non-local call has an unknown price, so `costUSD` is a lower bound.
     public var hasUnpriced: Bool
+    /// Copilot CLI's own AI units (`total_nano_aiu` ÷ 1e9); 0 for other sources.
+    public var aiu: Double
+    /// Copilot CLI premium requests: per user turn, the highest request multiplier among its calls.
+    public var premiumRequests: Double
 
     public init(costUSD: Double = 0, apiEquivUSD: Double = 0, tokens: TokenCounts = TokenCounts(),
-                calls: Int = 0, hasUnpriced: Bool = false) {
+                calls: Int = 0, hasUnpriced: Bool = false, aiu: Double = 0, premiumRequests: Double = 0) {
         self.costUSD = costUSD
         self.apiEquivUSD = apiEquivUSD
         self.tokens = tokens
         self.calls = calls
         self.hasUnpriced = hasUnpriced
+        self.aiu = aiu
+        self.premiumRequests = premiumRequests
     }
 
     public static let zero = LedgerTotals()
@@ -24,7 +30,8 @@ public struct LedgerTotals: Sendable, Equatable, Hashable {
     public static func + (lhs: LedgerTotals, rhs: LedgerTotals) -> LedgerTotals {
         LedgerTotals(costUSD: lhs.costUSD + rhs.costUSD, apiEquivUSD: lhs.apiEquivUSD + rhs.apiEquivUSD,
                      tokens: lhs.tokens + rhs.tokens, calls: lhs.calls + rhs.calls,
-                     hasUnpriced: lhs.hasUnpriced || rhs.hasUnpriced)
+                     hasUnpriced: lhs.hasUnpriced || rhs.hasUnpriced, aiu: lhs.aiu + rhs.aiu,
+                     premiumRequests: lhs.premiumRequests + rhs.premiumRequests)
     }
 }
 
@@ -44,6 +51,50 @@ public struct ProjectRef: Sendable, Equatable, Hashable, Identifiable {
     }
 
     public var title: String { displayName ?? name }
+}
+
+/// Selects one project's usage in `StoreReader` queries, including the usage no project claimed.
+public enum ProjectFilter: Sendable, Equatable, Hashable {
+    case project(Int64)
+    /// Usage and sessions with no project ("Unassigned").
+    case unassigned
+}
+
+/// One row of the Projects page: a project's usage in a date range. `project` is nil for "Unassigned".
+public struct ProjectSummary: Sendable, Equatable, Identifiable {
+    public var project: ProjectRef?
+    public var totals: LedgerTotals
+    public var sessionCount: Int
+    public var bySource: [AgentSource: LedgerTotals]
+    /// Largest share first, at most the number asked for.
+    public var topModels: [ModelShare]
+    /// First and last usage in the range.
+    public var firstActive: Date?
+    public var lastActive: Date?
+    /// Distinct non-empty branches and linked worktree roots of the project's sessions in the range, sorted.
+    public var branches: [String]
+    public var worktrees: [String]
+
+    public init(project: ProjectRef?, totals: LedgerTotals = .zero, sessionCount: Int = 0,
+                bySource: [AgentSource: LedgerTotals] = [:], topModels: [ModelShare] = [], firstActive: Date? = nil,
+                lastActive: Date? = nil, branches: [String] = [], worktrees: [String] = []) {
+        self.project = project
+        self.totals = totals
+        self.sessionCount = sessionCount
+        self.bySource = bySource
+        self.topModels = topModels
+        self.firstActive = firstActive
+        self.lastActive = lastActive
+        self.branches = branches
+        self.worktrees = worktrees
+    }
+
+    /// The project id as text, or "" for Unassigned (the same ids `SpendSlice` uses).
+    public var id: String { project.map { String($0.id) } ?? "" }
+    public var filter: ProjectFilter { project.map { .project($0.id) } ?? .unassigned }
+    public var title: String { project?.title ?? "Unassigned" }
+    public var kind: ProjectKind? { project?.kind }
+    public var root: String? { project?.root }
 }
 
 public struct ModelShare: Sendable, Equatable, Hashable {
@@ -176,6 +227,18 @@ public struct SpendOverview: Sendable, Equatable {
     }
 }
 
+/// How reading Copilot CLI's `session-store.db` went on the last poll.
+public enum CopilotStoreStatus: Sendable, Equatable {
+    /// Not polled yet.
+    case idle
+    /// No database at the configured Copilot home.
+    case notFound
+    case ready(schemaVersion: Int?)
+    /// Tables or columns Hoply needs are missing (a Copilot update changed the schema); nothing is read.
+    case unsupported(String)
+    case failed(String)
+}
+
 public struct IngestProgress: Sendable, Equatable {
     public var filesDone: Int
     public var filesTotal: Int
@@ -183,15 +246,17 @@ public struct IngestProgress: Sendable, Equatable {
     public var bytesTotal: Int64
     public var isBackfilling: Bool
     public var lastError: String?
+    public var copilot: CopilotStoreStatus
 
     public init(filesDone: Int = 0, filesTotal: Int = 0, bytesDone: Int64 = 0, bytesTotal: Int64 = 0,
-                isBackfilling: Bool = false, lastError: String? = nil) {
+                isBackfilling: Bool = false, lastError: String? = nil, copilot: CopilotStoreStatus = .idle) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
         self.bytesDone = bytesDone
         self.bytesTotal = bytesTotal
         self.isBackfilling = isBackfilling
         self.lastError = lastError
+        self.copilot = copilot
     }
 
     public var fraction: Double {

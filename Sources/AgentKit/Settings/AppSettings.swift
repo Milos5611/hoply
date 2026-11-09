@@ -11,6 +11,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var referenceModel = PricingTable.defaultReferenceModel
     /// Claude Code's config directory; empty means `~/.claude`.
     public var claudeConfigDir = ""
+    /// Copilot CLI's home (holds `session-store.db`); empty means `$COPILOT_HOME`, else `~/.copilot`.
+    public var copilotHome = ""
 
     public init() {}
 
@@ -27,6 +29,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         localModelPatterns = container.lenient([String].self, .localModelPatterns) ?? defaults.localModelPatterns
         referenceModel = container.lenient(String.self, .referenceModel) ?? defaults.referenceModel
         claudeConfigDir = container.lenient(String.self, .claudeConfigDir) ?? defaults.claudeConfigDir
+        copilotHome = container.lenient(String.self, .copilotHome) ?? defaults.copilotHome
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

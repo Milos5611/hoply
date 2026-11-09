@@ -19,6 +19,8 @@ enum PreviewData {
         let tests = key(.qwenCode, "tests")
         let pricing = key(.claudeCode, "pricing")
         let docs = key(.claudeCode, "docs")
+        let hero = key(.claudeCode, "hero")
+        let store = key(.copilotCLI, "store")
         let home = NSHomeDirectory()
         return [
             AgentEvent(key: auth, kind: .promptSubmitted("Refactor the auth middleware to use refresh tokens"),
@@ -42,6 +44,14 @@ enum PreviewData {
             AgentEvent(key: docs, kind: .promptSubmitted("Update the README for v2"),
                        time: at(30), cwd: "\(home)/Project/hoply", model: "claude-opus-5", fromHook: true),
             AgentEvent(key: docs, kind: .sessionEnded(nil), time: at(8), fromHook: true),
+            AgentEvent(key: hero, kind: .promptSubmitted("Polish the landing page hero animation"),
+                       time: at(18), cwd: "\(home)/Project/fiba.worktrees/landing-hero", model: "claude-sonnet-5",
+                       fromHook: true),
+            AgentEvent(key: hero, kind: .toolStarted("Bash"), time: at(0.4), fromHook: true),
+            AgentEvent(key: store, kind: .promptSubmitted("Speed up the Copilot store reader"),
+                       time: at(25), cwd: "\(home)/Project/hoply/Sources/AgentSystem", model: "claude-opus-5",
+                       fromHook: true),
+            AgentEvent(key: store, kind: .sessionEnded(nil), time: at(3), fromHook: true),
         ]
     }
 
@@ -87,149 +97,292 @@ enum PreviewData {
     // MARK: - Ledger
 
     static let backfilling = IngestProgress(filesDone: 51, filesTotal: 122, bytesDone: 112_000_000,
-                                            bytesTotal: 261_000_000, isBackfilling: true)
+                                            bytesTotal: 261_000_000, isBackfilling: true,
+                                            copilot: .ready(schemaVersion: 7))
 
-    /// Ninety days of ledger rows shaped like a heavy Claude Code subscriber who also runs Qwen locally.
+    static var projectRefs: [ProjectRef] {
+        let home = NSHomeDirectory()
+        return [
+            ProjectRef(id: 1, root: "\(home)/Project/fiba", name: "fiba", kind: .repo),
+            ProjectRef(id: 2, root: "\(home)/Project/yasm-backend", name: "yasm-backend", kind: .repo),
+            ProjectRef(id: 3, root: "\(home)/Project/hoply", name: "hoply", kind: .repo),
+            ProjectRef(id: 4, root: "\(home)/Project/FIBA3x3.RuleEngine", name: "FIBA3x3.RuleEngine", kind: .repo),
+            ProjectRef(id: 5, root: "\(home)/Documents/notes", name: "notes", kind: .folder),
+            ProjectRef(id: 6, root: home, name: "Home", kind: .home),
+        ]
+    }
+
+    /// What `Ledger.resolveProjects` returns for the panel's sessions: a linked worktree and a subfolder land
+    /// in their repo's card.
+    static var projectsByCwd: [String: ProjectRef] {
+        let home = NSHomeDirectory()
+        let refs = projectRefs
+        return ["\(home)/Project/fiba": refs[0], "\(home)/Project/fiba.worktrees/landing-hero": refs[0],
+                "\(home)/Project/yasm-backend": refs[1], "\(home)/Project/hoply": refs[2],
+                "\(home)/Project/hoply/Sources/AgentSystem": refs[2]]
+    }
+
+    private struct Stream {
+        let model: String
+        let source: AgentSource
+        let scale: Double
+        var local = false
+        var every = 1
+        /// Index into `projectRefs` (nil = Unassigned) and the stream's share there.
+        let projects: [(project: Int?, share: Double)]
+    }
+
+    private static let streams: [Stream] = [
+        Stream(model: "claude-opus-5", source: .claudeCode, scale: 16,
+               projects: [(0, 0.40), (1, 0.22), (2, 0.20), (3, 0.13), (5, 0.05)]),
+        Stream(model: "claude-sonnet-5", source: .claudeCode, scale: 7,
+               projects: [(0, 0.45), (1, 0.25), (2, 0.15), (4, 0.15)]),
+        Stream(model: "claude-haiku-4-5", source: .claudeCode, scale: 0.9,
+               projects: [(0, 0.3), (2, 0.3), (3, 0.2), (4, 0.2)]),
+        Stream(model: "Qwen3.8-Flash-Next", source: .qwenCode, scale: 2.4, local: true,
+               projects: [(2, 0.6), (nil, 0.4)]),
+        Stream(model: "claude-opus-5", source: .copilotCLI, scale: 3.2, every: 3,
+               projects: [(0, 0.6), (3, 0.35), (5, 0.05)]),
+        Stream(model: "claude-sonnet-5", source: .copilotIDE, scale: 0.8, every: 2,
+               projects: [(1, 0.5), (nil, 0.5)]),
+    ]
+
+    private struct Entry {
+        let day: Date
+        let model: String
+        let source: AgentSource
+        let project: Int?
+        let totals: LedgerTotals
+    }
+
+    /// Ninety days of ledger rows shaped like a heavy Claude Code subscriber who also runs Qwen locally and
+    /// uses Copilot now and then.
     static func history(now: Date) -> HistoryPreview {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let days = (0..<90).compactMap { calendar.date(byAdding: .day, value: $0 - 89, to: today) }
-        let models: [(id: String, source: AgentSource, scale: Double, local: Bool)] = [
-            ("claude-opus-5", .claudeCode, 16, false),
-            ("claude-sonnet-5", .claudeCode, 7, false),
-            ("claude-haiku-4-5", .claudeCode, 0.9, false),
-            ("Qwen3.8-Flash-Next", .qwenCode, 2.4, true),
-        ]
 
-        var byModel: [DailySpendPoint] = []
+        var entries: [Entry] = []
         for (index, day) in days.enumerated() {
             let weekday = calendar.component(.weekday, from: day)
             let weekend = weekday == 1 || weekday == 7 ? 0.25 : 1
             let ramp = 0.55 + 0.45 * Double(index) / Double(days.count)
-            for (offset, model) in models.enumerated() {
+            for (offset, stream) in streams.enumerated() where (index + offset) % stream.every == 0 {
                 let wave = 0.55 + 0.45 * sin(Double(index) * 0.9 + Double(offset) * 1.7)
-                let usd = model.scale * weekend * ramp * wave
+                let usd = stream.scale * weekend * ramp * wave
                 guard usd > 0.05 else { continue }
-                byModel.append(DailySpendPoint(day: day, series: model.id,
-                                               totals: totals(usd: usd, local: model.local)))
+                for (project, share) in stream.projects {
+                    entries.append(Entry(day: day, model: stream.model, source: stream.source, project: project,
+                                         totals: totals(usd: usd * share, local: stream.local, source: stream.source)))
+                }
             }
         }
-        let sourceOf = Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0.source) })
-        var bySourceTotals: [Date: [AgentSource: LedgerTotals]] = [:]
-        for point in byModel {
-            bySourceTotals[point.day, default: [:]][sourceOf[point.series] ?? .claudeCode, default: .zero] += point.totals
-        }
-        let bySource = bySourceTotals.flatMap { day, sources in
-            sources.map { DailySpendPoint(day: day, series: $0.key.rawValue, totals: $0.value) }
-        }.sorted { ($0.day, $0.series) < ($1.day, $1.series) }
 
-        func sum(_ points: [DailySpendPoint], lastDays count: Int) -> LedgerTotals {
-            let start = days[days.count - count]
-            return points.filter { $0.day >= start }.reduce(.zero) { $0 + $1.totals }
+        func points(_ entries: [Entry], series: (Entry) -> String) -> [DailySpendPoint] {
+            var sums: [Date: [String: LedgerTotals]] = [:]
+            for entry in entries { sums[entry.day, default: [:]][series(entry), default: .zero] += entry.totals }
+            return sums.flatMap { day, byKey in byKey.map { DailySpendPoint(day: day, series: $0.key, totals: $0.value) } }
+                .sorted { ($0.day, $0.series) < ($1.day, $1.series) }
         }
+        func window(_ count: Int) -> [Date] { Array(days.suffix(count)) }
         func series(_ points: [DailySpendPoint], lastDays count: Int) -> DailySpendSeries {
-            let window = Array(days.suffix(count))
-            return DailySpendSeries(days: window, points: points.filter { $0.day >= window[0] })
+            let range = window(count)
+            return DailySpendSeries(days: range, points: points.filter { $0.day >= range[0] })
+        }
+        func sum(lastDays count: Int) -> LedgerTotals {
+            entries.filter { $0.day >= window(count)[0] }.reduce(.zero) { $0 + $1.totals }
         }
 
-        let month = sum(byModel, lastDays: 30)
+        let byModel = points(entries) { $0.model }
+        let bySource = points(entries) { $0.source.rawValue }
+        let month = entries.filter { $0.day >= window(30)[0] }
+
         let unpriced = SpendSlice(id: "claude-nova-preview", label: "claude-nova-preview", totals: unpricedTotals,
                                   sessionCount: 1)
-        let modelSlices = models.map { model in
-            let totals = byModel.filter { $0.series == model.id && $0.day >= days[days.count - 30] }
-                .reduce(.zero) { $0 + $1.totals }
-            return SpendSlice(id: model.id, label: model.id, totals: totals, sessionCount: Int(totals.apiEquivUSD / 9) + 2)
+        var modelTotals: [String: LedgerTotals] = [:]
+        for entry in month { modelTotals[entry.model, default: .zero] += entry.totals }
+        let modelSlices = modelTotals.map { model, totals in
+            SpendSlice(id: model, label: model, totals: totals, sessionCount: Int(totals.apiEquivUSD / 9) + 2)
         }.sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD } + [unpriced]
 
-        let home = NSHomeDirectory()
-        let projectShares: [(name: String, share: Double, sessions: Int)] = [
-            ("fiba", 0.38, 41), ("yasm-backend", 0.24, 26), ("hoply", 0.19, 33), ("FIBA3x3", 0.11, 12), ("", 0.08, 7),
-        ]
-        let projectSlices = projectShares.enumerated().map { index, entry in
-            let project = entry.name.isEmpty ? nil
-                : ProjectRef(id: Int64(index + 1), root: "\(home)/Project/\(entry.name)", name: entry.name, kind: .repo)
-            return SpendSlice(id: project.map { String($0.id) } ?? "", label: project?.title ?? "Unassigned",
-                              project: project, totals: scaled(month, by: entry.share), sessionCount: entry.sessions)
+        let summaries = projectSummaries(month, now: now)
+        let projectSlices = summaries.map { summary in
+            SpendSlice(id: summary.id, label: summary.title, project: summary.project, totals: summary.totals,
+                       sessionCount: summary.sessionCount)
         }
 
         let overview = OverviewData(
-            totals: SpendOverview(today: sum(byModel, lastDays: 1), last7Days: sum(byModel, lastDays: 7),
-                                  last30Days: month, allTime: scaled(sum(byModel, lastDays: 90), by: 1.42)),
+            totals: SpendOverview(today: sum(lastDays: 1), last7Days: sum(lastDays: 7), last30Days: sum(lastDays: 30),
+                                  allTime: scaled(sum(lastDays: 90), by: 1.42)),
             daily: series(bySource, lastDays: 30),
             projects: Array(projectSlices.prefix(5)),
             models: Array(modelSlices.prefix(5)))
         let spending = SpendingData(range: .month, split: .model, daily: series(byModel, lastDays: 30),
                                     projects: projectSlices, models: modelSlices)
 
-        let sessions = sessionSummaries(now: now, projects: projectSlices.compactMap(\.project))
-        let todayBySource = bySourceTotals[today] ?? [:]
+        let sessions = sessionSummaries(now: now, projects: projectRefs)
+        let fiba = summaries[0]
+        let fibaDaily = series(points(month.filter { $0.project == 0 }) { $0.model }, lastDays: 30)
+        let fibaSessions = sessions.filter { $0.project?.id == fiba.project?.id }
+        let todayBySource = Dictionary(grouping: entries.filter { $0.day == today }, by: \.source)
+            .mapValues { $0.reduce(LedgerTotals.zero) { $0 + $1.totals } }
         return HistoryPreview(
-            progress: IngestProgress(filesDone: 122, filesTotal: 122, bytesDone: 261_000_000, bytesTotal: 261_000_000),
+            progress: IngestProgress(filesDone: 122, filesTotal: 122, bytesDone: 261_000_000, bytesTotal: 261_000_000,
+                                     copilot: .ready(schemaVersion: 7)),
             sessionTotals: [
                 SessionKey(source: .claudeCode, id: "auth"): totals(usd: 4.12, local: false),
                 SessionKey(source: .claudeCode, id: "pricing"): totals(usd: 11.80, local: false),
                 SessionKey(source: .claudeCode, id: "docs"): totals(usd: 0.86, local: false),
+                SessionKey(source: .claudeCode, id: "hero"): totals(usd: 2.35, local: false),
+                SessionKey(source: .copilotCLI, id: "orders"): totals(usd: 1.83, local: false, source: .copilotCLI),
+                SessionKey(source: .copilotCLI, id: "store"): totals(usd: 4.07, local: false, source: .copilotCLI),
+                SessionKey(source: .qwenCode, id: "tests"): totals(usd: 1.94, local: true, source: .qwenCode),
             ],
             today: todayBySource, overview: overview, spending: spending,
-            sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first)
+            sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first,
+            projects: ProjectsData(range: .month, projects: summaries),
+            projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
+                                             sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)))
+    }
+
+    private static func projectSummaries(_ entries: [Entry], now: Date) -> [ProjectSummary] {
+        let refs = projectRefs
+        let home = NSHomeDirectory()
+        let facts: [Int?: (sessions: Int, minutesAgo: Double, branches: [String], worktrees: [String])] = [
+            0: (41, 0.4, ["auth-refresh", "feature/pricing", "landing-hero", "main"],
+                ["\(home)/Project/fiba.worktrees/landing-hero"]),
+            1: (26, 1, ["async-client", "main", "orders-paging"], []),
+            2: (33, 3, ["main", "v2-ledger"], []),
+            3: (12, 1_400, ["fix/flaky-ref", "main"], []),
+            4: (5, 4_400, [], []),
+            5: (3, 2_900, [], []),
+            nil: (7, 400, [], []),
+        ]
+        let grouped = Dictionary(grouping: entries, by: \.project)
+        return grouped.map { project, entries in
+            var totals = entries.reduce(LedgerTotals.zero) { $0 + $1.totals }
+            var bySource: [AgentSource: LedgerTotals] = [:]
+            var byModel: [String: LedgerTotals] = [:]
+            for entry in entries {
+                bySource[entry.source, default: .zero] += entry.totals
+                byModel[entry.model, default: .zero] += entry.totals
+            }
+            if project == 2 {
+                totals += unpricedTotals
+                bySource[.claudeCode, default: .zero] += unpricedTotals
+                byModel["claude-nova-preview"] = unpricedTotals
+            }
+            let fact = facts[project] ?? (1, 60, [], [])
+            return ProjectSummary(
+                project: project.map { refs[$0] }, totals: totals, sessionCount: fact.sessions, bySource: bySource,
+                topModels: byModel.map { ModelShare(model: $0.key, totals: $0.value) }
+                    .sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD },
+                firstActive: entries.map(\.day).min(), lastActive: now.addingTimeInterval(-fact.minutesAgo * 60),
+                branches: fact.branches, worktrees: fact.worktrees)
+        }.sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD }
+    }
+
+    private struct SessionRowSeed {
+        let title: String?
+        var source: AgentSource = .claudeCode
+        let project: Int?
+        let branch: String?
+        let minutesAgo: Double
+        let hours: Double
+        let turns: Int
+        let usd: Double
+        let mix: [(String, Double)]
+        var native = false
     }
 
     private static func sessionSummaries(now: Date, projects: [ProjectRef]) -> [SessionSummary] {
         let home = NSHomeDirectory()
-        let rows: [(title: String, project: Int?, branch: String?, minutesAgo: Double, hours: Double, turns: Int,
-                    usd: Double, mix: [(String, Double)])] = [
-            ("Build the pricing section", 0, "feature/pricing", 0.5, 0.7, 14, 11.80,
-             [("claude-sonnet-5", 0.82), ("claude-haiku-4-5", 0.18)]),
-            ("Refactor the auth middleware to use refresh tokens", 0, "auth-refresh", 4, 0.8, 9, 4.12,
-             [("claude-opus-5", 1)]),
-            ("Update the README for v2", 2, "main", 8, 0.4, 3, 0.86, [("claude-opus-5", 1)]),
-            ("Store and Claude history", 2, "v2-ledger", 95, 3.1, 41, 38.40,
-             [("claude-opus-5", 0.91), ("claude-haiku-4-5", 0.09)]),
-            ("Pagination for the orders endpoint", 1, "orders-paging", 180, 1.2, 12, 6.25,
-             [("claude-sonnet-5", 1)]),
-            ("Write unit tests for the Prometheus parser", 2, "main", 260, 0.6, 7, 1.94,
-             [("Qwen3.8-Flash-Next", 0.7), ("claude-sonnet-5", 0.3)]),
-            ("Investigate the flaky referee assignment test", 3, "fix/flaky-ref", 1_400, 2.2, 18, 9.71,
-             [("claude-opus-5", 0.64), ("claude-sonnet-5", 0.36)]),
-            ("Explain the bracket seeding rules", 3, nil, 1_700, 0.3, 2, 0.42, [("claude-haiku-4-5", 1)]),
-            ("Migrate the API client to async/await", 1, "async-client", 2_900, 4.5, 33, 27.15,
-             [("claude-opus-5", 0.77), ("claude-sonnet-5", 0.23)]),
-            ("Quick shell question", nil, nil, 3_100, 0.1, 1, 0.08, [("claude-haiku-4-5", 1)]),
-            ("Try the nova preview model", 2, "main", 3_300, 0.2, 2, 0, [("claude-nova-preview", 1)]),
-            ("Landing page hero animation", 0, "landing-hero", 4_300, 1.7, 15, 7.02, [("claude-sonnet-5", 1)]),
-            ("Profile the ingest coordinator", 2, "v2-ledger", 5_800, 0.9, 6, 3.30,
-             [("Qwen3.8-Flash-Next", 1)]),
+        let rows: [SessionRowSeed] = [
+            SessionRowSeed(title: "Build the pricing section", project: 0, branch: "feature/pricing", minutesAgo: 0.5,
+                           hours: 0.7, turns: 14, usd: 11.80, mix: [("claude-sonnet-5", 0.82), ("claude-haiku-4-5", 0.18)],
+                           native: true),
+            SessionRowSeed(title: "Add pagination to the orders endpoint", source: .copilotCLI, project: 1,
+                           branch: "orders-paging", minutesAgo: 1, hours: 0.2, turns: 3, usd: 1.83,
+                           mix: [("claude-opus-5", 1)]),
+            SessionRowSeed(title: "Speed up the Copilot store reader", source: .copilotCLI, project: 2,
+                           branch: "v2-ledger", minutesAgo: 3, hours: 0.4, turns: 5, usd: 4.07,
+                           mix: [("claude-opus-5", 0.86), ("claude-haiku-4.5", 0.14)]),
+            SessionRowSeed(title: "Refactor the auth middleware to use refresh tokens", project: 0, branch: "auth-refresh",
+                           minutesAgo: 4, hours: 0.8, turns: 9, usd: 4.12, mix: [("claude-opus-5", 1)]),
+            SessionRowSeed(title: nil, source: .qwenCode, project: 2, branch: nil, minutesAgo: 6, hours: 0.3, turns: 0,
+                           usd: 1.94, mix: [("Qwen3.8-Flash-Next", 1)]),
+            SessionRowSeed(title: "Update the README for v2", project: 2, branch: "main", minutesAgo: 8, hours: 0.4,
+                           turns: 3, usd: 0.86, mix: [("claude-opus-5", 1)]),
+            SessionRowSeed(title: "Polish the landing page hero animation", project: 0, branch: "landing-hero",
+                           minutesAgo: 9, hours: 0.3, turns: 6, usd: 2.35, mix: [("claude-sonnet-5", 1)]),
+            SessionRowSeed(title: "Store and Claude history", project: 2, branch: "v2-ledger", minutesAgo: 95, hours: 3.1,
+                           turns: 41, usd: 38.40, mix: [("claude-opus-5", 0.91), ("claude-haiku-4-5", 0.09)]),
+            SessionRowSeed(title: "Pagination for the orders endpoint", project: 1, branch: "orders-paging",
+                           minutesAgo: 180, hours: 1.2, turns: 12, usd: 6.25, mix: [("claude-sonnet-5", 1)]),
+            SessionRowSeed(title: "Write unit tests for the Prometheus parser", project: 2, branch: "main",
+                           minutesAgo: 260, hours: 0.6, turns: 7, usd: 1.94,
+                           mix: [("Qwen3.8-Flash-Next", 0.7), ("claude-sonnet-5", 0.3)]),
+            SessionRowSeed(title: nil, source: .qwenCode, project: nil, branch: nil, minutesAgo: 400, hours: 0.5, turns: 0,
+                           usd: 0.71, mix: [("Qwen3.8-Flash-Next", 1)]),
+            SessionRowSeed(title: "Seed the fixtures for the draw", source: .copilotCLI, project: 0, branch: "main",
+                           minutesAgo: 1_100, hours: 0.6, turns: 3, usd: 3.12, mix: [("claude-opus-5", 1)]),
+            SessionRowSeed(title: "Investigate the flaky referee assignment test", project: 3, branch: "fix/flaky-ref",
+                           minutesAgo: 1_400, hours: 2.2, turns: 18, usd: 9.71,
+                           mix: [("claude-opus-5", 0.64), ("claude-sonnet-5", 0.36)]),
+            SessionRowSeed(title: "Explain the bracket seeding rules", project: 3, branch: nil, minutesAgo: 1_700,
+                           hours: 0.3, turns: 2, usd: 0.42, mix: [("claude-haiku-4-5", 1)]),
+            SessionRowSeed(title: "Referee assignment edge cases", source: .copilotCLI, project: 3, branch: "fix/flaky-ref",
+                           minutesAgo: 2_000, hours: 1.1, turns: 4, usd: 6.90,
+                           mix: [("claude-opus-5", 0.8), ("claude-haiku-4.5", 0.2)]),
+            SessionRowSeed(title: "Migrate the API client to async/await", project: 1, branch: "async-client",
+                           minutesAgo: 2_900, hours: 4.5, turns: 33, usd: 27.15,
+                           mix: [("claude-opus-5", 0.77), ("claude-sonnet-5", 0.23)]),
+            SessionRowSeed(title: "Quick shell question", project: 5, branch: nil, minutesAgo: 3_100, hours: 0.1, turns: 1,
+                           usd: 0.08, mix: [("claude-haiku-4-5", 1)]),
+            SessionRowSeed(title: "Try the nova preview model", project: 2, branch: "main", minutesAgo: 3_300, hours: 0.2,
+                           turns: 2, usd: 0, mix: [("claude-nova-preview", 1)]),
+            SessionRowSeed(title: "Landing page hero animation", project: 0, branch: "landing-hero", minutesAgo: 4_300,
+                           hours: 1.7, turns: 15, usd: 7.02, mix: [("claude-sonnet-5", 1)]),
+            SessionRowSeed(title: "Profile the ingest coordinator", project: 2, branch: "v2-ledger", minutesAgo: 5_800,
+                           hours: 0.9, turns: 6, usd: 3.30, mix: [("Qwen3.8-Flash-Next", 1)]),
         ]
         return rows.enumerated().map { index, row in
             let project = row.project.flatMap { projects.indices.contains($0) ? projects[$0] : nil }
             let last = now.addingTimeInterval(-row.minutesAgo * 60)
             let models = row.mix.map { model, share in
                 ModelShare(model: model, totals: row.usd == 0 ? unpricedTotals
-                                                               : totals(usd: row.usd * share, local: model.hasPrefix("Qwen")))
+                                                               : totals(usd: row.usd * share, local: model.hasPrefix("Qwen"),
+                                                                        source: row.source))
             }
             let total = models.reduce(LedgerTotals.zero) { $0 + $1.totals }
             let id = String(format: "%08x-preview-%02d", 0x5e55_1000 + index * 7_919, index)
-            let cwd = project?.root ?? home
+            let cwd = row.branch == "landing-hero" && row.minutesAgo < 60
+                ? "\(home)/Project/fiba.worktrees/landing-hero" : project?.root
             return SessionSummary(
-                key: SessionKey(source: .claudeCode, id: id), project: project, title: row.title, cwd: cwd,
+                key: SessionKey(source: row.source, id: id), project: project, title: row.title, cwd: cwd,
                 branch: row.branch, firstAt: last.addingTimeInterval(-row.hours * 3_600), lastAt: last,
                 turns: row.turns, totals: total, models: models,
-                nativeCostUSD: index == 0 ? row.usd * 0.987 : nil,
-                linesAdded: row.turns * 23, linesRemoved: row.turns * 7,
-                prURL: index == 0 ? "https://github.com/fiba/fiba-web/pull/482" : nil,
-                transcriptPath: "\(home)/.claude/projects/-preview/\(id).jsonl")
+                nativeCostUSD: row.native ? row.usd * 0.987 : nil,
+                linesAdded: row.source == .claudeCode ? row.turns * 23 : nil,
+                linesRemoved: row.source == .claudeCode ? row.turns * 7 : nil,
+                prURL: row.native ? "https://github.com/fiba/fiba-web/pull/482" : nil,
+                transcriptPath: row.source == .claudeCode ? "\(home)/.claude/projects/-preview/\(id).jsonl" : nil)
         }
     }
 
     private static let unpricedTotals = LedgerTotals(tokens: TokenCounts(input: 4_100, output: 2_300, cacheRead: 61_000),
                                                      calls: 9, hasUnpriced: true)
 
-    private static func totals(usd: Double, local: Bool) -> LedgerTotals {
+    /// Copilot CLI rows carry Copilot's own units: 1 AIU = $0.01, and about 6.4 premium requests per dollar
+    /// (the ratio in the real store).
+    private static func totals(usd: Double, local: Bool, source: AgentSource = .claudeCode) -> LedgerTotals {
         let tokens = Int(usd * 420_000)
+        let copilot = source == .copilotCLI
         return LedgerTotals(costUSD: local ? 0 : usd, apiEquivUSD: usd,
                             tokens: TokenCounts(input: tokens / 60, output: tokens / 45, reasoning: tokens / 200,
                                                 cacheRead: tokens * 84 / 100, cacheWrite5m: tokens * 9 / 100),
-                            calls: max(1, Int(usd * 11)))
+                            calls: max(1, Int(usd * 11)), aiu: copilot ? usd * 100 : 0,
+                            premiumRequests: copilot ? (usd * 6.4 * 2).rounded() / 2 : 0)
     }
 
     private static func scaled(_ totals: LedgerTotals, by factor: Double) -> LedgerTotals {
@@ -239,7 +392,8 @@ enum PreviewData {
                             tokens: TokenCounts(input: s(t.input), output: s(t.output), reasoning: s(t.reasoning),
                                                 cacheRead: s(t.cacheRead), cacheWrite5m: s(t.cacheWrite5m),
                                                 cacheWrite1h: s(t.cacheWrite1h)),
-                            calls: s(totals.calls), hasUnpriced: totals.hasUnpriced)
+                            calls: s(totals.calls), hasUnpriced: totals.hasUnpriced, aiu: totals.aiu * factor,
+                            premiumRequests: totals.premiumRequests * factor)
     }
 }
 

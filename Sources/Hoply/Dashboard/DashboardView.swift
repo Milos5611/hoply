@@ -44,6 +44,7 @@ struct DashboardView: View {
         Group {
             switch page {
             case .overview: OverviewPage()
+            case .projects: ProjectsPage()
             case .sessions: SessionsPage()
             case .spending: SpendingPage()
             }

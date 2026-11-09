@@ -53,16 +53,22 @@ public struct UsageRecord: Sendable, Equatable, Hashable {
     public var tokens: TokenCounts
     /// Claude's `usage.speed`; `"fast"` selects fast-mode prices.
     public var speed: String?
+    /// The agent's own unit of charge (Copilot AIU).
     public var nativeCost: Double?
+    /// The agent's own price in USD. When set it is both the cost and the API-equivalent, and re-pricing never
+    /// replaces it.
+    public var nativeUSD: Double?
     public var requestMultiplier: Double?
     public var turnIndex: Int?
     public var cwd: String?
     public var gitBranch: String?
+    /// The emitting process (OTel `process.pid`), used to find a cwd when the record has none. Not stored.
+    public var processID: Int32?
 
     public init(dedupeKey: String, source: AgentSource, sessionID: String, timestamp: Date, model: String?,
                 isSidechain: Bool = false, agentID: String? = nil, tokens: TokenCounts, speed: String? = nil,
-                nativeCost: Double? = nil, requestMultiplier: Double? = nil, turnIndex: Int? = nil,
-                cwd: String? = nil, gitBranch: String? = nil) {
+                nativeCost: Double? = nil, nativeUSD: Double? = nil, requestMultiplier: Double? = nil,
+                turnIndex: Int? = nil, cwd: String? = nil, gitBranch: String? = nil, processID: Int32? = nil) {
         self.dedupeKey = dedupeKey
         self.source = source
         self.sessionID = sessionID
@@ -73,10 +79,12 @@ public struct UsageRecord: Sendable, Equatable, Hashable {
         self.tokens = tokens
         self.speed = speed
         self.nativeCost = nativeCost
+        self.nativeUSD = nativeUSD
         self.requestMultiplier = requestMultiplier
         self.turnIndex = turnIndex
         self.cwd = cwd
         self.gitBranch = gitBranch
+        self.processID = processID
     }
 
     /// Combines two sightings of the same call: the earliest time and the largest token counts.
@@ -90,6 +98,8 @@ public struct UsageRecord: Sendable, Equatable, Hashable {
         result.cwd = cwd ?? other.cwd
         result.gitBranch = gitBranch ?? other.gitBranch
         result.nativeCost = nativeCost.map { max($0, other.nativeCost ?? 0) } ?? other.nativeCost
+        result.nativeUSD = nativeUSD.map { max($0, other.nativeUSD ?? 0) } ?? other.nativeUSD
+        result.processID = processID ?? other.processID
         return result
     }
 }

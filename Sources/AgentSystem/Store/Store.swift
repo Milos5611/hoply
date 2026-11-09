@@ -42,14 +42,45 @@ public actor Store {
                 try upsert(update)
                 touched.insert(update.key)
             }
+            var turns = Set<CopilotTurn>()
             for record in batch.usage {
                 try upsert(record)
                 touched.insert(SessionKey(source: record.source, id: record.sessionID))
+                if record.requestMultiplier != nil {
+                    turns.insert(CopilotTurn(source: record.source, session: record.sessionID, turn: record.turnIndex))
+                }
             }
+            for turn in turns { try bookPremiumRequests(turn) }
             if let cursor { try save(cursor) }
             return touched
         }
     }
+
+    /// The project each cwd belongs to, resolving (and recording in `path_map`) cwds seen for the first time.
+    public func projects(forCwds cwds: [String]) throws -> [String: ProjectRef] {
+        let wanted = Set(cwds.filter { !$0.isEmpty })
+        guard !wanted.isEmpty else { return [:] }
+        let ids = wanted.allSatisfy { registry.cachedEntry(for: $0) != nil }
+            ? try projectIDs(wanted)
+            : try db.transaction { try projectIDs(wanted) }
+        let rows = try db.query("""
+            SELECT id, root, name, display_name, kind FROM projects WHERE id IN (SELECT value FROM json_each(?))
+            """, [Self.jsonArray(Set(ids.values).map { $0 })]) { row in
+            ProjectRef(id: row.int64(0), root: row.text(1), name: row.text(2), displayName: row.optionalText(3),
+                       kind: ProjectKind(rawValue: row.text(4)) ?? .folder)
+        }
+        let refs = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMapValues { refs[$0] }
+    }
+
+    private func projectIDs(_ cwds: Set<String>) throws -> [String: Int64] {
+        var ids: [String: Int64] = [:]
+        for cwd in cwds { ids[cwd] = try registry.entry(for: cwd, db: db).projectID }
+        return ids
+    }
+
+    /// Every row priced natively (`native_usd`) keeps its price; the rest are re-priced by `setPricing`.
+    public static let nativePricingRevision = "native"
 
     public func cursors(source: AgentSource) throws -> [String: FileCursor] {
         let rows = try db.query("SELECT path, inode, size, offset, head_hash FROM ingest_cursors WHERE source = ?",
@@ -119,8 +150,8 @@ public actor Store {
     private static let upsertUsage = """
         INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, model, is_local, sidechain, agent_id,
                            input, output, reasoning, cache_read, cache_write_5m, cache_write_1h, speed,
-                           native_cost, request_multiplier, turn_index)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                           native_cost, request_multiplier, turn_index, native_usd)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
         ON CONFLICT(dedupe_key) DO UPDATE SET
             ts = min(usage.ts, excluded.ts),
             model = COALESCE(usage.model, excluded.model),
@@ -133,6 +164,7 @@ public actor Store {
             cache_write_1h = max(usage.cache_write_1h, excluded.cache_write_1h),
             speed = COALESCE(usage.speed, excluded.speed),
             native_cost = COALESCE(max(usage.native_cost, excluded.native_cost), usage.native_cost, excluded.native_cost),
+            native_usd = COALESCE(max(usage.native_usd, excluded.native_usd), usage.native_usd, excluded.native_usd),
             request_multiplier = COALESCE(max(usage.request_multiplier, excluded.request_multiplier),
                                           usage.request_multiplier, excluded.request_multiplier),
             turn_index = COALESCE(usage.turn_index, excluded.turn_index),
@@ -140,7 +172,7 @@ public actor Store {
             project_id = CASE WHEN \(startedEarlier) THEN excluded.project_id
                               ELSE COALESCE(usage.project_id, excluded.project_id) END
         RETURNING id, model, input, output, reasoning, cache_read, cache_write_5m, cache_write_1h, speed,
-                  cost_usd, api_equiv_usd, is_local, pricing_rev
+                  native_usd, cost_usd, api_equiv_usd, is_local, pricing_rev
         """
 
     private static let startedEarlier = """
@@ -155,19 +187,48 @@ public actor Store {
             record.dedupeKey, record.source.rawValue, record.sessionID, projectID, record.timestamp.timeIntervalSince1970,
             record.model, pricing.isLocal(record.model), record.isSidechain, record.agentID,
             tokens.input, tokens.output, tokens.reasoning, tokens.cacheRead, tokens.cacheWrite5m, tokens.cacheWrite1h,
-            record.speed, record.nativeCost, record.requestMultiplier, record.turnIndex,
+            record.speed, record.nativeCost, record.requestMultiplier, record.turnIndex, record.nativeUSD,
         ]) { row in
             (id: row.int64(0), priced: Self.priced(row, pricing: pricing),
-             cost: row.optionalDouble(9), apiEquiv: row.optionalDouble(10), isLocal: row.bool(11),
-             revision: row.optionalText(12))
+             cost: row.optionalDouble(10), apiEquiv: row.optionalDouble(11), isLocal: row.bool(12),
+             revision: row.optionalText(13), native: !row.isNull(9))
         }
         guard let stored else { return }
         let priced = stored.priced
-        if stored.revision != pricing.revision || stored.cost != priced.costUSD || stored.apiEquiv != priced.apiEquivUSD
+        let revision = stored.native ? Self.nativePricingRevision : pricing.revision
+        if stored.revision != revision || stored.cost != priced.costUSD || stored.apiEquiv != priced.apiEquivUSD
             || stored.isLocal != priced.isLocal {
             try db.run("UPDATE usage SET cost_usd = ?, api_equiv_usd = ?, is_local = ?, pricing_rev = ? WHERE id = ?",
-                       [priced.costUSD, priced.apiEquivUSD, priced.isLocal, pricing.revision, stored.id])
+                       [priced.costUSD, priced.apiEquivUSD, priced.isLocal, revision, stored.id])
         }
+    }
+
+    private struct CopilotTurn: Hashable {
+        var source: AgentSource
+        var session: String
+        var turn: Int?
+    }
+
+    /// A turn is one premium request times its highest multiplier, however many calls it made. That amount is
+    /// booked on the turn's earliest call (others get 0), so range and project totals stay plain sums. A call
+    /// with no turn index counts on its own.
+    private func bookPremiumRequests(_ turn: CopilotTurn) throws {
+        guard let index = turn.turn else {
+            try db.run("""
+                UPDATE usage SET premium_requests = COALESCE(request_multiplier, 0)
+                WHERE source = ? AND session_id = ? AND turn_index IS NULL AND request_multiplier IS NOT NULL
+                """, [turn.source.rawValue, turn.session])
+            return
+        }
+        try db.run("""
+            UPDATE usage SET premium_requests = CASE
+                WHEN id = (SELECT id FROM usage WHERE source = ?1 AND session_id = ?2 AND turn_index = ?3
+                           AND request_multiplier IS NOT NULL ORDER BY ts, dedupe_key LIMIT 1)
+                THEN (SELECT MAX(request_multiplier) FROM usage WHERE source = ?1 AND session_id = ?2
+                      AND turn_index = ?3 AND request_multiplier IS NOT NULL)
+                ELSE 0 END
+            WHERE source = ?1 AND session_id = ?2 AND turn_index = ?3 AND request_multiplier IS NOT NULL
+            """, [turn.source.rawValue, turn.session, index])
     }
 
     private func save(_ cursor: IngestCursor) throws {
@@ -179,20 +240,24 @@ public actor Store {
                   cursor.file.offset, Int64(bitPattern: cursor.file.headHash)])
     }
 
-    /// Columns 1…8 of the row must be model, the six token columns and speed.
+    /// Columns 1…9 of the row must be model, the six token columns, speed and native_usd.
     private static func priced(_ row: SQLiteRow, pricing: PricingTable) -> PricedUsage {
+        if let native = row.optionalDouble(9) {
+            return PricedUsage(costUSD: native, apiEquivUSD: native, isLocal: false)
+        }
         let tokens = TokenCounts(input: row.int(2), output: row.int(3), reasoning: row.int(4), cacheRead: row.int(5),
                                  cacheWrite5m: row.int(6), cacheWrite1h: row.int(7))
         return pricing.price(model: row.optionalText(1), tokens: tokens, speed: row.optionalText(8))
     }
 
     private static func reprice(_ db: SQLiteConnection, _ pricing: PricingTable) throws -> Int {
-        let stale = try db.queryOne("SELECT 1 FROM usage WHERE pricing_rev IS NOT ? LIMIT 1", [pricing.revision]) { _ in true }
+        let stale = try db.queryOne("SELECT 1 FROM usage WHERE pricing_rev IS NOT ? AND native_usd IS NULL LIMIT 1",
+                                    [pricing.revision]) { _ in true }
         guard stale == true else { return 0 }
         return try db.transaction {
             let rows = try db.query("""
-                SELECT id, model, input, output, reasoning, cache_read, cache_write_5m, cache_write_1h, speed
-                FROM usage WHERE pricing_rev IS NOT ?
+                SELECT id, model, input, output, reasoning, cache_read, cache_write_5m, cache_write_1h, speed, native_usd
+                FROM usage WHERE pricing_rev IS NOT ? AND native_usd IS NULL
                 """, [pricing.revision]) { row in (row.int64(0), priced(row, pricing: pricing)) }
             for (id, priced) in rows {
                 try db.run("UPDATE usage SET cost_usd = ?, api_equiv_usd = ?, is_local = ?, pricing_rev = ? WHERE id = ?",
@@ -200,6 +265,12 @@ public actor Store {
             }
             return rows.count
         }
+    }
+}
+
+extension Store {
+    static func jsonArray(_ values: [Int64]) -> String {
+        String(decoding: (try? JSONSerialization.data(withJSONObject: values)) ?? Data("[]".utf8), as: UTF8.self)
     }
 }
 

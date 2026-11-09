@@ -51,25 +51,28 @@ struct SessionTable: View {
     var body: some View {
         Table(sessions, selection: $selection) {
             TableColumn("Session") { session in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title ?? "Untitled session")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .lineLimit(1)
-                    Text(place(session))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    SourceBadge(source: session.key.source, size: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.displayTitle)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(1)
+                        Text(place(session))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
                 .padding(.vertical, 3)
             }
-            .width(min: 150, ideal: 200)
+            .width(min: 160, ideal: 200)
             TableColumn("Models") { session in
                 ModelMix(models: session.models)
             }
             .width(min: 80, ideal: 100)
             TableColumn("Turns") { session in
-                Text("\(session.turns)")
+                Text(session.turns > 0 ? "\(session.turns)" : "–")
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -81,12 +84,20 @@ struct SessionTable: View {
             }
             .width(min: 48, ideal: 54)
             TableColumn("Cost") { session in
-                Text(Format.spend(session.totals))
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-                    .foregroundStyle(session.totals.hasUnpriced && session.totals.apiEquivUSD == 0
-                                     ? Color.orange : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(Format.spend(session.totals))
+                        .fontWeight(.medium)
+                        .foregroundStyle(session.totals.hasUnpriced && session.totals.apiEquivUSD == 0
+                                         ? Color.orange : Color.primary)
+                    if session.totals.premiumRequests > 0 {
+                        Text("\(Format.premiumRequests(session.totals.premiumRequests)) req")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .help(Format.copilot(session.totals) ?? "")
+                    }
+                }
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 52, ideal: 60)
             TableColumn("Last active") { session in
@@ -191,7 +202,7 @@ struct SessionDetail: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
-                Text(session.title ?? "Untitled session")
+                Text(session.displayTitle)
                     .font(.system(size: 15, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 3) {
@@ -224,12 +235,13 @@ struct SessionDetail: View {
                     Text(costCaption(session))
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
                     GridRow {
                         Metric(value: Format.tokens(tokens.input), label: "Input")
                         Metric(value: Format.tokens(tokens.output), label: "Output")
-                        Metric(value: "\(session.turns)", label: "Turns")
+                        Metric(value: session.turns > 0 ? "\(session.turns)" : "–", label: "Turns")
                     }
                     GridRow {
                         Metric(value: Format.tokens(tokens.cacheRead), label: "Cache read")
@@ -245,6 +257,7 @@ struct SessionDetail: View {
         var caption = "API-equivalent"
         if session.totals.costUSD == 0, session.totals.apiEquivUSD > 0 { caption += " · ran locally, $0 spent" }
         if let native = session.nativeCostUSD { caption += " · Claude Code says \(Format.cost(native))" }
+        if let copilot = Format.copilot(session.totals) { caption += " · \(copilot)" }
         return caption
     }
 
@@ -318,5 +331,12 @@ struct SessionDetail: View {
                 .help("Copy session ID")
         }
         .buttonStyle(.tile)
+    }
+}
+
+extension SessionSummary {
+    /// Telemetry sessions (Qwen Code, Copilot IDE) carry no prompt text, so they have no title.
+    var displayTitle: String {
+        title ?? "\(key.source.displayName) session"
     }
 }

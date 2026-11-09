@@ -57,14 +57,23 @@ public struct TelemetryRecord: Equatable, Sendable {
     public var attributes: [String: AttributeValue]
     public var resource: [String: AttributeValue]
     public var time: Date?
+    /// Lowercase hex, whichever encoding the exporter used; nil when absent or all zeros.
+    public var traceID: String?
+    public var spanID: String?
+    /// The exact OTLP timestamp behind `time` (log time, else observed time; span end, else start).
+    public var timeUnixNano: UInt64?
 
     public init(signal: Signal, name: String, attributes: [String: AttributeValue],
-                resource: [String: AttributeValue], time: Date?) {
+                resource: [String: AttributeValue], time: Date?, traceID: String? = nil, spanID: String? = nil,
+                timeUnixNano: UInt64? = nil) {
         self.signal = signal
         self.name = name
         self.attributes = attributes
         self.resource = resource
         self.time = time
+        self.traceID = traceID
+        self.spanID = spanID
+        self.timeUnixNano = timeUnixNano
     }
 
     public subscript(_ key: String) -> AttributeValue? { attributes[key] }

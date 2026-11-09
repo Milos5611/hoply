@@ -37,6 +37,27 @@ enum Format {
         return totals.apiEquivUSD > 0 ? cost(totals.apiEquivUSD) + "+" : "unpriced"
     }
 
+    /// Copilot's own units, as secondary text next to a total: "182.7 premium req · 2,859 AIU". nil when the
+    /// total has no Copilot usage.
+    static func copilot(_ totals: LedgerTotals, compact: Bool = false) -> String? {
+        guard totals.aiu > 0 || totals.premiumRequests > 0 else { return nil }
+        return "\(premiumRequests(totals.premiumRequests)) \(compact ? "req" : "premium req") · \(aiu(totals.aiu)) AIU"
+    }
+
+    static func premiumRequests(_ value: Double) -> String {
+        if value >= 1_000 { return count(Int(value.rounded())) }
+        let rounded = (value * 10).rounded() / 10
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
+    }
+
+    static func aiu(_ value: Double) -> String {
+        value >= 10 ? count(Int(value.rounded())) : String(format: "%.1f", value)
+    }
+
+    static func path(_ path: String) -> String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+
     static func model(_ id: String) -> String {
         ModelName.display(id)
     }
@@ -112,6 +133,14 @@ enum Format {
     static func shortWhen(_ date: Date, now: Date = Date()) -> String {
         Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
                                                         : shortDayFormatter.string(from: date)
+    }
+
+    /// "just now", "12m ago", "3h ago", then the date.
+    static func lastActive(_ date: Date, now: Date = Date()) -> String {
+        let seconds = now.timeIntervalSince(date)
+        if seconds < 60 { return "just now" }
+        if seconds < 86_400 { return "\(age(since: date, now: now)) ago" }
+        return shortWhen(date, now: now)
     }
 
     /// Time only for today, otherwise date and time.

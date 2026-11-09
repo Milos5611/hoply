@@ -52,6 +52,28 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(try older.userVersion(), migrations.count - 2)
     }
 
+    func testV2AddsNativePricingAndPremiumColumnsToAFilledV1Ledger() throws {
+        let directory = try TempDirectory()
+        let path = directory.path("hoply.sqlite")
+        let db = try SQLiteConnection(path: path)
+        try Schema.configure(db)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(1)))
+        try db.run("""
+            INSERT INTO usage (dedupe_key, source, session_id, ts, model, output, cost_usd, api_equiv_usd, pricing_rev)
+            VALUES ('cc:a:1', 'claude-code', 's1', 1, 'claude-opus-5-5', 10, 0.5, 0.5, 'rev')
+            """)
+        try Schema.migrate(db, databasePath: path)
+        XCTAssertEqual(try db.userVersion(), 2)
+        let row = try XCTUnwrap(db.queryOne("SELECT native_usd, premium_requests, cost_usd FROM usage") {
+            ($0.optionalDouble(0), $0.double(1), $0.double(2))
+        })
+        XCTAssertNil(row.0)
+        XCTAssertEqual(row.1, 0)
+        XCTAssertEqual(row.2, 0.5)
+        let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
+        XCTAssertEqual(try backup.userVersion(), 1, "the v1 ledger was backed up before migrating")
+    }
+
     func testFailedMigrationRollsBack() throws {
         let directory = try TempDirectory()
         let path = directory.path("hoply.sqlite")

@@ -65,7 +65,7 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"t1","cwd":"'$PWD'","pr
 
 The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in settings and re-run `HOPLY_PORT=<port> scripts/install.sh`).
 
-**Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`.
+**Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`. Its OTel is its only history, so Hoply stores it. To file the usage under the right project, optionally start Qwen with `OTEL_RESOURCE_ATTRIBUTES=hoply.cwd=$PWD`; without it Hoply asks Qwen's process (`process.pid`) for its working directory, and usage it can't place shows as "Unassigned".
 
 ## Layout
 
@@ -81,12 +81,13 @@ Sources/AgentKit/      platform-neutral core
   VLLM.swift           Prometheus parser + vLLM snapshot and rates
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
   Settings/            AppSettings with lenient per-key decoding
-  Usage/               usage records, Claude transcript parser, ledger value types
+  Usage/               usage records, Claude transcript parser, Copilot store and OTel usage mappers, ledger value types
   Pricing/             price table (bundled as a string literal), cost-state calibration
   Projects/            cwd → project resolver (repo, worktree, folder, home, scratch)
 Sources/AgentSystem/   macOS I/O adapters
   Store/               SQLite schema + migrations, Store (writer), StoreReader (queries)
-  Ingest/              file tailer, FSEvents watcher, Claude transcript ingester, coordinator
+  Ingest/              file tailer, FSEvents watcher, Claude transcript and Copilot store ingesters, coordinator
+  Processes/           process cwd through libproc (OTel `process.pid` fallback)
 Sources/Hoply/         SwiftUI menu bar app: App/, Services/, Panel/, Components/
 Tests/AgentKitTests/   tests; fixtures were produced by the official OpenTelemetry JS exporters
 Tests/AgentSystemTests/  adapter tests (in-memory SQLite, temp directories)
@@ -95,7 +96,11 @@ scripts/               install.sh (build, install, connect agents), simulate.sh 
 
 ## Usage history
 
-Hoply keeps its own usage ledger in `~/Library/Application Support/Hoply/hoply.sqlite`. For Claude Code it reads the transcripts under `~/.claude/projects` (read-only), including subagents, so it has history from before Hoply was installed and works with OTel off. Claude Code deletes transcripts after about 30 days; the ledger never deletes rows, so it outlives them.
+Hoply keeps its own usage ledger in `~/Library/Application Support/Hoply/hoply.sqlite`, with one source per agent so nothing is counted twice:
+
+- **Claude Code:** the transcripts under `~/.claude/projects` (read-only), including subagents, so it has history from before Hoply was installed and works with OTel off. Claude Code deletes transcripts after about 30 days; the ledger never deletes rows, so it outlives them.
+- **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds. Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses Copilot's figure as the cost and also shows AIU and premium requests.
+- **Copilot in JetBrains and Qwen Code:** the OpenTelemetry they send to Hoply, stored as it arrives. Re-sent batches are recognized by their ids and counted once.
 
 Costs are API-equivalent list prices from a table bundled in the app. Local models (any model whose name contains `qwen`, configurable) cost $0 and are also priced at a reference model (default `claude-sonnet-5-5`) to show what they saved. Unknown models show as unpriced, not $0. To add or correct a price, put the same shape as the bundled table in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
 

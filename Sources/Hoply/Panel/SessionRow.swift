@@ -1,10 +1,35 @@
 import AgentKit
 import SwiftUI
 
+/// Where a session runs, shown before its source: the project in "Waiting on you", or inside a project
+/// card the worktree or subfolder when it isn't the project root.
+enum SessionPlace: Equatable {
+    case project(String)
+    case worktree(String)
+    case subfolder(String)
+
+    /// nil when `cwd` is the root itself.
+    init?(cwd: String?, root: String?) {
+        guard let cwd, let root, cwd != root else { return nil }
+        if cwd.hasPrefix(root.hasSuffix("/") ? root : root + "/") {
+            self = .subfolder(String(cwd.dropFirst(root.count).drop { $0 == "/" }))
+        } else {
+            self = .worktree((cwd as NSString).lastPathComponent)
+        }
+    }
+
+    var text: Text {
+        switch self {
+        case .project(let name), .subfolder(let name): return Text(name)
+        case .worktree(let name): return Text("\(Image(systemName: "arrow.triangle.branch")) \(name)")
+        }
+    }
+}
+
 struct SessionRow: View {
     @Environment(AppModel.self) private var model
     let session: AgentSession
-    var showsProject = false
+    var place: SessionPlace?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -14,7 +39,7 @@ struct SessionRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(prefix)\(Text(stateText).foregroundStyle(stateColor))\(suffix)")
+                Text("\(placeText)\(prefix)\(Text(stateText).foregroundStyle(stateColor))\(suffix)")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -38,6 +63,12 @@ struct SessionRow: View {
                         .foregroundStyle(.secondary)
                         .help(usageHelp)
                 }
+                if let totals = model.ledgerTotals(for: session.key), let copilot = Format.copilot(totals, compact: true) {
+                    Text(copilot)
+                        .font(.system(size: 10.5).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .help(Format.copilot(totals) ?? "")
+                }
             }
         }
         .contentShape(Rectangle())
@@ -56,11 +87,17 @@ struct SessionRow: View {
         session.title ?? session.project ?? session.key.source.displayName
     }
 
+    private var placeText: Text {
+        place.map { Text("\($0.text) · ") } ?? Text(verbatim: "")
+    }
+
+    /// Inside a project card a worktree or subfolder takes the source's place (the badge shows the source),
+    /// so the state never truncates.
     private var prefix: String {
-        var parts: [String] = []
-        if showsProject, let project = session.project { parts.append(project) }
-        parts.append(session.key.source.displayName)
-        return parts.joined(separator: " · ") + " · "
+        switch place {
+        case .worktree, .subfolder: return ""
+        case .project, nil: return session.key.source.displayName + " · "
+        }
     }
 
     private var suffix: String {

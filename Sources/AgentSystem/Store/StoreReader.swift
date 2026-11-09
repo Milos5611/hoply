@@ -43,7 +43,7 @@ public actor StoreReader {
     }
 
     /// Sessions active in `range` (newest activity first). Each row's totals cover the whole session.
-    public func sessions(in range: DateInterval, source: AgentSource? = nil, projectID: Int64? = nil,
+    public func sessions(in range: DateInterval, source: AgentSource? = nil, project: ProjectFilter? = nil,
                          limit: Int = 50, offset: Int = 0) throws -> SessionPage {
         var filter = "s.last_at >= ? AND s.first_at < ?"
         var values: [any SQLiteBindable] = Self.bounds(range)
@@ -51,10 +51,7 @@ public actor StoreReader {
             filter += " AND s.source = ?"
             values.append(source.rawValue)
         }
-        if let projectID {
-            filter += " AND s.project_id = ?"
-            values.append(projectID)
-        }
+        Self.append(project, column: "s.project_id", to: &filter, values: &values)
         let total = try db.queryOne("SELECT COUNT(*) FROM sessions s WHERE \(filter)", values) { $0.int(0) } ?? 0
         var summaries = try db.query("""
             SELECT \(Self.sessionColumns), \(Self.totals(prefix: "u."))
@@ -83,8 +80,8 @@ public actor StoreReader {
         return found.first
     }
 
-    /// The last `days` local days including today, split by model or by source.
-    public func dailySpend(days: Int, split: SpendSeriesSplit, now: Date = Date(),
+    /// The last `days` local days including today, split by model or by source, optionally for one project.
+    public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, now: Date = Date(),
                            calendar: Calendar = .current) throws -> DailySpendSeries {
         let count = max(days, 1)
         let start = calendar.startOfDay(for: now)
@@ -94,15 +91,19 @@ public actor StoreReader {
         let rangesJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: ranges)) ?? Data("[]".utf8),
                                 as: UTF8.self)
         let series = split == .model ? "COALESCE(model, '')" : "source"
+        var filter = "1"
+        var values: [any SQLiteBindable] = [rangesJSON]
+        Self.append(project, column: "usage.project_id", to: &filter, values: &values)
         let points = try db.query("""
             WITH days(idx, start_ts, end_ts) AS (
                 SELECT CAST(key AS INTEGER), json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
             )
             SELECT days.idx, \(series), \(Self.totals())
             FROM days JOIN usage ON usage.ts >= days.start_ts AND usage.ts < days.end_ts
+            WHERE \(filter)
             GROUP BY days.idx, 2
             ORDER BY days.idx, 2
-            """, [rangesJSON]) { row in
+            """, values) { row in
             DailySpendPoint(day: dayStarts[row.int(0)], series: row.text(1), totals: Self.totals(row, from: 2))
         }
         return DailySpendSeries(days: Array(dayStarts.dropLast()), points: points)
@@ -123,6 +124,58 @@ public actor StoreReader {
                               project: project, totals: Self.totals(row, from: 5),
                               sessionCount: row.int(5 + Self.totalsColumnCount))
         }
+    }
+
+    /// The Projects page: every project with usage in `range`, largest API-equivalent spend first. Usage
+    /// without a project is one summary with `project == nil` ("Unassigned").
+    public func projects(in range: DateInterval, topModels: Int = 3) throws -> [ProjectSummary] {
+        let bounds = Self.bounds(range)
+        var summaries = try db.query("""
+            SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.")),
+                   COUNT(DISTINCT u.source || ':' || u.session_id), MAX(u.ts), MIN(u.ts)
+            FROM usage u LEFT JOIN projects p ON p.id = u.project_id
+            WHERE u.ts >= ? AND u.ts < ?
+            GROUP BY u.project_id
+            ORDER BY COALESCE(SUM(u.api_equiv_usd), 0) DESC, MAX(u.ts) DESC
+            """, bounds) { row in
+            ProjectSummary(project: Self.project(row, from: 0), totals: Self.totals(row, from: 5),
+                           sessionCount: row.int(5 + Self.totalsColumnCount),
+                           firstActive: row.optionalDouble(7 + Self.totalsColumnCount).map(Date.init(timeIntervalSince1970:)),
+                           lastActive: row.optionalDouble(6 + Self.totalsColumnCount).map(Date.init(timeIntervalSince1970:)))
+        }
+        guard !summaries.isEmpty else { return [] }
+
+        var bySource: [Int64?: [AgentSource: LedgerTotals]] = [:]
+        for (projectID, source, totals) in try db.query("""
+            SELECT project_id, source, \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ? GROUP BY project_id, source
+            """, bounds, { row in (row.optionalInt64(0), AgentSource(rawValue: row.text(1)), Self.totals(row, from: 2)) }) {
+            if let source { bySource[projectID, default: [:]][source] = totals }
+        }
+        var models: [Int64?: [ModelShare]] = [:]
+        for (projectID, share) in try db.query("""
+            SELECT project_id, COALESCE(model, ''), \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ?
+            GROUP BY project_id, model
+            """, bounds, { row in (row.optionalInt64(0), ModelShare(model: row.text(1), totals: Self.totals(row, from: 2))) }) {
+            models[projectID, default: []].append(share)
+        }
+        var branches: [Int64?: Set<String>] = [:]
+        var worktrees: [Int64?: Set<String>] = [:]
+        for (projectID, branch, worktree) in try db.query("""
+            SELECT DISTINCT u.project_id, s.branch, s.worktree
+            FROM usage u JOIN sessions s ON s.source = u.source AND s.id = u.session_id
+            WHERE u.ts >= ? AND u.ts < ?
+            """, bounds, { row in (row.optionalInt64(0), row.optionalText(1), row.optionalText(2)) }) {
+            if let branch, !branch.isEmpty { branches[projectID, default: []].insert(branch) }
+            if let worktree, !worktree.isEmpty { worktrees[projectID, default: []].insert(worktree) }
+        }
+        for index in summaries.indices {
+            let id = summaries[index].project?.id
+            summaries[index].bySource = bySource[id] ?? [:]
+            summaries[index].topModels = Array(Self.largestFirst(models[id] ?? []).prefix(max(topModels, 0)))
+            summaries[index].branches = (branches[id] ?? []).sorted()
+            summaries[index].worktrees = (worktrees[id] ?? []).sorted()
+        }
+        return summaries
     }
 
     public func spendByModel(in range: DateInterval) throws -> [SpendSlice] {
@@ -163,14 +216,16 @@ public actor StoreReader {
 
     // MARK: - Row mapping
 
-    private static let totalsColumnCount: Int32 = 10
+    private static let totalsColumnCount: Int32 = 12
 
     private static func totals(prefix p: String = "") -> String {
         """
         COALESCE(SUM(\(p)cost_usd), 0), COALESCE(SUM(\(p)api_equiv_usd), 0), COALESCE(SUM(\(p)input), 0),
         COALESCE(SUM(\(p)output), 0), COALESCE(SUM(\(p)reasoning), 0), COALESCE(SUM(\(p)cache_read), 0),
         COALESCE(SUM(\(p)cache_write_5m), 0), COALESCE(SUM(\(p)cache_write_1h), 0), COUNT(\(p)id),
-        COALESCE(MAX(\(p)cost_usd IS NULL AND \(p)is_local = 0), 0)
+        COALESCE(MAX(\(p)cost_usd IS NULL AND \(p)is_local = 0), 0),
+        COALESCE(SUM(CASE WHEN \(p)source = 'copilot-cli' THEN \(p)native_cost END), 0),
+        COALESCE(SUM(\(p)premium_requests), 0)
         """
     }
 
@@ -179,7 +234,8 @@ public actor StoreReader {
                      tokens: TokenCounts(input: row.int(start + 2), output: row.int(start + 3),
                                          reasoning: row.int(start + 4), cacheRead: row.int(start + 5),
                                          cacheWrite5m: row.int(start + 6), cacheWrite1h: row.int(start + 7)),
-                     calls: row.int(start + 8), hasUnpriced: row.bool(start + 9))
+                     calls: row.int(start + 8), hasUnpriced: row.bool(start + 9), aiu: row.double(start + 10),
+                     premiumRequests: row.double(start + 11))
     }
 
     private static let sessionColumns = """
@@ -220,9 +276,26 @@ public actor StoreReader {
             for (key, share) in rows { shares[key, default: []].append(share) }
         }
         for index in summaries.indices {
-            summaries[index].models = (shares[summaries[index].key] ?? []).sorted {
-                ($0.totals.apiEquivUSD, $0.totals.tokens.total) > ($1.totals.apiEquivUSD, $1.totals.tokens.total)
-            }
+            summaries[index].models = Self.largestFirst(shares[summaries[index].key] ?? [])
+        }
+    }
+
+    private static func largestFirst(_ shares: [ModelShare]) -> [ModelShare] {
+        shares.sorted {
+            ($0.totals.apiEquivUSD, $0.totals.tokens.total, $1.model) > ($1.totals.apiEquivUSD, $1.totals.tokens.total, $0.model)
+        }
+    }
+
+    private static func append(_ project: ProjectFilter?, column: String, to filter: inout String,
+                               values: inout [any SQLiteBindable]) {
+        switch project {
+        case .project(let id)?:
+            filter += " AND \(column) = ?"
+            values.append(id)
+        case .unassigned?:
+            filter += " AND \(column) IS NULL"
+        case nil:
+            break
         }
     }
 

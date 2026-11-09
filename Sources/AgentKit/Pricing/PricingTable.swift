@@ -96,6 +96,12 @@ public struct PricedUsage: Sendable, Equatable {
     public var costUSD: Double?
     public var apiEquivUSD: Double?
     public var isLocal: Bool
+
+    public init(costUSD: Double?, apiEquivUSD: Double?, isLocal: Bool) {
+        self.costUSD = costUSD
+        self.apiEquivUSD = apiEquivUSD
+        self.isLocal = isLocal
+    }
 }
 
 public struct PricingTable: Sendable, Equatable {
@@ -213,6 +219,8 @@ public struct PricingTable: Sendable, Equatable {
         if let at = id.firstIndex(of: "@") { id = String(id[..<at]) }
         if let range = id.range(of: #"-v\d+(:\d+)?$"#, options: .regularExpression) { id.removeSubrange(range) }
         if let range = id.range(of: #"-\d{8}$"#, options: .regularExpression) { id.removeSubrange(range) }
+        // Copilot spells Claude versions with dots (`claude-haiku-4.5`).
+        if id.hasPrefix("claude-") { id = id.replacingOccurrences(of: ".", with: "-") }
         return id
     }
 

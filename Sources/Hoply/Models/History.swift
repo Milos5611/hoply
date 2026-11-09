@@ -20,6 +20,26 @@ struct SpendingData: Equatable {
     var total: LedgerTotals { models.reduce(.zero) { $0 + $1.totals } }
 }
 
+struct ProjectsData: Equatable {
+    var range: HistoryRange
+    /// Largest spend first, Unassigned included (`project == nil`).
+    var projects: [ProjectSummary]
+}
+
+/// The project the Projects page shows in detail; `project == nil` is Unassigned.
+struct OpenedProject: Equatable {
+    var project: ProjectRef?
+
+    var filter: ProjectFilter { project.map { .project($0.id) } ?? .unassigned }
+}
+
+struct ProjectDetailData: Equatable {
+    var range: HistoryRange
+    var summary: ProjectSummary
+    var daily: DailySpendSeries
+    var sessions: SessionPage
+}
+
 /// Everything the UI reads from the usage ledger: ingest progress, totals for the live sessions and today,
 /// and the Dashboard pages. The panel and the Dashboard both read these ledger totals, so they always agree.
 @MainActor
@@ -48,8 +68,15 @@ final class History {
     private(set) var sessionsRange: HistoryRange = .week
     private(set) var sessionsOffset = 0
     private(set) var selectedSession: SessionSummary?
+    private(set) var projectList: ProjectsData?
+    private(set) var projectsRange: HistoryRange = .month
+    private(set) var openedProject: OpenedProject?
+    private(set) var projectDetail: ProjectDetailData?
+    private(set) var projectSessionsOffset = 0
+    private(set) var selectedProjectSession: SessionSummary?
 
     static let pageSize = 50
+    private static let pendingUsageLimit = 5_000
 
     @ObservationIgnored private var ledger: Ledger?
     @ObservationIgnored private var liveKeys: Set<SessionKey> = []
@@ -63,6 +90,9 @@ final class History {
     @ObservationIgnored private var pageGeneration: [DashboardPage: Int] = [:]
     @ObservationIgnored private var refreshedDay: Date?
     @ObservationIgnored private var autoSelect = true
+    @ObservationIgnored private var projectAutoSelect = true
+    @ObservationIgnored private var pendingUsage: [UsageRecord] = []
+    @ObservationIgnored private var recordTask: Task<Void, Never>?
 
     var todayTotal: LedgerTotals { today.values.reduce(.zero, +) }
     var isReady: Bool { status == .ready }
@@ -87,12 +117,13 @@ final class History {
             } catch {
                 guard let self, generation == self.openGeneration else { return }
                 status = .unavailable("History is off: \(Self.describe(error))")
+                pendingUsage = []
             }
         }
     }
 
-    /// A different Claude config directory means a different set of transcripts and cursors. The new ledger
-    /// opens only after the old ingest has stopped, so the two never write to the database at once.
+    /// A different Claude config or Copilot home means different files and cursors. The new ledger opens
+    /// only after the old ingest has stopped, so the two never write to the database at once.
     func reopen(_ configuration: LedgerConfiguration) {
         openTask?.cancel()
         consumer?.cancel()
@@ -119,6 +150,11 @@ final class History {
             }
         }
         ingestTask = Task { await ledger.ingest.start() }
+        if !pendingUsage.isEmpty {
+            let held = pendingUsage
+            pendingUsage = []
+            record(held)
+        }
         scheduleRefresh(after: .zero)
     }
 
@@ -145,6 +181,35 @@ final class History {
         Task {
             for path in paths { await ingest.tailTranscript(atPath: path) }
         }
+    }
+
+    /// Telemetry usage from `HubServer.onUsage`. OTLP can arrive while the ledger is still opening, so a
+    /// bounded backlog waits for it. Batches are recorded in arrival order, because a record without a cwd
+    /// takes its session's cwd from earlier records.
+    func record(_ usage: [UsageRecord]) {
+        guard !usage.isEmpty else { return }
+        guard let ledger else {
+            if status == .opening {
+                pendingUsage.append(contentsOf: usage.prefix(max(0, Self.pendingUsageLimit - pendingUsage.count)))
+            }
+            return
+        }
+        let previous = recordTask
+        recordTask = Task {
+            await previous?.value
+            await ledger.record(usage)
+        }
+    }
+
+    func pollCopilot() {
+        guard let ledger else { return }
+        Task { await ledger.pollCopilot() }
+    }
+
+    /// nil while no ledger is open, so the caller can ask again later.
+    func resolveProjects(_ cwds: [String]) async -> [String: ProjectRef]? {
+        guard let ledger else { return nil }
+        return await ledger.resolveProjects(cwds)
     }
 
     func reindex() {
@@ -200,6 +265,47 @@ final class History {
 
     func selectSession(id: SessionSummary.ID?) {
         selectedSession = id.flatMap { id in sessionList?.sessions.first { $0.id == id } }
+    }
+
+    func setProjectsRange(_ range: HistoryRange) {
+        guard range != projectsRange else { return }
+        projectsRange = range
+        projectSessionsOffset = 0
+        projectAutoSelect = true
+        reload(.projects)
+    }
+
+    /// Shows a project's detail on the Projects page. `range` carries over the range of the figure the user
+    /// clicked (Overview's 30 days, Spending's range), so the detail starts with the same numbers.
+    func openProject(_ project: ProjectRef?, range: HistoryRange? = nil) {
+        let opened = OpenedProject(project: project)
+        if opened != openedProject {
+            openedProject = opened
+            projectDetail = nil
+            selectedProjectSession = nil
+        }
+        if let range { projectsRange = range }
+        projectSessionsOffset = 0
+        projectAutoSelect = true
+        page = .projects
+        if isDashboardVisible { reload(.projects) }
+    }
+
+    func closeProject() {
+        openedProject = nil
+        projectDetail = nil
+        selectedProjectSession = nil
+        reload(.projects)
+    }
+
+    func showProjectSessionsPage(offset: Int) {
+        projectSessionsOffset = max(0, offset)
+        projectAutoSelect = true
+        reload(.projects)
+    }
+
+    func selectProjectSession(id: SessionSummary.ID?) {
+        selectedProjectSession = id.flatMap { id in projectDetail?.sessions.sessions.first { $0.id == id } }
     }
 
     // MARK: - Refresh
@@ -279,10 +385,52 @@ final class History {
                 autoSelect = false
                 if list != sessionList { sessionList = list }
                 if selected != selectedSession { selectedSession = selected }
+            case .projects:
+                let range = projectsRange, opened = openedProject
+                let interval = range.interval(now: now)
+                let projects = try await reader.projects(in: interval, topModels: 8)
+                var detail: ProjectDetailData?
+                var selected = selectedProjectSession
+                if let opened {
+                    let summary = projects.first { $0.filter == opened.filter } ?? ProjectSummary(project: opened.project)
+                    let days = range.days ?? Self.dayCount(since: summary.firstActive, now: now)
+                    let sessions = try await reader.sessions(in: interval, project: opened.filter,
+                                                             limit: Self.pageSize, offset: projectSessionsOffset)
+                    detail = ProjectDetailData(
+                        range: range, summary: summary,
+                        daily: try await reader.dailySpend(days: days, split: .model, project: opened.filter, now: now),
+                        sessions: sessions)
+                    if projectAutoSelect {
+                        selected = sessions.sessions.first
+                    } else if let key = selected?.key {
+                        if let fresh = sessions.sessions.first(where: { $0.key == key }) {
+                            selected = fresh
+                        } else {
+                            selected = try await reader.session(key)
+                        }
+                    }
+                }
+                guard generation == pageGeneration[page] else { return }
+                let list = ProjectsData(range: range, projects: projects)
+                if list != projectList { projectList = list }
+                if let opened, opened == openedProject {
+                    projectAutoSelect = false
+                    if detail != projectDetail { projectDetail = detail }
+                    if selected != selectedProjectSession { selectedProjectSession = selected }
+                }
             }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
         }
+    }
+
+    /// "All time" charts start at the project's first usage, but never show fewer than 30 days.
+    private static func dayCount(since first: Date?, now: Date) -> Int {
+        guard let first else { return 30 }
+        let calendar = Calendar.current
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: first),
+                                           to: calendar.startOfDay(for: now)).day ?? 0
+        return min(max(days + 1, 30), 3_650)
     }
 
     private static func describe(_ error: any Error) -> String {
@@ -299,6 +447,8 @@ struct HistoryPreview {
     var spending: SpendingData
     var sessions: SessionPage
     var selectedSession: SessionSummary?
+    var projects: ProjectsData
+    var projectDetail: ProjectDetailData?
 }
 
 extension History {
@@ -313,6 +463,20 @@ extension History {
         spendingSplit = preview.spending.split
         sessionList = preview.sessions
         selectedSession = preview.selectedSession
+        projectList = preview.projects
+        projectsRange = preview.projects.range
+        openedProject = nil
+        projectDetail = nil
+        selectedProjectSession = nil
         self.page = page
+    }
+
+    func showProjectDetail(_ preview: HistoryPreview) {
+        guard let detail = preview.projectDetail else { return }
+        show(preview, page: .projects)
+        openedProject = OpenedProject(project: detail.summary.project)
+        projectDetail = detail
+        projectsRange = detail.range
+        selectedProjectSession = detail.sessions.sessions.first
     }
 }

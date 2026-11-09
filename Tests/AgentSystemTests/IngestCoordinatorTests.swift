@@ -21,6 +21,7 @@ final class IngestCoordinatorTests: XCTestCase {
     private func makeLedger(_ directory: TempDirectory, watch: Bool = false) throws -> Ledger {
         try Ledger(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
                                                       claudeConfigDirectory: directory.path("claude"),
+                                                      copilotHome: directory.path("copilot"),
                                                       pricingOverridesURL: nil, watchForChanges: watch))
     }
 

@@ -120,12 +120,91 @@ struct ShareBar: View {
     }
 }
 
+/// One ranked line: icon, title and figure, a share bar, then a caption and optional secondary text
+/// (Copilot's premium requests and AIU).
+struct BreakdownRow<Icon: View>: View {
+    let title: String
+    let value: String
+    var valueIsWarning = false
+    let fraction: Double
+    var tint: Color = .blue
+    let subtitle: String
+    var detail: String?
+    var showsChevron = false
+    @ViewBuilder var icon: Icon
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            icon
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    Text(value)
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(valueIsWarning ? Color.orange : Color.primary)
+                }
+                ShareBar(fraction: fraction, tint: tint)
+                Text(subtitle)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10.5).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+/// A plain row that highlights under the pointer, for lists whose rows open a detail.
+struct RowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Highlight(configuration: configuration)
+    }
+
+    private struct Highlight: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.08 : hovering ? 0.045 : 0)))
+                .padding(.horizontal, -8)
+                .padding(.vertical, -6)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+extension ButtonStyle where Self == RowButtonStyle {
+    static var row: RowButtonStyle { RowButtonStyle() }
+}
+
 struct BreakdownList: View {
     enum Kind { case project, model }
 
     let slices: [SpendSlice]
     let kind: Kind
     var limit: Int?
+    /// Makes project rows open that project's detail.
+    var open: ((SpendSlice) -> Void)?
 
     var body: some View {
         let shown = limit.map { Array(slices.prefix($0)) } ?? slices
@@ -135,30 +214,24 @@ struct BreakdownList: View {
         } else {
             VStack(spacing: 12) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, slice in
-                    HStack(alignment: .center, spacing: 10) {
-                        icon(slice, index: index)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(title(slice))
-                                    .font(.system(size: 13, weight: .medium))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer(minLength: 6)
-                                Text(Format.spend(slice.totals))
-                                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                                    .foregroundStyle(slice.totals.hasUnpriced && slice.totals.apiEquivUSD == 0
-                                                     ? Color.orange : Color.primary)
-                            }
-                            ShareBar(fraction: slice.totals.apiEquivUSD / top, tint: color(index: index))
-                            Text(subtitle(slice))
-                                .font(.system(size: 11).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                    if let open {
+                        Button { open(slice) } label: { row(slice, index: index, top: top, chevron: true) }
+                            .buttonStyle(.row)
+                            .help("Show \(title(slice)) in Projects")
+                    } else {
+                        row(slice, index: index, top: top, chevron: false)
                     }
                 }
             }
+        }
+    }
+
+    private func row(_ slice: SpendSlice, index: Int, top: Double, chevron: Bool) -> some View {
+        BreakdownRow(title: title(slice), value: Format.spend(slice.totals),
+                     valueIsWarning: slice.totals.hasUnpriced && slice.totals.apiEquivUSD == 0,
+                     fraction: slice.totals.apiEquivUSD / top, tint: color(index: index), subtitle: subtitle(slice),
+                     detail: Format.copilot(slice.totals), showsChevron: chevron) {
+            icon(slice, index: index)
         }
     }
 
@@ -166,8 +239,7 @@ struct BreakdownList: View {
     private func icon(_ slice: SpendSlice, index: Int) -> some View {
         switch kind {
         case .project:
-            IconTile(symbol: slice.project == nil ? "questionmark.folder" : "folder.fill",
-                     tint: slice.project == nil ? .secondary : .blue, size: 30)
+            IconTile(projectKind: slice.project?.kind, size: 30)
         case .model:
             IconTile(symbol: "cube.fill", tint: color(index: index), size: 30)
         }
@@ -181,7 +253,7 @@ struct BreakdownList: View {
         let sessions = slice.sessionCount == 1 ? "1 session" : "\(slice.sessionCount) sessions"
         var parts = [sessions, "\(Format.tokens(slice.totals.tokens.total)) tokens"]
         if kind == .project, let root = slice.project?.root {
-            parts.append((root as NSString).abbreviatingWithTildeInPath)
+            parts.append(Format.path(root))
         }
         if kind == .model, slice.totals.apiEquivUSD > 0, slice.totals.costUSD == 0 {
             parts.append("local")
