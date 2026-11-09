@@ -35,8 +35,7 @@ struct PanelHeader: View {
             HeaderIconButton(symbol: "macwindow", help: "Open Dashboard") {
                 model.openDashboard()
             }
-            HeaderIconButton(symbol: model.settings.notificationsEnabled ? "bell" : "bell.slash",
-                             help: model.settings.notificationsEnabled ? "Pause notifications" : "Resume notifications") {
+            HeaderIconButton(symbol: model.settings.notificationsEnabled ? "bell" : "bell.slash", help: bellHelp) {
                 model.toggleNotifications()
             }
             HeaderIconButton(symbol: model.showingSettings ? "xmark" : "gearshape",
@@ -47,6 +46,11 @@ struct PanelHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 10)
+    }
+
+    private var bellHelp: String {
+        guard model.settings.notificationsEnabled else { return "Resume notifications" }
+        return model.quietHoursNote.map { "Pause notifications · \($0)" } ?? "Pause notifications"
     }
 }
 

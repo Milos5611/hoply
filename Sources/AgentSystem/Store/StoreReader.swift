@@ -206,6 +206,49 @@ public actor StoreReader {
                              allTime: try sum(nil))
     }
 
+    // MARK: - Limit samples
+
+    /// Plan-limit samples in `range`, oldest first, optionally for some kinds only. With `bucket` (seconds), each
+    /// kind keeps only its highest reading per bucket, which thins month-long chart ranges.
+    public func limitSamples(_ kinds: Set<LimitKind>? = nil, in range: DateInterval,
+                             bucket: TimeInterval? = nil) throws -> [LimitSample] {
+        var filter = "ts >= ? AND ts < ?"
+        var values: [any SQLiteBindable] = Self.bounds(range)
+        if let kinds {
+            filter += " AND kind IN (SELECT value FROM json_each(?))"
+            values.append(Self.jsonArray(kinds.map(\.rawValue)))
+        }
+        // SQLite fills the bare `ts` and `resets_at` columns from the row holding MAX(utilization).
+        let sql = if let bucket, bucket > 0 {
+            """
+            SELECT kind, ts, MAX(utilization), resets_at FROM limit_samples WHERE \(filter)
+            GROUP BY kind, CAST(ts / \(bucket) AS INTEGER) ORDER BY ts, kind
+            """
+        } else {
+            "SELECT kind, ts, utilization, resets_at FROM limit_samples WHERE \(filter) ORDER BY ts, kind"
+        }
+        return try db.query(sql, values) { Self.limitSample($0) }.compactMap { $0 }
+    }
+
+    /// Each kind's most recent sample.
+    public func latestLimitSamples() throws -> [LimitKind: LimitSample] {
+        try Self.latestLimitSamples(db)
+    }
+
+    static func latestLimitSamples(_ db: SQLiteConnection) throws -> [LimitKind: LimitSample] {
+        let rows = try db.query("SELECT kind, MAX(ts), utilization, resets_at FROM limit_samples GROUP BY kind") {
+            Self.limitSample($0)
+        }
+        return Dictionary(rows.compactMap { $0.map { ($0.kind, $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Columns: kind, ts, utilization, resets_at. Kinds this build doesn't know are skipped.
+    private static func limitSample(_ row: SQLiteRow) -> LimitSample? {
+        guard let kind = LimitKind(rawValue: row.text(0)) else { return nil }
+        return LimitSample(kind: kind, ts: Date(timeIntervalSince1970: row.double(1)), utilization: row.double(2),
+                           resetsAt: row.optionalDouble(3).map(Date.init(timeIntervalSince1970:)))
+    }
+
     /// The last `count` local days including the one containing `now`, ending at the next midnight.
     public static func days(_ count: Int, endingAt now: Date, calendar: Calendar = .current) -> DateInterval {
         let today = calendar.startOfDay(for: now)

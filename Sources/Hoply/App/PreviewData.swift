@@ -8,6 +8,8 @@ enum PreviewData {
         settings.vllmBaseURL = "http://zgx.local:8000"
         settings.vllmName = "ZGX"
         settings.claudeLimitsEnabled = true
+        settings.quietHoursEnabled = true
+        settings.mutedProjectRoots = ["\(NSHomeDirectory())/Project/hoply"]
         return settings
     }
 
@@ -242,7 +244,77 @@ enum PreviewData {
             sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first,
             projects: ProjectsData(range: .month, projects: summaries),
             projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
-                                             sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)))
+                                             sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)),
+            limits: limits(now: now, entries: entries))
+    }
+
+    // MARK: - Limits
+
+    /// A week of plan readings that ends in `claudeLimits(now:)`: the current 5-hour window is on pace to hit its
+    /// limit before the reset, the week is on track. Readings every 15 minutes; 5-hour windows run on workdays,
+    /// and the week climbs while they do.
+    static func limitSamples(now: Date, days: Int = 7) -> [LimitSample] {
+        let calendar = Calendar.current
+        let five: TimeInterval = 5 * 3_600, week: TimeInterval = 7 * 86_400
+        let fiveReset = now.addingTimeInterval(2.6 * 3_600)
+        let weekReset = now.addingTimeInterval(3.7 * 86_400)
+        var times = Array(stride(from: now.addingTimeInterval(-Double(days) * 86_400), to: now, by: 900))
+        times.append(now)
+
+        var samples: [LimitSample] = []
+        var activity: [Double] = []
+        for time in times {
+            let windowsBack = (fiveReset.timeIntervalSince(time) / five).rounded(.down)
+            let windowEnd = fiveReset.addingTimeInterval(-windowsBack * five)
+            let windowStart = windowEnd.addingTimeInterval(-five)
+            let hour = calendar.component(.hour, from: windowStart)
+            let weekday = calendar.component(.weekday, from: windowStart)
+            let workday = !(weekday == 1 || weekday == 7)
+            let active = windowsBack == 0 || (workday ? (8..<19).contains(hour) : (11..<14).contains(hour))
+            activity.append((activity.last ?? 0) + (active ? 1 : 0.03))
+            guard active else { continue }
+            let used = windowsBack == 0
+                ? 62 * time.timeIntervalSince(windowStart) / now.timeIntervalSince(windowStart)
+                : min(100, (35 + 75 * abs(sin(windowsBack * 1.7))) * pow(time.timeIntervalSince(windowStart) / five, 0.85))
+                    .rounded()
+            samples.append(LimitSample(kind: .fiveHour, ts: time, utilization: used, resetsAt: windowEnd))
+        }
+
+        for (index, time) in times.enumerated() {
+            let weeksBack = (weekReset.timeIntervalSince(time) / week).rounded(.down)
+            let weekEnd = weekReset.addingTimeInterval(-weeksBack * week)
+            let weekStart = weekEnd.addingTimeInterval(-week)
+            let inWeek = times.indices.filter { times[$0] >= weekStart && times[$0] < weekEnd }
+            guard let first = inWeek.first, let last = inWeek.last else { continue }
+            let peak = weeksBack == 0 ? 25 : [81.0, 64][Int(weeksBack - 1) % 2]
+            // The previous week started before the chart, so its climb starts part way up.
+            let floor = weeksBack == 0 ? 0 : peak * max(0, times[first].timeIntervalSince(weekStart) / week)
+            let progress = (activity[index] - activity[first]) / max(activity[last] - activity[first], 1)
+            samples.append(LimitSample(kind: .sevenDay, ts: time, utilization: floor + (peak - floor) * progress,
+                                       resetsAt: weekEnd))
+        }
+        return samples.sorted { $0.ts < $1.ts }
+    }
+
+    /// The Limits page from the same usage streams as the other pages: Claude Code spend inside each window,
+    /// Copilot CLI's premium requests this month.
+    private static func limits(now: Date, entries: [Entry]) -> LimitsData {
+        let calendar = Calendar.current
+        let samples = limitSamples(now: now)
+        let projections = LimitsProjection.projections(samples)
+        func claude(since day: Date) -> LedgerTotals {
+            entries.filter { $0.source == .claudeCode && $0.day >= day }.reduce(.zero) { $0 + $1.totals }
+        }
+        var spend = [LimitKind.fiveHour: scaled(claude(since: calendar.startOfDay(for: now)), by: 0.6)]
+        if let weekStart = projections[.sevenDay]?.windowStart {
+            spend[.sevenDay] = claude(since: calendar.startOfDay(for: weekStart))
+        }
+        let month = CopilotAllowance.month(containing: now)
+        let copilot = entries.filter { $0.source == .copilotCLI && $0.day >= month.start }
+            .reduce(LedgerTotals.zero) { $0 + $1.totals }
+        return LimitsData(days: 7, samples: samples, projections: projections, windowSpend: spend,
+                          copilot: CopilotAllowance(used: copilot.premiumRequests, settings: settings, now: now),
+                          copilotMonth: copilot)
     }
 
     private static func projectSummaries(_ entries: [Entry], now: Date) -> [ProjectSummary] {

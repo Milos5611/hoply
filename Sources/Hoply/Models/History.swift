@@ -40,6 +40,18 @@ struct ProjectDetailData: Equatable {
     var sessions: SessionPage
 }
 
+struct LimitsData: Equatable {
+    var days: Int
+    /// The chart's samples, oldest first.
+    var samples: [LimitSample]
+    var projections: [LimitKind: LimitsProjection]
+    /// Claude Code's ledger totals from each window's start until now.
+    var windowSpend: [LimitKind: LedgerTotals]
+    var copilot: CopilotAllowance
+    /// Copilot CLI's totals over the allowance month (AIU, API-equivalent).
+    var copilotMonth: LedgerTotals
+}
+
 /// Everything the UI reads from the usage ledger: ingest progress, totals for the live sessions and today,
 /// and the Dashboard pages. The panel and the Dashboard both read these ledger totals, so they always agree.
 @MainActor
@@ -74,8 +86,11 @@ final class History {
     private(set) var projectDetail: ProjectDetailData?
     private(set) var projectSessionsOffset = 0
     private(set) var selectedProjectSession: SessionSummary?
+    private(set) var limits: LimitsData?
+    private(set) var limitsDays = 7
 
     static let pageSize = 50
+    static let limitDayChoices = [7, 30]
     private static let pendingUsageLimit = 5_000
 
     @ObservationIgnored private var ledger: Ledger?
@@ -93,6 +108,10 @@ final class History {
     @ObservationIgnored private var projectAutoSelect = true
     @ObservationIgnored private var pendingUsage: [UsageRecord] = []
     @ObservationIgnored private var recordTask: Task<Void, Never>?
+    /// A session to select on the Sessions page whatever its range (a notification click).
+    @ObservationIgnored private var requestedSession: SessionKey?
+    /// The Copilot plan the Limits page measures against.
+    @ObservationIgnored private var plan = AppSettings()
 
     var todayTotal: LedgerTotals { today.values.reduce(.zero, +) }
     var isReady: Bool { status == .ready }
@@ -212,6 +231,33 @@ final class History {
         return await ledger.resolveProjects(cwds)
     }
 
+    /// Stores a Claude limits fetch and returns each window's last sample from before it: the `previous` that
+    /// `NotificationPolicy.limitsUpdated` needs. A fetch at launch can return before the ledger opens; it waits,
+    /// so it is compared with what an earlier run stored and a restart doesn't repeat an alert. nil when History
+    /// is off or the write failed.
+    func recordLimits(_ limits: ClaudeLimits, at time: Date) async -> [LimitKind: LimitSample]? {
+        while status == .opening, let task = openTask {
+            await task.value
+            if task == openTask, status == .opening { break }
+        }
+        guard let ledger else { return nil }
+        do {
+            let previous = try await ledger.recordLimits(limits, at: time)
+            if isDashboardVisible, page == .limits { reload(.limits) }
+            return previous
+        } catch {
+            note = "Recording limits failed: \(Self.describe(error))"
+            return nil
+        }
+    }
+
+    func setPlan(_ settings: AppSettings) {
+        guard settings.copilotMonthlyAllowance != plan.copilotMonthlyAllowance
+            || settings.copilotUSDPerPremiumRequest != plan.copilotUSDPerPremiumRequest else { return }
+        plan = settings
+        if isDashboardVisible, page == .limits { reload(.limits) }
+    }
+
     func reindex() {
         guard let ingest = ledger?.ingest else { return }
         Task { await ingest.reindex() }
@@ -265,6 +311,21 @@ final class History {
 
     func selectSession(id: SessionSummary.ID?) {
         selectedSession = id.flatMap { id in sessionList?.sessions.first { $0.id == id } }
+    }
+
+    /// Shows one session on the Sessions page, selected even when it falls outside the page's range.
+    func openSession(_ key: SessionKey) {
+        requestedSession = key
+        sessionsOffset = 0
+        autoSelect = false
+        page = .sessions
+        if isDashboardVisible { reload(.sessions) }
+    }
+
+    func setLimitsDays(_ days: Int) {
+        guard days != limitsDays else { return }
+        limitsDays = days
+        reload(.limits)
     }
 
     func setProjectsRange(_ range: HistoryRange) {
@@ -345,7 +406,8 @@ final class History {
     }
 
     private func load(_ page: DashboardPage) async {
-        guard let reader = ledger?.reader else { return }
+        guard let ledger else { return }
+        let reader = ledger.reader
         let generation = (pageGeneration[page] ?? 0) + 1
         pageGeneration[page] = generation
         let now = Date()
@@ -369,10 +431,17 @@ final class History {
                 guard generation == pageGeneration[page] else { return }
                 if data != spending { spending = data }
             case .sessions:
+                let requested = requestedSession
                 let list = try await reader.sessions(in: sessionsRange.interval(now: now),
                                                      limit: Self.pageSize, offset: sessionsOffset)
                 var selected = selectedSession
-                if autoSelect {
+                if let requested {
+                    if let found = list.sessions.first(where: { $0.key == requested }) {
+                        selected = found
+                    } else {
+                        selected = try await reader.session(requested) ?? selected ?? list.sessions.first
+                    }
+                } else if autoSelect {
                     selected = list.sessions.first
                 } else if let key = selected?.key {
                     if let fresh = list.sessions.first(where: { $0.key == key }) {
@@ -383,6 +452,7 @@ final class History {
                 }
                 guard generation == pageGeneration[page] else { return }
                 autoSelect = false
+                if requested != nil, requested == requestedSession { requestedSession = nil }
                 if list != sessionList { sessionList = list }
                 if selected != selectedSession { selectedSession = selected }
             case .projects:
@@ -418,6 +488,23 @@ final class History {
                     if detail != projectDetail { projectDetail = detail }
                     if selected != selectedProjectSession { selectedProjectSession = selected }
                 }
+            case .limits:
+                let days = limitsDays, plan = self.plan
+                let samples = try await ledger.limitHistory(days: days, now: now, bucket: days > 7 ? 3_600 : 600)
+                let projections = try await ledger.limitProjections(now: now)
+                var spend: [LimitKind: LedgerTotals] = [:]
+                for (kind, projection) in projections {
+                    guard let start = projection.windowStart, start < now else { continue }
+                    let end = min(projection.resetsAt ?? now, now)
+                    spend[kind] = try await reader.totalsBySource(in: DateInterval(start: start, end: max(end, start)))[
+                        .claudeCode] ?? .zero
+                }
+                let copilot = try await ledger.copilotAllowance(settings: plan, now: now)
+                let month = try await reader.totalsBySource(in: copilot.month)[.copilotCLI] ?? .zero
+                let data = LimitsData(days: days, samples: samples, projections: projections, windowSpend: spend,
+                                      copilot: copilot, copilotMonth: month)
+                guard generation == pageGeneration[page] else { return }
+                if data != limits { limits = data }
             }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
@@ -449,6 +536,7 @@ struct HistoryPreview {
     var selectedSession: SessionSummary?
     var projects: ProjectsData
     var projectDetail: ProjectDetailData?
+    var limits: LimitsData?
 }
 
 extension History {
@@ -468,6 +556,8 @@ extension History {
         openedProject = nil
         projectDetail = nil
         selectedProjectSession = nil
+        limits = preview.limits
+        limitsDays = preview.limits?.days ?? 7
         self.page = page
     }
 

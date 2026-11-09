@@ -24,10 +24,12 @@ final class AppModel {
     var showingSettings = false
     let history = History()
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
+    @ObservationIgnored var panelOpener: (() -> Void)?
 
     @ObservationIgnored private var board = SessionBoard()
     @ObservationIgnored private let server = HubServer()
     @ObservationIgnored private let notifier = Notifier()
+    @ObservationIgnored private var policy = NotificationPolicy()
     @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
     @ObservationIgnored private var lastSnapshot: VLLMSnapshot?
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
@@ -51,6 +53,10 @@ final class AppModel {
             return
         }
         settings = AppSettings.load()
+        policy.preferences = NotificationPreferences(settings: settings)
+        history.setPlan(settings)
+        notifier.onOpen = { [weak self] target in self?.open(target) }
+        notifier.activate()
 
         server.onEvents = { [weak self] events in
             Task { @MainActor in self?.ingest(events) }
@@ -93,10 +99,11 @@ final class AppModel {
     // MARK: - Sessions
 
     func ingest(_ events: [AgentEvent]) {
+        let now = Date()
         for event in events {
             activity.add(at: event.time)
             guard let change = board.apply(event) else { continue }
-            if shouldNotify(change) { notifier.post(change.session) }
+            perform(policy.sessionChanged(change, project: project(of: change.session), now: now))
         }
         history.tail(Set(events.compactMap(\.transcriptPath)))
         if events.contains(where: { $0.key.source == .copilotCLI && $0.fromHook }) {
@@ -140,22 +147,11 @@ final class AppModel {
         dashboardOpener?(page)
     }
 
-    private func shouldNotify(_ change: StateChange) -> Bool {
-        guard settings.notificationsEnabled, change.from != change.to else { return false }
-        switch change.to {
-        case .needsPermission:
-            return true
-        case .yourTurn:
-            // Only after real work, so quick back-and-forth in a terminal you're watching stays quiet.
-            return change.from == .working && change.previousDuration >= 30
-        default:
-            return false
-        }
-    }
-
     private func tick() {
         let now = Date()
-        board.tick(now: now)
+        for change in board.tick(now: now) {
+            perform(policy.sessionChanged(change, project: project(of: change.session), now: now))
+        }
         activity.advance(to: now)
         throughput.advance(to: now)
         publishSessions()
@@ -163,12 +159,64 @@ final class AppModel {
 
     func dismiss(_ key: SessionKey) {
         board.dismiss(key)
+        perform(policy.sessionDismissed(key))
         publishSessions()
+    }
+
+    // MARK: - Notifications
+
+    private func project(of session: AgentSession) -> ProjectRef? {
+        session.cwd.flatMap { projectsByCwd[$0] }
+    }
+
+    private func perform(_ actions: NotificationActions) {
+        guard !actions.isEmpty else { return }
+        notifier.withdraw(actions.withdraw)
+        for request in actions.post { notifier.post(request) }
+    }
+
+    /// A clicked notification: a session opens on the Sessions page, a limit alert on the Limits page.
+    func open(_ target: NotificationTarget) {
+        switch target {
+        case .session(let key):
+            history.openSession(key)
+            openDashboard()
+        case .limits:
+            openDashboard(.limits)
+        case .localModel:
+            panelOpener?()
+        }
+    }
+
+    /// "Quiet hours until 08:00" while quiet hours hold notifications back, nil otherwise.
+    var quietHoursNote: String? {
+        guard settings.notificationsEnabled, policy.isQuiet(at: Date()) else { return nil }
+        return "Quiet hours until \(Format.timeOfDay(minutes: settings.quietHoursEnd))"
+    }
+
+    func isMuted(_ root: String) -> Bool {
+        settings.mutedProjectRoots.contains(root)
+    }
+
+    func toggleMute(_ root: String) {
+        var updated = settings
+        if let index = updated.mutedProjectRoots.firstIndex(of: root) {
+            updated.mutedProjectRoots.remove(at: index)
+        } else {
+            updated.mutedProjectRoots.append(root)
+        }
+        apply(updated)
     }
 
     // MARK: - Local model (vLLM)
 
     func pollVLLM() async {
+        await fetchVLLM()
+        perform(policy.localModelChecked(server: settings.vllmBaseURL, name: settings.vllmName, online: vllmOnline,
+                                         now: Date()))
+    }
+
+    private func fetchVLLM() async {
         let raw = settings.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
             vllm = nil
@@ -208,12 +256,19 @@ final class AppModel {
 
     func refreshClaudeLimits() async {
         guard settings.claudeLimitsEnabled else { return }
+        let fetched = Date()
+        let limits: ClaudeLimits
         do {
-            claudeLimits = try await limitsClient.fetch()
-            claudeLimitsError = nil
+            limits = try await limitsClient.fetch()
         } catch {
             claudeLimitsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return
         }
+        claudeLimits = limits
+        claudeLimitsError = nil
+        // `previous` must come from this write: reading the latest samples afterwards returns this fetch itself.
+        let previous = await history.recordLimits(limits, at: fetched)
+        perform(policy.limitsUpdated(limits.samples(at: fetched), previous: previous, now: Date()))
     }
 
     func toggleNotifications() {
@@ -235,6 +290,8 @@ final class AppModel {
         guard updated != old else { return }
         settings = updated
         updated.save()
+        policy.preferences = NotificationPreferences(settings: updated)
+        history.setPlan(updated)
         if updated.port != old.port {
             server.start(port: UInt16(clamping: updated.port))
         }
@@ -289,6 +346,7 @@ extension AppModel {
     static func preview(now: Date = Date()) -> AppModel {
         let model = AppModel(live: false)
         model.settings.notificationsEnabled = false
+        model.policy.preferences = NotificationPreferences(settings: model.settings)
         model.ingest(PreviewData.events(now: now))
         model.settings = PreviewData.settings
         model.activity = PreviewData.activity(now: now)
@@ -299,5 +357,10 @@ extension AppModel {
         model.history.show(PreviewData.history(now: now))
         model.projectsByCwd = PreviewData.projectsByCwd
         return model
+    }
+
+    /// Snapshots only: other settings, without saving them or restarting anything.
+    func showPreview(settings: AppSettings) {
+        self.settings = settings
     }
 }

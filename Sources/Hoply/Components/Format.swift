@@ -123,6 +123,55 @@ enum Format {
         dayFormatter.string(from: date)
     }
 
+    /// Time only within the next 20 hours, else weekday and time.
+    static func clock(_ date: Date, now: Date = Date()) -> String {
+        let formatter = abs(date.timeIntervalSince(now)) < 20 * 3_600 ? timeFormatter : dayTimeFormatter
+        return formatter.string(from: date)
+    }
+
+    /// A time of day given in minutes after midnight, in the user's clock style ("22:00", "10:00 PM").
+    static func timeOfDay(minutes: Int) -> String {
+        timeFormatter.string(from: date(minutesAfterMidnight: minutes))
+    }
+
+    /// Today at that time; through the calendar, so a DST change doesn't shift it by an hour.
+    static func date(minutesAfterMidnight minutes: Int, on day: Date = Date()) -> Date {
+        let minutes = ((minutes % 1_440) + 1_440) % 1_440
+        return Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: day) ?? day
+    }
+
+    /// "40 min", "1 h 14 min", "3 d 4 h"; rounded up to the minute.
+    static func span(_ seconds: TimeInterval) -> String {
+        let minutes = max(Int((seconds / 60).rounded(.up)), 1)
+        if minutes < 60 { return "\(minutes) min" }
+        let hours = minutes / 60
+        if hours < 24 { return minutes % 60 == 0 ? "\(hours) h" : "\(hours) h \(minutes % 60) min" }
+        return hours % 24 == 0 ? "\(hours / 24) d" : "\(hours / 24) d \(hours % 24) h"
+    }
+
+    private static let utcDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        formatter.timeZone = .gmt
+        return formatter
+    }()
+
+    private static let utcMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMM")
+        formatter.timeZone = .gmt
+        return formatter
+    }()
+
+    /// GitHub's Copilot counters reset at 00:00 UTC, so their dates read in UTC.
+    static func utcDay(_ date: Date) -> String {
+        utcDayFormatter.string(from: date)
+    }
+
+    static func utcMonth(_ date: Date) -> String {
+        utcMonthFormatter.string(from: date)
+    }
+
     private static let shortDayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.setLocalizedDateFormatFromTemplate("MMM d")

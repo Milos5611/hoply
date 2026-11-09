@@ -88,6 +88,40 @@ public struct Ledger: Sendable {
         (try? await store.projects(forCwds: cwds)) ?? [:]
     }
 
+    /// Stores one Claude limits fetch and returns each window's last stored sample from before it. Pass that to
+    /// `NotificationPolicy.limitsUpdated(_:previous:now:)` with `limits.samples(at:)`, so limit alerts survive
+    /// restarts without being repeated.
+    @discardableResult
+    public func recordLimits(_ limits: ClaudeLimits, at time: Date) async throws -> [LimitKind: LimitSample] {
+        try await store.recordLimitSamples(limits.samples(at: time))
+    }
+
+    /// Limits page history: samples from the last `days` days (rolling, not local midnights), oldest first.
+    /// `bucket` (seconds) keeps each window's peak per bucket, e.g. 3600 for a 30-day chart.
+    public func limitHistory(days: Int, now: Date = Date(), bucket: TimeInterval? = nil) async throws -> [LimitSample] {
+        let start = now.addingTimeInterval(-Double(max(days, 1)) * 86_400)
+        return try await reader.limitSamples(in: DateInterval(start: start, end: .distantFuture), bucket: bucket)
+    }
+
+    /// Each window's current state, burn rate and projection, from the last 7 days of samples.
+    public func limitProjections(now: Date = Date()) async throws -> [LimitKind: LimitsProjection] {
+        let start = now.addingTimeInterval(-LimitKind.sevenDay.windowLength - 3600)
+        return LimitsProjection.projections(try await reader.limitSamples(in: DateInterval(start: start,
+                                                                                           end: .distantFuture)))
+    }
+
+    public func latestLimitSamples() async throws -> [LimitKind: LimitSample] {
+        try await reader.latestLimitSamples()
+    }
+
+    /// Copilot CLI premium requests this UTC month against the allowance in `settings`. Copilot IDE requests
+    /// draw on the same allowance but never reach the ledger with a multiplier, so they are not counted.
+    public func copilotAllowance(settings: AppSettings, now: Date = Date()) async throws -> CopilotAllowance {
+        let month = CopilotAllowance.month(containing: now)
+        let used = try await reader.totalsBySource(in: month)[.copilotCLI]?.premiumRequests ?? 0
+        return CopilotAllowance(used: used, settings: settings, now: now)
+    }
+
     /// Reloads `pricing.json` and applies new local-model settings; re-prices affected rows. Returns how many.
     @discardableResult
     public func updatePricing(localModelPatterns: [String], referenceModel: String) async throws -> Int {

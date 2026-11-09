@@ -13,7 +13,16 @@ struct ClaudeLimitsWidget: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-        } else if let limits = model.claudeLimits, let fiveHour = limits.fiveHour {
+        } else {
+            Button { model.openDashboard(.limits) } label: { tile }
+                .buttonStyle(.plain)
+                .help("Open Limits in the Dashboard")
+        }
+    }
+
+    @ViewBuilder
+    private var tile: some View {
+        if let limits = model.claudeLimits, let fiveHour = limits.fiveHour {
             WidgetTile(title: "5-hour", symbol: "asterisk", tint: claude,
                        footer: model.claudeLimitsError ?? Format.resetTime(fiveHour.resetsAt),
                        footerColor: model.claudeLimitsError == nil ? .secondary : .red) {

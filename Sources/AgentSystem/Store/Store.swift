@@ -103,6 +103,36 @@ public actor Store {
         return try Self.reprice(db, table)
     }
 
+    // MARK: - Limit samples
+
+    /// A reading identical to its kind's last stored one (same utilization and window) is stored at most this
+    /// often, so the table stays small while the 180 s fetch keeps repeating it.
+    public static let limitSampleInterval: TimeInterval = 900
+
+    /// Stores plan-limit samples and returns each kind's latest stored sample from before them: the "previous"
+    /// that `NotificationPolicy.limitsUpdated` compares against.
+    @discardableResult
+    public func recordLimitSamples(_ samples: [LimitSample]) throws -> [LimitKind: LimitSample] {
+        try db.transaction {
+            let previous = try StoreReader.latestLimitSamples(db)
+            var last = previous
+            for sample in samples {
+                if let stored = last[sample.kind], sample.ts >= stored.ts,
+                   sample.ts.timeIntervalSince(stored.ts) < Self.limitSampleInterval,
+                   stored.utilization == sample.utilization, sample.isSameWindow(as: stored) {
+                    continue
+                }
+                try db.run("""
+                    INSERT INTO limit_samples (kind, ts, utilization, resets_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(kind, ts) DO UPDATE SET utilization = excluded.utilization, resets_at = excluded.resets_at
+                    """, [sample.kind.rawValue, sample.ts.timeIntervalSince1970, sample.utilization,
+                          sample.resetsAt?.timeIntervalSince1970])
+                if sample.ts >= last[sample.kind]?.ts ?? .distantPast { last[sample.kind] = sample }
+            }
+            return previous
+        }
+    }
+
     // MARK: - Writes
 
     private static let upsertSession = """

@@ -98,9 +98,11 @@ struct WaitingCard: View {
 }
 
 struct ProjectCard: View {
+    @Environment(AppModel.self) private var model
     let group: ProjectGroup
 
     var body: some View {
+        let muted = group.path.map(model.isMuted) ?? false
         Card(prominent: group.isWorking) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
@@ -116,6 +118,12 @@ struct ProjectCard: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 8)
+                    if muted {
+                        Image(systemName: "bell.slash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .help("Notifications from this project are muted")
+                    }
                     if group.isWorking {
                         Circle()
                             .fill(.green)
@@ -134,6 +142,8 @@ struct ProjectCard: View {
                             .help("Reveal in Finder")
                         Button { WorkspaceActions.copy(path) } label: { Image(systemName: "doc.on.doc") }
                             .help("Copy path")
+                        Button { model.toggleMute(path) } label: { Image(systemName: muted ? "bell.slash" : "bell") }
+                            .help(muted ? "Unmute notifications" : "Mute notifications")
                     }
                     .buttonStyle(.tile)
                 }

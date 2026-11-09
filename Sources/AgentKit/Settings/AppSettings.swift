@@ -13,6 +13,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var claudeConfigDir = ""
     /// Copilot CLI's home (holds `session-store.db`); empty means `$COPILOT_HOME`, else `~/.copilot`.
     public var copilotHome = ""
+    /// Quiet hours silence every notification. Start and end are minutes after local midnight; the range may
+    /// wrap midnight (the default is 22:00–08:00).
+    public var quietHoursEnabled = false
+    public var quietHoursStart = 22 * 60
+    public var quietHoursEnd = 8 * 60
+    /// Session notifications from these project roots (or cwds, while unresolved) stay silent.
+    public var mutedProjectRoots: [String] = []
+    public var limitAlertsEnabled = true
+    public var localModelAlertsEnabled = true
+    /// Copilot premium requests included per month (300 = Copilot Pro); 0 = not set.
+    public var copilotMonthlyAllowance = 300
+    public var copilotUSDPerPremiumRequest = 0.04
 
     public init() {}
 
@@ -30,6 +42,15 @@ public struct AppSettings: Codable, Equatable, Sendable {
         referenceModel = container.lenient(String.self, .referenceModel) ?? defaults.referenceModel
         claudeConfigDir = container.lenient(String.self, .claudeConfigDir) ?? defaults.claudeConfigDir
         copilotHome = container.lenient(String.self, .copilotHome) ?? defaults.copilotHome
+        quietHoursEnabled = container.lenient(Bool.self, .quietHoursEnabled) ?? defaults.quietHoursEnabled
+        quietHoursStart = container.lenient(Int.self, .quietHoursStart) ?? defaults.quietHoursStart
+        quietHoursEnd = container.lenient(Int.self, .quietHoursEnd) ?? defaults.quietHoursEnd
+        mutedProjectRoots = container.lenient([String].self, .mutedProjectRoots) ?? defaults.mutedProjectRoots
+        limitAlertsEnabled = container.lenient(Bool.self, .limitAlertsEnabled) ?? defaults.limitAlertsEnabled
+        localModelAlertsEnabled = container.lenient(Bool.self, .localModelAlertsEnabled) ?? defaults.localModelAlertsEnabled
+        copilotMonthlyAllowance = container.lenient(Int.self, .copilotMonthlyAllowance) ?? defaults.copilotMonthlyAllowance
+        copilotUSDPerPremiumRequest = container.lenient(Double.self, .copilotUSDPerPremiumRequest)
+            ?? defaults.copilotUSDPerPremiumRequest
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

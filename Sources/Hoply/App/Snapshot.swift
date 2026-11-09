@@ -25,15 +25,35 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_300),
+                           model: model, appearance: looks,
+                           to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
 
                 for page in DashboardPage.allCases {
                     var preview = PreviewData.history(now: now)
                     if page == .overview { preview.progress = PreviewData.backfilling }
                     model.history.show(preview, page: page)
-                    try render(DashboardView(plainSidebar: true).frame(width: 1180, height: page == .projects ? 880 : 760),
+                    let height: CGFloat = switch page {
+                    case .projects: 880
+                    case .limits: 880
+                    default: 760
+                    }
+                    try render(DashboardView(plainSidebar: true).frame(width: 1180, height: height),
                                model: model, appearance: looks,
                                to: directory.appendingPathComponent("dashboard-\(page.rawValue)-\(name).png"))
                 }
+                var disconnected = PreviewData.settings
+                disconnected.claudeLimitsEnabled = false
+                disconnected.copilotMonthlyAllowance = 0
+                var empty = PreviewData.history(now: now)
+                empty.limits?.samples = []
+                empty.limits?.projections = [:]
+                empty.limits?.copilot.allowance = 0
+                model.showPreview(settings: disconnected)
+                model.history.show(empty, page: .limits)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model, appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-limits-empty-\(name).png"))
+                model.showPreview(settings: PreviewData.settings)
                 model.history.showProjectDetail(PreviewData.history(now: now))
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1260), model: model, appearance: looks,
                            to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))

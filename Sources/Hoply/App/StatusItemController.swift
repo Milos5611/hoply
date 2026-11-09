@@ -23,6 +23,10 @@ final class StatusItemController: NSObject {
         dashboard = DashboardWindowController(model: model)
         super.init()
         model.dashboardOpener = { [weak self] page in self?.openDashboard(page) }
+        model.panelOpener = { [weak self] in
+            self?.model.showingSettings = false
+            self?.showPanel()
+        }
         popover.behavior = Self.holdOpen ? .applicationDefined : .transient
         popover.animates = true
         popover.contentSize = NSSize(width: 448, height: 600)

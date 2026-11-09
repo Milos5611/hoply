@@ -6,6 +6,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     case projects
     case sessions
     case spending
+    case limits
 
     var id: String { rawValue }
 
@@ -15,6 +16,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .projects: return "Projects"
         case .sessions: return "Sessions"
         case .spending: return "Spending"
+        case .limits: return "Limits"
         }
     }
 
@@ -24,6 +26,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .projects: return "folder"
         case .sessions: return "list.bullet.rectangle"
         case .spending: return "chart.bar.xaxis"
+        case .limits: return "gauge.with.dots.needle.67percent"
         }
     }
 }

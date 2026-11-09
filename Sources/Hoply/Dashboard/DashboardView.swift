@@ -47,6 +47,7 @@ struct DashboardView: View {
             case .projects: ProjectsPage()
             case .sessions: SessionsPage()
             case .spending: SpendingPage()
+            case .limits: LimitsPage()
             }
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity, alignment: .topLeading)

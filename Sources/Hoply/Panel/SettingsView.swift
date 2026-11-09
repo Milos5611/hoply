@@ -6,6 +6,8 @@ struct SettingsView: View {
     @State private var draft = AppSettings()
     @State private var portText = ""
     @State private var patternsText = ""
+    @State private var allowanceText = ""
+    @State private var usdText = ""
     @State private var loaded = false
 
     var body: some View {
@@ -22,6 +24,8 @@ struct SettingsView: View {
                         Hint("Agents send hooks and OpenTelemetry to http://127.0.0.1:<port>. The setup scripts default to 4318.")
                     }
                 }
+
+                NotificationSettings(draft: $draft)
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -41,10 +45,11 @@ struct SettingsView: View {
                 HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
                                 claudeConfigDir: $draft.claudeConfigDir, copilotHome: $draft.copilotHome)
 
+                CopilotPlanSettings(allowanceText: $allowanceText, usdText: $usdText)
+
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Behaviour")
-                        SwitchRow("Notify when an agent needs me", isOn: $draft.notificationsEnabled)
                         SwitchRow("Show Claude plan limits", isOn: $draft.claudeLimitsEnabled)
                         if model.isBundledApp {
                             SwitchRow("Launch at login", isOn: Binding(
@@ -52,7 +57,7 @@ struct SettingsView: View {
                                 set: { model.setLaunchAtLogin($0) }
                             ))
                         } else {
-                            Hint("Notifications and launch at login work in the bundled app (scripts/install.sh), not with swift run.")
+                            Hint("Launch at login works in the bundled app (scripts/install.sh), not with swift run.")
                         }
                     }
                 }
@@ -84,6 +89,8 @@ struct SettingsView: View {
             draft = model.settings
             portText = String(model.settings.port)
             patternsText = model.settings.localModelPatterns.joined(separator: ", ")
+            allowanceText = String(model.settings.copilotMonthlyAllowance)
+            usdText = String(model.settings.copilotUSDPerPremiumRequest)
             loaded = true
         }
     }
@@ -102,6 +109,14 @@ struct SettingsView: View {
         updated.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference
         updated.claudeConfigDir = updated.claudeConfigDir.trimmingCharacters(in: .whitespaces)
         updated.copilotHome = updated.copilotHome.trimmingCharacters(in: .whitespaces)
+        if let allowance = Int(allowanceText.trimmingCharacters(in: .whitespaces)), allowance >= 0 {
+            updated.copilotMonthlyAllowance = allowance
+        }
+        let usd = usdText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+        if let usd = Double(usd), usd >= 0, usd.isFinite {
+            updated.copilotUSDPerPremiumRequest = usd
+        }
         model.apply(updated)
         model.showingSettings = false
     }
@@ -225,6 +240,127 @@ struct HistorySettings: View {
         case .off, .opening: return .secondary
         case .unavailable: return .red
         case .ready: return history.progress.isBackfilling ? .orange : .green
+        }
+    }
+}
+
+struct NotificationSettings: View {
+    @Environment(AppModel.self) private var model
+    @Binding var draft: AppSettings
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionTitle("Notifications")
+                SwitchRow("Notify when an agent needs me", isOn: $draft.notificationsEnabled)
+                Group {
+                    SwitchRow("Claude limit alerts at 80% and 95%", isOn: $draft.limitAlertsEnabled)
+                    SwitchRow("Local model offline for 2 minutes", isOn: $draft.localModelAlertsEnabled)
+                    SwitchRow("Quiet hours", isOn: $draft.quietHoursEnabled)
+                    if draft.quietHoursEnabled {
+                        HStack(spacing: 8) {
+                            Text("Silent from")
+                                .foregroundStyle(.secondary)
+                            TimeOfDayField(minutes: $draft.quietHoursStart)
+                            Text("to")
+                                .foregroundStyle(.secondary)
+                            TimeOfDayField(minutes: $draft.quietHoursEnd)
+                            Spacer()
+                        }
+                    }
+                }
+                .disabled(!draft.notificationsEnabled)
+                Divider()
+                Text("Muted projects")
+                if draft.mutedProjectRoots.isEmpty {
+                    Hint("None. Mute a project with the bell button on its card; muting covers that project only, not the repos inside it.")
+                } else {
+                    ForEach(draft.mutedProjectRoots, id: \.self) { root in
+                        HStack(spacing: 8) {
+                            Image(systemName: "bell.slash")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(title(root))
+                                    .lineLimit(1)
+                                Text(Format.path(root))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Unmute") { draft.mutedProjectRoots.removeAll { $0 == root } }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                if !model.isBundledApp {
+                    Hint("Notifications only work in the bundled app (scripts/install.sh), not with swift run.")
+                }
+            }
+        }
+    }
+
+    private func title(_ root: String) -> String {
+        model.projectsByCwd.values.first { $0.root == root }?.title ?? (root as NSString).lastPathComponent
+    }
+}
+
+/// A time of day stored as minutes after midnight.
+struct TimeOfDayField: View {
+    @Binding var minutes: Int
+
+    var body: some View {
+        DatePicker("Time", selection: Binding(get: { Format.date(minutesAfterMidnight: minutes) }, set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }), displayedComponents: .hourAndMinute)
+        .labelsHidden()
+        .datePickerStyle(.field)
+        .fixedSize()
+    }
+}
+
+struct CopilotPlanSettings: View {
+    @Binding var allowanceText: String
+    @Binding var usdText: String
+
+    private static let plans: [(name: String, allowance: Int)] = [
+        ("Free", 50), ("Pro", 300), ("Pro+", 1_500), ("Business", 300), ("Enterprise", 1_000),
+    ]
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionTitle("Copilot plan")
+                LabeledRow("Allowance") {
+                    TextField("300", text: $allowanceText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                    Text("premium requests a month")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Menu("Plan") {
+                        ForEach(Self.plans, id: \.name) { plan in
+                            Button("\(plan.name) · \(Format.count(plan.allowance))") { allowanceText = String(plan.allowance) }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+                LabeledRow("Extra cost") {
+                    TextField("0.04", text: $usdText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                    Text("USD per request beyond it")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                Hint("Premium requests a month: Free 50, Pro 300, Pro+ 1,500, Business 300, Enterprise 1,000. 0 shows usage without an allowance. The Limits page in the Dashboard counts Copilot CLI against it.")
+            }
         }
     }
 }
