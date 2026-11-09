@@ -1,0 +1,11 @@
+POST /v1/logs HTTP/1.1
+User-Agent: OTel-OTLP-Exporter-JavaScript/0.203.0
+Content-Type: application/json
+Host: 127.0.0.1:47319
+Connection: keep-alive
+Transfer-Encoding: chunked
+
+1db
+{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"claude-code"}}],"droppedAttributesCount":0},"scopeLogs":[{"scope":{"name":"x"},"logRecords":[{"timeUnixNano":"1794228421335000000","observedTimeUnixNano":"1794228421335000000","body":{"stringValue":"claude_code.user_prompt"},"attributes":[{"key":"event.name","value":{"stringValue":"user_prompt"}},{"key":"session.id","value":{"stringValue":"s-raw"}}],"droppedAttributesCount":0}]}]}]}
+0
+
