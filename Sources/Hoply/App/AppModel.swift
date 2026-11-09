@@ -1,56 +1,53 @@
 import AgentKit
 import AppKit
 import Foundation
+import Observation
 import ServiceManagement
 
-struct AppSettings: Codable, Equatable {
-    var port: Int = 4318
-    var vllmBaseURL: String = ""
-    var vllmName: String = ""
-    var claudeLimitsEnabled: Bool = false
-    var notificationsEnabled: Bool = true
-
-    private static let defaultsKey = "HoplySettings"
-
-    static func load() -> AppSettings {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
-            return AppSettings()
-        }
-        return settings
-    }
-
-    func save() {
-        if let data = try? JSONEncoder().encode(self) {
-            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
-        }
-    }
-}
-
 @MainActor
-final class AppModel: ObservableObject {
-    @Published private(set) var sessions: [AgentSession] = []
-    @Published private(set) var serverStatus: HubServer.Status = .stopped
-    @Published private(set) var vllm: VLLMStatus?
-    @Published private(set) var vllmError: String?
-    @Published private(set) var claudeLimits: ClaudeLimits?
-    @Published private(set) var claudeLimitsError: String?
-    @Published private(set) var lastNote: String?
-    @Published private(set) var settings: AppSettings
-    @Published var showingSettings = false
+@Observable
+final class AppModel {
+    private(set) var sessions: [AgentSession] = []
+    private(set) var serverStatus: HubServer.Status = .stopped
+    private(set) var vllm: VLLMStatus?
+    private(set) var vllmError: String?
+    private(set) var claudeLimits: ClaudeLimits?
+    private(set) var claudeLimitsError: String?
+    private(set) var lastNote: String?
+    private(set) var settings: AppSettings
+    private(set) var launchAtLogin = false
+    private(set) var activity = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
+    private(set) var throughput = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
+    var showingSettings = false
 
-    private var board = SessionBoard()
-    private let server = HubServer()
-    private let notifier = Notifier()
-    private let limitsClient = ClaudeLimitsClient()
-    private var lastSnapshot: VLLMSnapshot?
-    private var loops: [Task<Void, Never>] = []
+    @ObservationIgnored private var board = SessionBoard()
+    @ObservationIgnored private let server = HubServer()
+    @ObservationIgnored private let notifier = Notifier()
+    @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
+    @ObservationIgnored private var lastSnapshot: VLLMSnapshot?
+    @ObservationIgnored private var loops: [Task<Void, Never>] = []
 
     var attentionCount: Int { sessions.filter { $0.state.needsAttention }.count }
     var workingCount: Int { sessions.filter { $0.state == .working }.count }
+    var activeCount: Int { sessions.filter { $0.state != .ended }.count }
+    var grouping: SessionGrouping { SessionGrouping(sessions: sessions) }
+    var vllmOnline: Bool { vllm != nil && vllmError == nil }
+    var liveTokens: Int { sessions.reduce(0) { $0 + $1.totalTokens } }
+    var liveCost: Double { sessions.reduce(0) { $0 + $1.costUSD } }
+    var tokensBySource: [(source: AgentSource, tokens: Double)] {
+        AgentSource.allCases.compactMap { source in
+            let tokens = sessions.filter { $0.key.source == source }.reduce(0) { $0 + $1.totalTokens }
+            return tokens > 0 ? (source, Double(tokens)) : nil
+        }
+    }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
-    init() {
+    /// `live: false` builds an inert model (no listener, no polling) for snapshots.
+    init(live: Bool = true) {
+        guard live else {
+            settings = AppSettings()
+            return
+        }
         settings = AppSettings.load()
 
         server.onEvents = { [weak self] events in
@@ -65,23 +62,24 @@ final class AppModel: ObservableObject {
         server.start(port: UInt16(clamping: settings.port))
 
         if settings.notificationsEnabled { notifier.requestAuthorization() }
+        refreshLaunchAtLogin()
 
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 self?.tick()
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(for: .seconds(5))
             }
         })
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.pollVLLM()
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(for: .seconds(5))
             }
         })
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshClaudeLimits()
-                try? await Task.sleep(nanoseconds: 180_000_000_000)
+                try? await Task.sleep(for: .seconds(180))
             }
         })
     }
@@ -90,6 +88,7 @@ final class AppModel: ObservableObject {
 
     func ingest(_ events: [AgentEvent]) {
         for event in events {
+            activity.add(at: event.time)
             guard let change = board.apply(event) else { continue }
             if shouldNotify(change) { notifier.post(change.session) }
         }
@@ -110,7 +109,10 @@ final class AppModel: ObservableObject {
     }
 
     private func tick() {
-        board.tick(now: Date())
+        let now = Date()
+        board.tick(now: now)
+        activity.advance(to: now)
+        throughput.advance(to: now)
         sessions = board.ordered
     }
 
@@ -141,12 +143,14 @@ final class AppModel: ObservableObject {
                 throw URLError(.badServerResponse)
             }
             let samples = PrometheusParser.parse(String(decoding: data, as: UTF8.self))
-            guard samples.contains(where: { $0.name.hasPrefix("vllm:") }) else {
-                vllmError = "No vLLM metrics at /metrics"
+            guard VLLMSnapshot.engine(of: samples) != nil else {
+                vllmError = "No vLLM or tensorfold metrics at /metrics"
                 return
             }
             let snapshot = VLLMSnapshot.from(samples: samples, at: Date())
-            vllm = VLLMStatus.compute(previous: lastSnapshot, current: snapshot)
+            let status = VLLMStatus.compute(previous: lastSnapshot, current: snapshot)
+            vllm = status
+            if let rate = status.generationTokensPerSecond { throughput.recordMax(rate, at: snapshot.takenAt) }
             lastSnapshot = snapshot
             vllmError = nil
         } catch {
@@ -165,6 +169,12 @@ final class AppModel: ObservableObject {
         } catch {
             claudeLimitsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    func toggleNotifications() {
+        var updated = settings
+        updated.notificationsEnabled.toggle()
+        apply(updated)
     }
 
     func enableClaudeLimits() {
@@ -200,8 +210,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var launchAtLogin: Bool {
-        isBundledApp && SMAppService.mainApp.status == .enabled
+    func refreshLaunchAtLogin() {
+        launchAtLogin = isBundledApp && SMAppService.mainApp.status == .enabled
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -215,11 +225,26 @@ final class AppModel: ObservableObject {
         } catch {
             lastNote = "Launch at login: \(error.localizedDescription)"
         }
-        objectWillChange.send()
+        refreshLaunchAtLogin()
     }
 
     func quit() {
         server.stop()
         NSApp.terminate(nil)
+    }
+}
+
+extension AppModel {
+    static func preview(now: Date = Date()) -> AppModel {
+        let model = AppModel(live: false)
+        model.settings.notificationsEnabled = false
+        model.ingest(PreviewData.events(now: now))
+        model.settings = PreviewData.settings
+        model.activity = PreviewData.activity(now: now)
+        model.throughput = PreviewData.throughput(now: now)
+        model.vllm = PreviewData.vllm(now: now)
+        model.claudeLimits = PreviewData.claudeLimits(now: now)
+        model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
+        return model
     }
 }

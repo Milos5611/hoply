@@ -2,7 +2,8 @@
 # Usage: scripts/install.sh [--uninstall]
 #   Builds Hoply.app into ~/Applications, opens it, and connects Claude Code and Copilot CLI.
 #   --uninstall disconnects both agents; the app stays in ~/Applications.
-# Env: HOPLY_PORT (default 4318), CLAUDE_CONFIG_DIR (default ~/.claude), COPILOT_HOME (default ~/.copilot)
+# Env: HOPLY_PORT (default 4318), CLAUDE_CONFIG_DIR (default ~/.claude), COPILOT_HOME (default ~/.copilot),
+#      HOPLY_SIGN_IDENTITY (codesign identity name; default "-" = ad-hoc)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,6 +14,9 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_SETTINGS="$CLAUDE_DIR/settings.json"
 COPILOT_DIR="${COPILOT_HOME:-$HOME/.copilot}"
 COPILOT_HOOKS="$COPILOT_DIR/hooks/hoply.json"
+# Ad-hoc signatures change on every build, so Keychain and TCC grants are asked for again after each install.
+# A stable self-signed identity keeps them.
+SIGN_IDENTITY="${HOPLY_SIGN_IDENTITY:--}"
 
 case "${1:-}" in
   "") UNINSTALL=0 ;;
@@ -107,13 +111,13 @@ install_app() {
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
   cp "$bin" "$app/Contents/MacOS/Hoply"
   cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
-  codesign --force --sign - "$app"
+  codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$app"
   mkdir -p "$HOME/Applications"
   pkill -x Hoply 2>/dev/null || true
   rm -rf "$target"
   ditto "$app" "$target"
   open "$target"
-  echo "Hoply: installed to $target and opened"
+  echo "Hoply: installed to $target and opened (signed with: $SIGN_IDENTITY)"
 }
 
 if [ "$UNINSTALL" = 1 ]; then

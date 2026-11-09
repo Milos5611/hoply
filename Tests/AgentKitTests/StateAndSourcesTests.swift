@@ -107,6 +107,33 @@ final class SessionBoardTests: XCTestCase {
 }
 
 final class PrometheusAndVLLMTests: XCTestCase {
+    func testTensorfoldEngineUsesVLLMNamesUnderItsPrefix() throws {
+        let samples = PrometheusParser.parse(try Fixture.text("tensorfold_metrics.txt"))
+        XCTAssertEqual(VLLMSnapshot.engine(of: samples), "tensorfold")
+        let snapshot = VLLMSnapshot.from(samples: samples, at: Date())
+        XCTAssertEqual(snapshot.engine, "tensorfold")
+        XCTAssertNil(snapshot.model)
+        XCTAssertEqual(snapshot.running, 0)
+        XCTAssertEqual(snapshot.waiting, 0)
+        XCTAssertEqual(snapshot.kvCacheUsage, 0)
+        XCTAssertEqual(snapshot.promptTokensTotal, 7_725_987)
+        XCTAssertEqual(snapshot.generationTokensTotal, 54_353)
+        XCTAssertNil(VLLMSnapshot.engine(of: PrometheusParser.parse("python_gc_objects_collected_total 1")))
+    }
+
+    func testTensorfoldRateCountsTokensOfLiveStreams() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        func snapshot(total: Int, running: Int, at seconds: TimeInterval) -> VLLMSnapshot {
+            let text = "tensorfold:generation_tokens_total \(total)\ntensorfold:generation_tokens_running \(running)\n"
+            return VLLMSnapshot.from(samples: PrometheusParser.parse(text), at: t0.addingTimeInterval(seconds))
+        }
+        let start = snapshot(total: 100, running: 50, at: 0)
+        let decoding = snapshot(total: 100, running: 300, at: 5)
+        let finished = snapshot(total: 400, running: 0, at: 10)
+        XCTAssertEqual(VLLMStatus.compute(previous: start, current: decoding).generationTokensPerSecond, 50)
+        XCTAssertEqual(VLLMStatus.compute(previous: decoding, current: finished).generationTokensPerSecond, 0)
+    }
+
     func testParsesVLLMMetrics() throws {
         let samples = PrometheusParser.parse(try Fixture.text("vllm_metrics.txt"))
         XCTAssertEqual(samples.count, 9)

@@ -1,4 +1,4 @@
-// swift-tools-version:5.10
+// swift-tools-version:6.2
 import Foundation
 import PackageDescription
 
@@ -11,19 +11,27 @@ let infoPlist = URL(fileURLWithPath: #filePath)
 
 let package = Package(
     name: "Hoply",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     products: [
         .executable(name: "Hoply", targets: ["Hoply"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
+        .library(name: "AgentSystem", targets: ["AgentSystem"]),
     ],
     targets: [
-        // Platform-neutral core: decoding, state, parsing. No UI.
+        // Platform-neutral core: decoding, state, parsing. No UI, no new I/O.
         .target(name: "AgentKit"),
+        // macOS I/O adapters (SQLite, files, processes, Keychain) feeding AgentKit types. No UI.
+        .target(
+            name: "AgentSystem",
+            dependencies: ["AgentKit"],
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         // The macOS menu bar app.
         .executableTarget(
             name: "Hoply",
-            dependencies: ["AgentKit"],
+            dependencies: ["AgentKit", "AgentSystem"],
             exclude: ["Info.plist"],
+            swiftSettings: [.defaultIsolation(MainActor.self)],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
                               "-Xlinker", "__info_plist", "-Xlinker", infoPlist]),
@@ -33,6 +41,10 @@ let package = Package(
             name: "AgentKitTests",
             dependencies: ["AgentKit"],
             resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "AgentSystemTests",
+            dependencies: ["AgentSystem"]
         ),
     ]
 )

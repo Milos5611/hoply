@@ -26,7 +26,7 @@ Your chat UI talks to vLLM directly, so its activity shows up in the vLLM card.
 
 ## Run it
 
-Requires macOS 14+ and Xcode (for `swift test`).
+Requires macOS 26+ and Xcode 26+ (Swift 6.2 toolchain).
 
 ```bash
 scripts/install.sh              # build Hoply.app into ~/Applications, open it, connect Claude Code + Copilot CLI
@@ -39,6 +39,8 @@ That's all. `install.sh` connects whichever of Claude Code and Copilot CLI it fi
 
 Re-running it is safe. Set `HOPLY_PORT` if you change the port in the app.
 
+By default the app is signed ad-hoc, which gives every build a new identity, so macOS asks again for Keychain and other permissions after each install. To avoid that, create a self-signed code-signing certificate once: Keychain Access → Certificate Assistant → Create a Certificate…, name it `Hoply Dev`, Identity Type "Self Signed Root", Certificate Type "Code Signing". Then install with `HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh`.
+
 For development:
 
 ```bash
@@ -49,7 +51,7 @@ scripts/simulate.sh       # with Hoply running: fake agent activity to see the p
 
 **Copilot in JetBrains:** open Settings → Tools → GitHub Copilot → Chat, turn on the OpenTelemetry export, and set the OTLP endpoint to `http://127.0.0.1:4318` (HTTP). Hoply accepts both JSON and protobuf.
 
-**vLLM:** open the panel → gear icon → Server URL, for example `http://<zgx-ip>:8000`. Hoply reads `<url>/metrics` every 5 seconds. Private-range IPs are allowed through App Transport Security in `Info.plist`; macOS will ask once for Local Network access.
+**Local model (vLLM or tensorfold):** open the panel → gear icon → Server URL: the server's base URL without `/metrics`, for example `http://<zgx-ip>:8888`. Hoply reads `<url>/metrics` every 5 seconds. Private-range IPs are allowed through App Transport Security in `Info.plist`; macOS will ask once for Local Network access.
 
 **Claude limits:** click Connect in the Claude plan card. macOS asks once whether `security` may read the "Claude Code-credentials" Keychain item; choose Always Allow. If it says the login expired, open Claude Code once and it refreshes the token.
 
@@ -78,8 +80,11 @@ Sources/AgentKit/      platform-neutral core
   SessionBoard.swift   session state machine
   VLLM.swift           Prometheus parser + vLLM snapshot and rates
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
-Sources/Hoply/         SwiftUI menu bar app
+  Settings/            AppSettings with lenient per-key decoding
+Sources/AgentSystem/   macOS I/O adapters (SQLite so far)
+Sources/Hoply/         SwiftUI menu bar app: App/, Services/, Panel/, Components/
 Tests/AgentKitTests/   tests; fixtures were produced by the official OpenTelemetry JS exporters
+Tests/AgentSystemTests/  adapter tests (in-memory SQLite, temp directories)
 scripts/               install.sh (build, install, connect agents), simulate.sh (dev)
 ```
 

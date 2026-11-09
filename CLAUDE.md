@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Hoply is a macOS 14+ menu bar app (SwiftPM, Swift 5.10, no package dependencies). It contains its own HTTP listener on `127.0.0.1:4318`, which receives hook calls and OTLP exports from AI coding agents (Claude Code, Copilot CLI, Copilot in JetBrains, Qwen Code). It also polls a vLLM server's Prometheus `/metrics` and Claude's plan-usage endpoint.
+Hoply is a macOS 26+ menu bar app (SwiftPM tools 6.2, Swift 6 language mode, no package dependencies). It contains its own HTTP listener on `127.0.0.1:4318`, which receives hook calls and OTLP exports from AI coding agents (Claude Code, Copilot CLI, Copilot in JetBrains, Qwen Code). It also polls a local model server's Prometheus `/metrics` (vLLM, or tensorfold, which uses vLLM's metric names under its own prefix) and Claude's plan-usage endpoint.
 
 ## Roadmap
 
@@ -14,12 +14,14 @@ The v2 plan is in `.claude/memory/v2-plan.md`: decisions, schema, ingestion rule
 
 ```bash
 swift build
-swift test                                                    # all tests (AgentKit only)
+swift test                                                    # all tests (AgentKitTests + AgentSystemTests)
 swift test --filter SessionBoardTests                         # one test class
 swift test --filter SessionBoardTests/testClaudeLifecycle     # one test
 swift run Hoply                                               # run unbundled; icon appears in the menu bar
+swift run Hoply --snapshot build/snapshots                    # render the panel with sample data to PNGs (light, dark, full height, settings)
 scripts/simulate.sh                                           # with the app running: post fake hook/OTLP traffic (DELAY=0 for no pauses)
-scripts/install.sh [--uninstall]                              # release build → ~/Applications/Hoply.app (ad-hoc signed), open it, connect Claude Code + Copilot CLI
+scripts/install.sh [--uninstall]                              # release build → ~/Applications/Hoply.app, open it, connect Claude Code + Copilot CLI
+HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh            # sign with a stable self-signed cert instead of ad-hoc
 curl -s http://127.0.0.1:4318/health
 ```
 
@@ -27,10 +29,20 @@ Notifications and "Launch at login" only work in the bundled `.app` (`AppModel.i
 
 ## Architecture
 
-Two targets:
+Three targets:
 
-- **`AgentKit`**: platform-neutral core: HTTP parsing, routing, OTLP decoding, event mapping, the session state machine, Prometheus/vLLM, Claude limits. It has no UI and is the only target with tests. `HubServer` is wrapped in `#if canImport(Network)`.
-- **`Hoply`**: the SwiftUI `MenuBarExtra` app. `AppModel` (`@MainActor`) owns everything; `Views.swift` holds all UI.
+- **`AgentKit`**: platform-neutral core: HTTP parsing, routing, OTLP decoding, event mapping, the session state machine, Prometheus/vLLM, Claude limits, `AppSettings` (tolerant decoding). No UI and no new I/O. `HubServer` (wrapped in `#if canImport(Network)`) and `ClaudeLimitsClient` are the existing I/O exceptions.
+- **`AgentSystem`**: macOS I/O adapters (SQLite via the system `SQLite3`, later files, processes, Keychain) that feed AgentKit types. No UI. Today it holds only `SQLiteConnection`.
+- **`Hoply`**: the menu bar app (SwiftUI views in AppKit hosts), built with default `MainActor` isolation. `StatusItemController` owns an `NSStatusItem` and an `NSPopover` hosting `PanelView`. It replaced `MenuBarExtra`, which code can't open or close and which draws an opaque window. `AppModel` (`@Observable`) owns all state and is injected with `.environment(model)`; views read it through `@Environment(AppModel.self)`. Folders:
+  - `App/`: entry point, `AppModel`, `StatusItemController`, settings storage, and `PreviewData` + `Snapshot` for `--snapshot`.
+  - `Services/`: `Notifier`, `WorkspaceActions` (Finder, Terminal, pasteboard).
+  - `Panel/`: the 448×600 panel. A stat strip, then "Waiting on you", project cards (grouped by `SessionGrouping`), and a widget strip (Claude limits, local model, live usage). Settings live here too.
+  - `Components/`: `Card` (the white rounded surface), `StatTile`, `WidgetTile`, `RingGauge`, `MiniBars`, `StackedBar`, `IconTile`, `SourceBadge`, `StatePill`, `CountChip`, `TileButtonStyle`, `SectionTitle`, `Hint`, `LabeledRow`, `Meter`, `Metric`, `Format`.
+  - v2 adds `Models/`, `Dashboard/` and `Palette/`.
+
+The panel follows Mizu's look: system popover material behind it, white `Card`s on top (prominent = solid with a soft shadow), 16 pt corners, 10 pt gaps, 12.5–15 pt text and 24 pt figures. Check UI changes with `--snapshot`. It needs no Screen Recording permission, but it can't show glass or vibrancy because the window server composites those.
+
+Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories, in-memory DB). The app target has no tests, so keep testable logic out of it.
 
 ### Request → panel data flow
 
@@ -52,13 +64,15 @@ Two targets:
 
 ### Source detection
 
+`SessionGrouping` (AgentKit) splits sessions into waiting-on-you plus per-cwd project groups, and `RollingSeries` keeps the in-memory sparkline buckets. Both are stand-ins until the v2 project resolver and the `samples` table land.
+
 `TelemetryMapper.source(of:)` picks the `AgentSource` from `service.name` and the record name. Session IDs come from a list of candidate attribute keys (`sessionKeys`). To add a source, update `AgentSource`, `TelemetryMapper` and/or `HookMapper`, and add a connect/disconnect pair to `scripts/install.sh`.
 
 ### Other pieces
 
 - `Package.swift` embeds `Sources/Hoply/Info.plist` into the executable through linker `-sectcreate`, so `swift run` gets the same App Transport Security exceptions (plain HTTP to private-range IPs for vLLM) as the bundle. `install.sh` also copies it into the `.app`.
 - `ClaudeLimitsClient` reads Claude Code's OAuth token from the Keychain item "Claude Code-credentials" by shelling out to `/usr/bin/security`. It then calls the undocumented `api.anthropic.com/api/oauth/usage`.
-- Settings (`AppSettings`) are stored as JSON in `UserDefaults` under the key `HoplySettings`.
+- Settings (`AppSettings`, in AgentKit) are stored as JSON in `UserDefaults` under the key `HoplySettings`. Decoding is per key and lenient: a missing or wrongly typed key falls back to its default, so adding a field never resets saved settings. New fields must follow the same pattern in `init(from:)`.
 
 ## Tests and fixtures
 

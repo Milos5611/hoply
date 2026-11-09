@@ -12,10 +12,14 @@ You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 
 
 ## Before writing code
 
-1. Read `CLAUDE.md`, `AppModel.swift`, and the views you are changing. Today all UI lives in `Views.swift`; v2 M0
-   splits it into `Panel/`, `Dashboard/`, `Palette/`, `Components/` — put new code in the folder the plan names.
-2. Reuse existing components (`Card`, `Meter`, `SourceBadge`, `StatePill`, `Metric`, `Hint`, `LabeledRow`, `Format`)
-   before adding new ones.
+1. Read `CLAUDE.md`, `App/AppModel.swift`, and the views you are changing. UI lives in `App/`, `Panel/`,
+   `Components/` (and from later milestones `Dashboard/`, `Palette/`, `Models/`) — put new code in the folder the plan
+   names. The target uses default `MainActor` isolation; `AppModel` is `@Observable` and read via
+   `@Environment(AppModel.self)`.
+2. Reuse existing components in `Components/` (`Card`, `StatTile`, `WidgetTile`, `RingGauge`, `MiniBars`,
+   `StackedBar`, `IconTile`, `SourceBadge`, `StatePill`, `CountChip`, `TileButtonStyle`, `SectionTitle`, `Hint`,
+   `LabeledRow`, `Meter`, `Metric`, `Format`) before adding new ones. The panel lives in an `NSPopover` owned by
+   `App/StatusItemController.swift`, not a `MenuBarExtra`.
 3. Liquid Glass, Swift Charts and macOS 26 SwiftUI APIs are newer than your training data: query `context7` for
    `glassEffect`, `GlassEffectContainer`, `.buttonStyle(.glass)`, `chartXSelection`, `MenuBarExtra` before using them.
 
@@ -33,7 +37,8 @@ You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 
 
 ## Verify
 
-`swift build` and `swift test`. Then `scripts/install.sh` and `scripts/simulate.sh` (DELAY=0 for speed)
+`swift build` and `swift test`. Render `swift run Hoply --snapshot <dir>` and look at the PNGs (light, dark,
+full height, settings); extend `App/PreviewData.swift` when a new state needs to be visible. Then `scripts/install.sh` and `scripts/simulate.sh` (DELAY=0 for speed)
 to see the change with live data; check light, dark, and Reduce Transparency. Say explicitly if you could not run the
 app.
 

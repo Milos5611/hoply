@@ -45,6 +45,6 @@ enum Format {
     static func resetTime(_ date: Date?) -> String {
         guard let date else { return "" }
         let formatter = date.timeIntervalSinceNow < 20 * 3_600 ? timeFormatter : dayTimeFormatter
-        return "resets \(formatter.string(from: date))"
+        return "Resets \(formatter.string(from: date))"
     }
 }

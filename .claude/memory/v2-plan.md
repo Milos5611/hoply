@@ -1,16 +1,16 @@
 ---
 name: v2-plan
-description: "Hoply v2 plan drafted 2026-11-09 (not yet approved) — Liquid Glass panel + Dashboard window, SQLite usage ledger (one source of truth per agent), Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; milestones M0–M8"
+description: "Hoply v2 plan (approved 2026-11-09) — Liquid Glass panel + Dashboard window, SQLite usage ledger (one source of truth per agent), Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; milestones M0–M8"
 metadata:
   node_type: memory
   type: project
   originSessionId: 65b7a48e-4bed-4913-a456-69fcc04298ea
-  modified: 2026-11-09T14:02:01.000Z
+  modified: 2026-11-09T14:44:26.375Z
 ---
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan drafted, not yet approved by the user; implementation not started. Work milestone by milestone (M0 first) and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. Next: M1. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -190,7 +190,7 @@ Rules for the data:
 | **M1 Cloudflare Access** | endpoint settings, Keychain, CF headers, error classification, Test button. Ships early so the tunnel move doesn't break the vLLM card | `RemoteEndpointTests` (headers, 302/403/HTML) |
 | **M2 Store + Claude history** | SQLite + migrations, ProjectResolver, transcript backfill and tailing, pricing; ledger cost per session in the panel; Dashboard with Overview, Sessions, Spending | `ClaudeTranscriptParserTests` (stripped real lines: repeated blocks, sidechain, `<synthetic>`, Qwen model, title, cost-state, partial last line); `PricingTests` with **cost-state calibration**; `ProjectResolverTests` (temp repo + worktree); ingesting twice gives the same totals; tailer append/truncate/rotate; migrations |
 | **M3 Copilot + OTel persistence + Projects** | CopilotStoreIngester, UsageAuthority filter, OTel IDs, Projects page and project grouping | `CopilotUsageMapperTests`; a temp DB built with the Copilot schema; OTel JSON/protobuf ID parity; `UsageAuthorityTests` |
-| **M4 Panel redesign + notifications + Limits** | 448×600 glass panel, waiting-first, widgets, `NotificationPolicy`, `limit_samples`, Limits page | `NotificationPolicyTests`, `LimitsProjectionTests` |
+| **M4 Notifications + Limits** (panel visuals done in M0.5) | panel numbers from the ledger, `NotificationPolicy`, `limit_samples`, Limits page | `NotificationPolicyTests`, `LimitsProjectionTests` |
 | **M5 Local model + GPU** | `SampleAggregator` with rollups, GPU parsing, Local model page, saved vs API, energy | `SampleAggregatorTests` (counter reset), `GPUSnapshotTests` (captured ZGX `/metrics`) |
 | **M6 Dev servers** | scanner, classifier, panel pills, Dev servers page, Stop | `DevServerClassifierTests`, `LsofParserTests`; integration test opening a listening socket in-process |
 | **M7 Clean up** | worktrees, caches, transcripts, orphans; review sheet; Trash + log | `CleanupRulesTests`, `ProcessLineageTests`, `GitClientTests` (temp repo with a merged worktree) |
@@ -201,6 +201,48 @@ Rules for the data:
 - `install.sh`: Claude OTel becomes optional (transcripts are the ledger).
 - `CLAUDE.md` and `README.md`: the new targets and the ledger rule.
 - Fixtures are stripped to the needed keys, with no prompt or response content.
+
+**M0 outcome (2026-11-09):**
+- Package: tools 6.2, `.macOS(.v26)`, Swift 6 mode everywhere; `Hoply` uses `.defaultIsolation(MainActor.self)`. AgentKit needed no concurrency changes.
+- `AgentSystem` holds only a minimal `SQLiteConnection` (open, execute, `user_version`). M2 builds the Store on it.
+- Deviation: `AppSettings` lives in AgentKit (`Settings/AppSettings.swift`), so the settings-compat test can run there. UserDefaults storage is `Hoply/App/AppSettings+Storage.swift`. Each key decodes leniently: a missing or wrongly typed key falls back to its default.
+- The panel's main view was renamed `DashboardView` → `PanelContent`, to free the name for the v2 Dashboard window. `AppModel.launchAtLogin` is now stored and refreshed when Settings opens.
+- Tests: 45 in AgentKitTests (40 existing + 5 `AppSettingsTests`) and 3 in AgentSystemTests, all green.
+- `swift run` shares the installed app's UserDefaults domain, because the embedded Info.plist carries the same bundle id. A dev build can't run on another port without changing the installed app's settings.
+- **Hotkey spike:** on macOS 27.2, `RegisterEventHotKey` returns 0 for ⌥Space, ⌥⇧Space, ⌃⌥Space, ⌘⌥Space and ⌃⌥⌘Space. Delivery is **unverified**: synthetic key events need Accessibility (the terminal lacks it), and no real key press arrived during the 90 s manual window. M8 must check at runtime whether the hotkey fires, and keep the ⌃⌥Space fallback and the user-chosen combo.
+- **Glass spike:**
+  - `glassEffect`, `GlassEffectContainer`, `.buttonStyle(.glass)` and AppKit's `NSGlassEffectView` compile and run in both a `MenuBarExtra(.window)` and a borderless non-activating `NSPanel`.
+  - `MenuBarExtra`'s status button has no target or action, so the panel **cannot be opened or closed programmatically** without private hacks.
+  - The `NSPanel` path shows and closes on command.
+  - No visual check was possible, because the terminal lacks Screen Recording permission.
+  - Recommendation for M4: move to `NSStatusItem` + `NSPanel` if anything has to show the panel (the palette, a hotkey, a notification), or if custom chrome or size animation is needed. Otherwise keep `MenuBarExtra`.
+
+**M0.5 outcome (2026-11-09):** the user found the M0 panel "far from the glass and how usemizu looks". So the panel visuals moved ahead of M1. Mizu's own screenshots (usemizu.com `/img/resources/guide-panel.webp`, `widgets-1-0.webp`) were the reference.
+- **Container:** `NSStatusItem` + `NSPopover` (`App/StatusItemController`). It has an arrow, system material, `.transient` close, and code can open it. Right-click gives Open / Settings… / Quit. The status icon updates through `withObservationTracking`. This settles the M4 container question.
+- **Layout, 448×600:**
+  - Header: name, a bell (pause notifications) and a gear.
+  - Stat strip: Agents with an activity sparkline, Need you with the oldest wait, and the local model's tok/s with a sparkline.
+  - A "Waiting on you" card.
+  - Project cards. Each has an icon tile, its sessions, and Terminal / Finder / Copy path buttons.
+  - Widget strip: a Claude 5-hour ring plus Week, a KV cache ring plus queue, and live usage with a per-source stacked bar.
+  - Footer: listener status and a power button.
+- **Interim data:**
+  - Projects are grouped per cwd by `SessionGrouping` (AgentKit, tested). M3's ProjectResolver replaces this.
+  - Sparklines are in-memory `RollingSeries` (AgentKit, tested). M5's `samples` table replaces them.
+  - "Live usage" sums the open sessions' OTel tokens and cost. M2's ledger "Today" replaces it.
+- **Verification:** `Hoply --snapshot <dir>` renders `PreviewData` to PNGs in light, dark, full height and settings, without Screen Recording permission. Glass and vibrancy don't show in snapshots. The user still has to check the live popover material in both appearances and with Reduce Transparency.
+- **Buttons:** they use system `.bordered` / `.borderedProminent` styles, which get the glass look on macOS 26 automatically. `.buttonStyle(.glass)` rendered black labels in dark-mode snapshots, so it is avoided until verified live.
+- **Unused for now:** `Meter` and `Metric` are kept for the Dashboard Limits and Local model pages.
+- **Still in M4:** `NotificationPolicy`, `limit_samples`, the Limits page, and switching panel numbers to ledger totals.
+
+**ZGX facts (checked 2026-11-09 from this Mac):**
+- Host `zgx-ff24` is at 192.168.40.141.
+- **Model server:** `http://192.168.40.141:8888`, OpenAI API, no auth. The engine is **tensorfold**, not vLLM. Model `Qwen3.8-Flash-Next`, 262k context.
+- **Its `/metrics`:** vLLM metric names under a `tensorfold:` prefix, with no `model_name` label. `generation_tokens_total` counts finished requests only; `generation_tokens_running` holds live streams. `VLLMSnapshot` handles both engines.
+- **sparkDash** on `:5555` serves GPU, CPU, RAM, storage, network, energy and LLM stats as JSON, e.g. `/api/sparks/zgx-ff24/metrics`, `/gpu-history`, `/llm/daily`, `/api/fleet-energy`.
+  - It needs `Authorization: Bearer <token>` (or `?token=`). The token lives in `~/sparkDash/.env` on the ZGX and must go to the Keychain, never into settings or URLs.
+  - Its Prometheus `/metrics` and `/history` are off until enabled in sparkDash Settings.
+  - sparkDash replaces "install DCGM/node exporter" as the M5 GPU source. M1's token and Keychain plumbing should cover a Bearer token alongside the CF Access headers.
 
 **Main risks:**
 - Swift 6 strict concurrency around the `HubServer` callbacks (M0).

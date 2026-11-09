@@ -68,6 +68,8 @@ public enum PrometheusParser {
 
 /// One scrape of a vLLM server's /metrics.
 public struct VLLMSnapshot: Sendable, Equatable {
+    /// "vllm" or "tensorfold": both publish vLLM's metric names, each under its own prefix.
+    public var engine: String
     public var model: String?
     public var running: Int
     public var waiting: Int
@@ -77,16 +79,23 @@ public struct VLLMSnapshot: Sendable, Equatable {
     public var generationTokensTotal: Double
     public var takenAt: Date
 
+    public static let engines = ["vllm", "tensorfold"]
+
+    public static func engine(of samples: [PromSample]) -> String? {
+        engines.first { engine in samples.contains { $0.name.hasPrefix(engine + ":") } }
+    }
+
     public static func from(samples: [PromSample], at time: Date) -> VLLMSnapshot {
-        func sum(_ names: [String]) -> Double? {
-            for name in names {
+        let engine = Self.engine(of: samples) ?? "vllm"
+        func sum(_ suffixes: [String]) -> Double? {
+            for name in suffixes.map({ "\(engine):\($0)" }) {
                 let matching = samples.filter { $0.name == name }
                 if !matching.isEmpty { return matching.reduce(0) { $0 + $1.value } }
             }
             return nil
         }
-        func maximum(_ names: [String]) -> Double? {
-            for name in names {
+        func maximum(_ suffixes: [String]) -> Double? {
+            for name in suffixes.map({ "\(engine):\($0)" }) {
                 let values = samples.filter { $0.name == name }.map(\.value)
                 if let top = values.max() { return top }
             }
@@ -96,14 +105,19 @@ public struct VLLMSnapshot: Sendable, Equatable {
             guard let value, value.isFinite, value >= 0, value < 1e9 else { return 0 }
             return Int(value)
         }
-        let model = samples.first { $0.name.hasPrefix("vllm:") && $0.labels["model_name"] != nil }?.labels["model_name"]
+        let model = samples.first { $0.name.hasPrefix(engine + ":") && $0.labels["model_name"] != nil }?.labels["model_name"]
+        // tensorfold counts generated tokens only when a request finishes; adding the tokens held by live
+        // streams turns that into a counter that moves while decoding, so tok/s isn't zero until the end.
+        let generated = (sum(["generation_tokens_total", "generation_tokens"]) ?? 0)
+            + (sum(["generation_tokens_running"]) ?? 0)
         return VLLMSnapshot(
+            engine: engine,
             model: model,
-            running: count(sum(["vllm:num_requests_running"])),
-            waiting: count(sum(["vllm:num_requests_waiting"])),
-            kvCacheUsage: maximum(["vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"]),
-            promptTokensTotal: sum(["vllm:prompt_tokens_total", "vllm:prompt_tokens"]) ?? 0,
-            generationTokensTotal: sum(["vllm:generation_tokens_total", "vllm:generation_tokens"]) ?? 0,
+            running: count(sum(["num_requests_running"])),
+            waiting: count(sum(["num_requests_waiting"])),
+            kvCacheUsage: maximum(["kv_cache_usage_perc", "gpu_cache_usage_perc"]),
+            promptTokensTotal: sum(["prompt_tokens_total", "prompt_tokens"]) ?? 0,
+            generationTokensTotal: generated,
             takenAt: time
         )
     }
