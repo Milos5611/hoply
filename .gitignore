@@ -4,3 +4,6 @@ build/
 *.xcodeproj
 DerivedData/
 .DS_Store
+
+# Personal
+.claude/settings.local.json
