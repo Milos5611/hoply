@@ -6,14 +6,14 @@ import PackageDescription
 // exceptions (plain HTTP to the vLLM box on the LAN) as the bundled .app.
 let infoPlist = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
-    .appendingPathComponent("Sources/AgentBar/Info.plist")
+    .appendingPathComponent("Sources/Hoply/Info.plist")
     .path
 
 let package = Package(
-    name: "AgentBar",
+    name: "Hoply",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "AgentBar", targets: ["AgentBar"]),
+        .executable(name: "Hoply", targets: ["Hoply"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
     ],
     targets: [
@@ -21,7 +21,7 @@ let package = Package(
         .target(name: "AgentKit"),
         // The macOS menu bar app.
         .executableTarget(
-            name: "AgentBar",
+            name: "Hoply",
             dependencies: ["AgentKit"],
             exclude: ["Info.plist"],
             linkerSettings: [

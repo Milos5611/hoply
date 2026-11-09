@@ -1,14 +1,14 @@
-# AgentBar
+# Hoply
 
 A macOS menu bar app that shows what your AI coding agents are doing: Claude Code, GitHub Copilot (CLI and JetBrains), Qwen Code on your local model, and the vLLM server behind it. It is one Swift app with a small listener built in, so there is no separate daemon to run.
 
 ```
 Claude Code ── hooks + OTel logs ──┐
 Copilot CLI ── hooks (+ OTel) ─────┤
-Copilot in JetBrains ── OTel ──────┼──▶ AgentBar (127.0.0.1:4318) ──▶ menu bar panel
-Qwen Code ── OTel ─────────────────┘          │
-vLLM on the ZGX ◀── polls /metrics ───────────┤
-Claude 5-hour / weekly limits ◀── polls ──────┘
+Copilot in JetBrains ── OTel ──────┼──▶ Hoply (127.0.0.1:4318) ──▶ menu bar panel
+Qwen Code ── OTel ─────────────────┘      │
+vLLM on the ZGX ◀── polls /metrics ───────┤
+Claude 5-hour / weekly limits ◀── polls ──┘
 ```
 
 ## What each source gives you
@@ -29,30 +29,27 @@ Your chat UI talks to vLLM directly, so its activity shows up in the vLLM card.
 Requires macOS 14+ and Xcode (for `swift test`).
 
 ```bash
-swift test                      # unit tests, using real OTLP payloads as fixtures
-swift run AgentBar              # quick try: the icon appears in the menu bar
-scripts/simulate.sh             # in another terminal: fake activity to see the panel work
-scripts/make-app.sh --install   # real use: builds AgentBar.app into ~/Applications and opens it
+scripts/install.sh              # build Hoply.app into ~/Applications, open it, connect Claude Code + Copilot CLI
+scripts/install.sh --uninstall  # disconnect the agents again
 ```
 
-Notifications and "Launch at login" only work in the bundled app.
+That's all. `install.sh` connects whichever of Claude Code and Copilot CLI it finds:
+- **Claude Code:** hooks and OTel log export, written to `~/.claude/settings.json` (backed up first). Restart running sessions afterwards.
+- **Copilot CLI:** hooks in `~/.copilot/hooks/hoply.json`.
 
-## Connect your agents
+Re-running it is safe. Set `HOPLY_PORT` if you change the port in the app.
 
-Each script backs up the file it changes and supports `--uninstall`. Set `AGENTBAR_PORT` if you change the port in the app.
+For development:
 
 ```bash
-scripts/setup-claude-code.sh        # hooks + OTel logs in ~/.claude/settings.json
-scripts/setup-copilot-cli.sh        # hooks in ~/.copilot/hooks/agentbar.json
-scripts/setup-copilot-cli.sh --add-alias   # optional: copilot alias with OTel on, for token counts
-scripts/setup-qwen-code.sh          # telemetry block in ~/.qwen/settings.json
+swift test                # unit tests, using real OTLP payloads as fixtures
+swift run Hoply           # run without bundling (no notifications or launch at login)
+scripts/simulate.sh       # with Hoply running: fake agent activity to see the panel work
 ```
 
-If `~/.claude/settings.json` already sends OpenTelemetry somewhere (a company collector, for example), the Claude script leaves that alone and installs hooks only. Pass `--force` to override.
+**Copilot in JetBrains:** open Settings → Tools → GitHub Copilot → Chat, turn on the OpenTelemetry export, and set the OTLP endpoint to `http://127.0.0.1:4318` (HTTP). Hoply accepts both JSON and protobuf.
 
-**Copilot in JetBrains:** open Settings → Tools → GitHub Copilot → Chat, turn on the OpenTelemetry export, and set the OTLP endpoint to `http://127.0.0.1:4318` (HTTP). AgentBar accepts both JSON and protobuf.
-
-**vLLM:** open the panel → gear icon → Server URL, for example `http://<zgx-ip>:8000`. AgentBar reads `<url>/metrics` every 5 seconds. Private-range IPs are allowed through App Transport Security in `Info.plist`; macOS will ask once for Local Network access.
+**vLLM:** open the panel → gear icon → Server URL, for example `http://<zgx-ip>:8000`. Hoply reads `<url>/metrics` every 5 seconds. Private-range IPs are allowed through App Transport Security in `Info.plist`; macOS will ask once for Local Network access.
 
 **Claude limits:** click Connect in the Claude plan card. macOS asks once whether `security` may read the "Claude Code-credentials" Keychain item; choose Always Allow. If it says the login expired, open Claude Code once and it refreshes the token.
 
@@ -64,7 +61,9 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"t1","cwd":"'$PWD'","pr
   | curl -s -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:4318/hooks/claude-code
 ```
 
-The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in settings and re-run the setup scripts with `AGENTBAR_PORT`).
+The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in settings and re-run `HOPLY_PORT=<port> scripts/install.sh`).
+
+**Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`.
 
 ## Layout
 
@@ -79,9 +78,9 @@ Sources/AgentKit/      platform-neutral core
   SessionBoard.swift   session state machine
   VLLM.swift           Prometheus parser + vLLM snapshot and rates
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
-Sources/AgentBar/      SwiftUI menu bar app
+Sources/Hoply/         SwiftUI menu bar app
 Tests/AgentKitTests/   tests; fixtures were produced by the official OpenTelemetry JS exporters
-scripts/               setup, simulate, make-app
+scripts/               install.sh (build, install, connect agents), simulate.sh (dev)
 ```
 
 ## Known gaps

@@ -100,7 +100,7 @@ public struct ClaudeLimitsClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("AgentBar/0.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("Hoply/0.1", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ClaudeLimitsError.malformedResponse }
         guard http.statusCode == 200 else { throw ClaudeLimitsError.http(http.statusCode) }

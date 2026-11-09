@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>AgentBar</string>
+	<string>Hoply</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.coolcraftcoders.agentbar</string>
+	<string>com.coolcraftcoders.hoply</string>
 	<key>CFBundleName</key>
-	<string>AgentBar</string>
+	<string>Hoply</string>
 	<key>CFBundleDisplayName</key>
-	<string>AgentBar</string>
+	<string>Hoply</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>AgentBar reads metrics from your local model server (vLLM).</string>
+	<string>Hoply reads metrics from your local model server (vLLM).</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

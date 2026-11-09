@@ -6,11 +6,11 @@ import ServiceManagement
 struct AppSettings: Codable, Equatable {
     var port: Int = 4318
     var vllmBaseURL: String = ""
-    var vllmName: String = "ZGX"
+    var vllmName: String = ""
     var claudeLimitsEnabled: Bool = false
     var notificationsEnabled: Bool = true
 
-    private static let defaultsKey = "AgentBarSettings"
+    private static let defaultsKey = "HoplySettings"
 
     static func load() -> AppSettings {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),

@@ -1,6 +1,6 @@
 ---
 name: v2-plan
-description: "AgentBar v2 plan drafted 2026-11-09 (not yet approved) — Liquid Glass panel + Dashboard window, SQLite usage ledger (one source of truth per agent), Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; milestones M0–M8"
+description: "Hoply v2 plan drafted 2026-11-09 (not yet approved) — Liquid Glass panel + Dashboard window, SQLite usage ledger (one source of truth per agent), Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; milestones M0–M8"
 metadata:
   node_type: memory
   type: project
@@ -8,13 +8,13 @@ metadata:
   modified: 2026-11-09T14:02:01.000Z
 ---
 
-# AgentBar v2: history, spending, projects, and a Mizu-quality UI
+# Hoply v2: history, spending, projects, and a Mizu-quality UI
 
 Status (2026-11-09): plan drafted, not yet approved by the user; implementation not started. Work milestone by milestone (M0 first) and update this status line as milestones land.
 
 ## Context
 
-Today AgentBar only shows live status. `SessionBoard` lives in memory, so there is no persistence, no history, no per-project view and no spending over time. The UI is plain cards (`Sources/AgentBar/Views.swift`, 613 lines).
+Today Hoply only shows live status. `SessionBoard` lives in memory, so there is no persistence, no history, no per-project view and no spending over time. The UI is plain cards (`Sources/Hoply/Views.swift`, 613 lines).
 
 The user wants a polished app, at least as good as Mizu (usemizu.com, a menu bar app for macOS 26). It should watch Claude Code, Copilot (CLI and JetBrains) and Qwen Code running on the local vLLM. The vLLM runs on an HP ZGX that is moving behind Cloudflare. The app should show spending, projects, sessions and limits, plus Mizu's extras.
 
@@ -35,7 +35,7 @@ The user wants a polished app, at least as good as Mizu (usemizu.com, a menu bar
   - `sessions` has cwd, repository, branch and summary.
   - `assistant_usage_events` has model, tokens, cache, reasoning, `total_nano_aiu`, `request_multiplier` and `created_at`.
   - `turns` holds the turns. Note that `input_tokens` includes cache reads.
-- **Qwen Code and Copilot JetBrains:** no local history. The only data is the OTel that reaches AgentBar, so we must persist it ourselves.
+- **Qwen Code and Copilot JetBrains:** no local history. The only data is the OTel that reaches Hoply, so we must persist it ourselves.
 - **Toolchain:** macOS 27.2, Xcode 27.2, Swift 6.4.2.
 
 ## Architecture
@@ -51,7 +51,7 @@ The user wants a polished app, at least as good as Mizu (usemizu.com, a menu bar
   - `SQLite/SQLiteConnection` and `Store/` (Schema, a `Store` actor that writes, a `StoreReader` actor that reads through a read-only connection).
   - `Ingest/` (FileTailer, DirectoryWatcher using FSEvents, ClaudeTranscriptIngester, CopilotStoreIngester, IngestCoordinator).
   - `ProjectRegistry`, `Remote/MetricsClient` and `Keychain`, `ProcessScanner` (libproc), `GitClient`, `CleanupScanner`.
-- **`AgentBar`** (UI) is organized into folders:
+- **`Hoply`** (UI) is organized into folders:
   - `App/`: `AppModel` moves to `@Observable`, plus `AppSettings` and `DashboardWindowController`.
   - `Models/`: LiveSessions, History, LocalModel, Limits, DevServers, Cleanup.
   - `Services/`: Notifier, HotKey, Trash, TerminalLauncher.
@@ -61,7 +61,7 @@ The user wants a polished app, at least as good as Mizu (usemizu.com, a menu bar
 
 ### Persistence
 
-The DB is `~/Library/Application Support/AgentBar/agentbar.sqlite`, opened with WAL, `synchronous=NORMAL` and `busy_timeout=2000`. Versions are tracked in `PRAGMA user_version`, with an array of migration SQL applied in transactions. Before each migration and once a week, run `VACUUM INTO …bak` (keep 2).
+The DB is `~/Library/Application Support/Hoply/hoply.sqlite`, opened with WAL, `synchronous=NORMAL` and `busy_timeout=2000`. Versions are tracked in `PRAGMA user_version`, with an array of migration SQL applied in transactions. Before each migration and once a week, run `VACUUM INTO …bak` (keep 2).
 
 Schema v1 tables:
 - `projects`: root (unique), name, display_name, kind (`repo`/`folder`/`home`/`scratch`), pinned, hidden, last_active.
@@ -109,7 +109,7 @@ Rules for the data:
 - **OTel:**
   - `OTLPDecoder` keeps `traceId`/`spanId`/`timeUnixNano`.
   - Dedupe keys: `otel:<trace>:<span>` and `qw:<session>:<prompt_id>:<ts>`.
-  - The project comes from the `agentbar.cwd` resource attribute, which `setup-qwen-code.sh --add-alias` exports through `OTEL_RESOURCE_ATTRIBUTES`. The fallback is `process.pid` → cwd via libproc. Otherwise the session goes under "Unassigned", with a manual Assign action.
+  - The project comes from the `hoply.cwd` resource attribute, which the user sets through `OTEL_RESOURCE_ATTRIBUTES` (Qwen is configured manually, see README). The fallback is `process.pid` → cwd via libproc. Otherwise the session goes under "Unassigned", with a manual Assign action.
 - **Projects:** `ProjectResolver` is pure and doesn't run git.
   - It walks up from the cwd's realpath looking for `.git`.
   - A `.git` file means a worktree: `gitdir` plus `commondir` lead to the main repo, which becomes the project, and the worktree is recorded.
@@ -118,9 +118,9 @@ Rules for the data:
 
 ### Pricing and "spending"
 
-- **Bundled table:** `BundledPricing` is a Swift string literal, because `make-app.sh` copies only the binary, so a resource bundle would be missing. Per model: input, output, cacheWrite5m (default 1.25×), cacheWrite1h (2×), cacheRead (0.1×), optional long-context tiers and fast-mode prices.
+- **Bundled table:** `BundledPricing` is a Swift string literal, because `install.sh` copies only the binary, so a resource bundle would be missing. Per model: input, output, cacheWrite5m (default 1.25×), cacheWrite1h (2×), cacheRead (0.1×), optional long-context tiers and fast-mode prices.
 - **Model matching:** exact first, then with date, `[1m]` and `anthropic.` prefixes stripped, then by prefix.
-- **Overrides:** `~/Library/Application Support/AgentBar/pricing.json`.
+- **Overrides:** `~/Library/Application Support/Hoply/pricing.json`.
 - **Seed and calibration:** take seed prices from the `claude-api` skill's pricing reference, not from memory. Calibrate against `cost-state`: Settings → Pricing flags any model that is off by more than 2% from Claude Code's own `totalCostUSD`. An unknown non-local model shows as "unpriced", never as $0.
 - **Meaning per source:**
   - **Claude:** "API-equivalent $", since the user is on a subscription. It is shown next to 5-hour and weekly limit usage.
@@ -131,7 +131,7 @@ Rules for the data:
 
 - **Cloudflare Access (M1):**
   - `EndpointConfig {baseURL, name, accessClientID}` is used for both the vLLM and the GPU exporter.
-  - The secret is a SecItem generic password stored under service `…agentbar.cf-access`.
+  - The secret is a SecItem generic password stored under service `…hoply.cf-access`.
   - `RemoteEndpoint.makeRequest` adds the headers. `MetricsClient` refuses redirects, and `classify()` maps a 302 to `*.cloudflareaccess.com`, a 403 or an HTML body to "Access rejected the service token".
   - Settings gets a "Test connection" button.
 - **GPU stats:** `GPUSnapshot` parses DCGM (`DCGM_FI_DEV_GPU_UTIL/_GPU_TEMP/_POWER_USAGE/_TOTAL_ENERGY_CONSUMPTION`), nvidia_smi_exporter and node_exporter. node_exporter supplies host memory, because the GB10 has unified memory and DCGM's framebuffer fields may be empty. Needs an exporter installed on the ZGX (user action).
@@ -186,7 +186,7 @@ Rules for the data:
 
 | # | Ships | Key tests |
 |---|---|---|
-| **M0 Foundation** | tools 6.2 / macOS 26 / Swift 6; `AgentSystem` target; `Views.swift` split into folders with no behavior change; `@Observable` AppModel; **tolerant `AppSettings` decoding** (`decodeIfPresent`; today any new field silently resets settings); `AGENTBAR_SIGN_IDENTITY` in `make-app.sh` (a stable self-signed cert stops Keychain/TCC re-prompts after each ad-hoc rebuild); spikes for the hotkey and the glass MenuBarExtra | old settings JSON still decodes; existing 40 tests green |
+| **M0 Foundation** | tools 6.2 / macOS 26 / Swift 6; `AgentSystem` target; `Views.swift` split into folders with no behavior change; `@Observable` AppModel; **tolerant `AppSettings` decoding** (`decodeIfPresent`; today any new field silently resets settings); `HOPLY_SIGN_IDENTITY` in `install.sh` (a stable self-signed cert stops Keychain/TCC re-prompts after each ad-hoc rebuild); spikes for the hotkey and the glass MenuBarExtra | old settings JSON still decodes; existing 40 tests green |
 | **M1 Cloudflare Access** | endpoint settings, Keychain, CF headers, error classification, Test button. Ships early so the tunnel move doesn't break the vLLM card | `RemoteEndpointTests` (headers, 302/403/HTML) |
 | **M2 Store + Claude history** | SQLite + migrations, ProjectResolver, transcript backfill and tailing, pricing; ledger cost per session in the panel; Dashboard with Overview, Sessions, Spending | `ClaudeTranscriptParserTests` (stripped real lines: repeated blocks, sidechain, `<synthetic>`, Qwen model, title, cost-state, partial last line); `PricingTests` with **cost-state calibration**; `ProjectResolverTests` (temp repo + worktree); ingesting twice gives the same totals; tailer append/truncate/rotate; migrations |
 | **M3 Copilot + OTel persistence + Projects** | CopilotStoreIngester, UsageAuthority filter, OTel IDs, Projects page and project grouping | `CopilotUsageMapperTests`; a temp DB built with the Copilot schema; OTel JSON/protobuf ID parity; `UsageAuthorityTests` |
@@ -198,8 +198,7 @@ Rules for the data:
 
 **Keep in sync along the way:**
 - `simulate.sh`: send `transcript_path` and Qwen resource attributes.
-- `setup-qwen-code.sh --add-alias`.
-- `setup-claude-code.sh`: OTel becomes optional.
+- `install.sh`: Claude OTel becomes optional (transcripts are the ledger).
 - `CLAUDE.md` and `README.md`: the new targets and the ledger rule.
 - Fixtures are stripped to the needed keys, with no prompt or response content.
 
@@ -226,5 +225,5 @@ Rules for the data:
   - A live Claude session's cost updates within about 1 s of each turn (hook `transcript_path` → tail).
 - **M3:** Copilot CLI totals match `SELECT SUM(...) FROM assistant_usage_events` in `~/.copilot/session-store.db`.
 - **M1:** with the endpoint behind Cloudflare Access, a valid token shows metrics. A wrong token shows "Access rejected", not "No vLLM metrics".
-- **UI:** `scripts/make-app.sh --install`, then `scripts/simulate.sh` to drive the panel. Check light and dark mode, Reduce Transparency, and Dashboard pages against real data.
+- **UI:** `scripts/install.sh`, then `scripts/simulate.sh` to drive the panel. Check light and dark mode, Reduce Transparency, and Dashboard pages against real data.
 - **M6/M7:** run `npm run dev` in a project and see it named under that project, and Stop works. In a temp repo with a merged clean worktree, Clean up proposes it, and a dirty worktree is never proposed. Trashed items can be put back from Finder.

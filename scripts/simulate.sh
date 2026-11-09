@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Sends fake agent activity to a running AgentBar so you can see the panel work
+# Sends fake agent activity to a running Hoply so you can see the panel work
 # before wiring up real agents. Usage: scripts/simulate.sh   (DELAY=0 for no pauses)
 set -euo pipefail
 
-PORT="${AGENTBAR_PORT:-4318}"
+PORT="${HOPLY_PORT:-4318}"
 URL="http://127.0.0.1:${PORT}"
 DELAY="${DELAY:-1.5}"
 
-curl -s -m 2 -o /dev/null "$URL/health" || { echo "AgentBar is not listening on $URL. Start it first." >&2; exit 1; }
+curl -s -m 2 -o /dev/null "$URL/health" || { echo "Hoply is not listening on $URL. Start it first." >&2; exit 1; }
 
 post() {
   local status

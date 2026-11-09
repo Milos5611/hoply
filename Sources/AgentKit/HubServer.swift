@@ -15,7 +15,7 @@ public final class HubServer: @unchecked Sendable {
     public var onStatus: (@Sendable (Status) -> Void)?
     public var onNote: (@Sendable (String) -> Void)?
 
-    private let queue = DispatchQueue(label: "agentbar.hub")
+    private let queue = DispatchQueue(label: "hoply.hub")
     private let router = HubRouter()
     private var listener: NWListener?
 

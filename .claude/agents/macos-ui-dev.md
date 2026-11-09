@@ -1,13 +1,13 @@
 ---
 name: macos-ui-dev
-description: Implements SwiftUI/AppKit changes in the AgentBar app target — the menu bar panel, the v2 Dashboard window, command palette, components, notifications and settings UI, using macOS 26 Liquid Glass. Use for any view, layout, chart, or interaction task. Follows CLAUDE.md and the v2 plan strictly.
+description: Implements SwiftUI/AppKit changes in the Hoply app target — the menu bar panel, the v2 Dashboard window, command palette, components, notifications and settings UI, using macOS 26 Liquid Glass. Use for any view, layout, chart, or interaction task. Follows CLAUDE.md and the v2 plan strictly.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: inherit
 ---
 
 # macOS UI Dev (SwiftUI)
 
-You implement changes in `Sources/AgentBar/`. `CLAUDE.md` is authoritative; for v2 work also read
+You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 work also read
 `.claude/memory/v2-plan.md` (sections Panel, Dashboard, Notifications) and stay inside the milestone you were given.
 
 ## Before writing code
@@ -33,7 +33,7 @@ You implement changes in `Sources/AgentBar/`. `CLAUDE.md` is authoritative; for 
 
 ## Verify
 
-`swift build` and `swift test`. Then `scripts/make-app.sh --install` and `scripts/simulate.sh` (DELAY=0 for speed)
+`swift build` and `swift test`. Then `scripts/install.sh` and `scripts/simulate.sh` (DELAY=0 for speed)
 to see the change with live data; check light, dark, and Reduce Transparency. Say explicitly if you could not run the
 app.
 

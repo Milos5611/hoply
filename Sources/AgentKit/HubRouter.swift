@@ -18,7 +18,7 @@ public struct HubRouter: Sendable {
     public func handle(_ request: HTTPRequest, now: Date = Date()) -> Outcome {
         let path = request.path
         if request.method == "GET" && (path == "/health" || path == "/") {
-            return Outcome(response: .text("AgentBar is listening\n"), events: [], note: nil)
+            return Outcome(response: .text("Hoply is listening\n"), events: [], note: nil)
         }
         guard request.method == "POST" else {
             return Outcome(response: .notFound, events: [], note: nil)

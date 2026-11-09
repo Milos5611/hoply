@@ -31,7 +31,7 @@ struct HeaderView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("AgentBar")
+            Text("Hoply")
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
             CountChip(value: model.attentionCount, label: "need you", tint: .orange)
@@ -520,14 +520,14 @@ struct SettingsView: View {
                 SectionTitle("Local model (vLLM)")
                     .padding(.top, 6)
                 LabeledRow("Name") {
-                    TextField("ZGX", text: $draft.vllmName)
+                    TextField("Local model", text: $draft.vllmName)
                         .textFieldStyle(.roundedBorder)
                 }
                 LabeledRow("Server URL") {
-                    TextField("http://<zgx-ip>:8000", text: $draft.vllmBaseURL)
+                    TextField("http://<server-ip>:8000", text: $draft.vllmBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
-                Hint("The base URL of the vLLM OpenAI server. AgentBar reads <url>/metrics every 5 seconds.")
+                Hint("The base URL of the vLLM OpenAI server. Hoply reads <url>/metrics every 5 seconds.")
 
                 SectionTitle("Behaviour")
                     .padding(.top, 6)
@@ -539,7 +539,7 @@ struct SettingsView: View {
                         set: { model.setLaunchAtLogin($0) }
                     ))
                 } else {
-                    Hint("Notifications and launch at login work in the bundled app (scripts/make-app.sh), not with swift run.")
+                    Hint("Notifications and launch at login work in the bundled app (scripts/install.sh), not with swift run.")
                 }
 
                 if let note = model.lastNote {

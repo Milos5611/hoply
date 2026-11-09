@@ -1,2 +1,3 @@
-- [AgentBar v2 plan](v2-plan.md) — drafted 2026-11-09, not yet approved: glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
+- [Hoply v2 plan](v2-plan.md) — drafted 2026-11-09, not yet approved: glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
 - [No deletes](no-deletes.md) — never delete project files; avoid `rm` in shell commands, overwrite instead
+- [Comments only on complex parts](comments-only-complex.md) — comment non-obvious why only; never restate code or document obvious members
