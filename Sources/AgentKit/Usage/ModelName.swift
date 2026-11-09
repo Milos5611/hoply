@@ -1,0 +1,40 @@
+import Foundation
+
+/// Human names for model ids: `claude-opus-5-5` → "Opus 5.5", `anthropic.claude-haiku-4-5-20251001` → "Haiku 4.5".
+/// Non-Claude ids (local models) are returned as they are, minus any provider path.
+public enum ModelName {
+    public enum Family: String, Sendable, CaseIterable {
+        case fable, mythos, opus, sonnet, haiku, local, other
+    }
+
+    public static func display(_ id: String) -> String {
+        let trimmed = id.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "Unknown model" }
+        guard let parts = claudeParts(trimmed) else { return lastPathComponent(trimmed) }
+        let name = parts.family.prefix(1).uppercased() + parts.family.dropFirst()
+        return parts.version.isEmpty ? name : "\(name) \(parts.version)"
+    }
+
+    public static func family(_ id: String, isLocal: Bool = false) -> Family {
+        if isLocal { return .local }
+        guard let parts = claudeParts(id.trimmingCharacters(in: .whitespaces)) else { return .other }
+        return Family(rawValue: parts.family) ?? .other
+    }
+
+    /// `claude-<family>-<major>[-<minor>][-<yyyymmdd>][[1m]]`, with optional `anthropic.` / `us.anthropic.` prefixes.
+    private static func claudeParts(_ id: String) -> (family: String, version: String)? {
+        var name = lastPathComponent(id).lowercased()
+        if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
+        if let range = name.range(of: "anthropic.") { name = String(name[range.upperBound...]) }
+        guard name.hasPrefix("claude-") else { return nil }
+        var tokens = name.dropFirst("claude-".count).split(separator: "-").map(String.init)
+        if let last = tokens.last, last.count == 8, last.allSatisfy(\.isNumber) { tokens.removeLast() }
+        guard let family = tokens.first, family.allSatisfy(\.isLetter) else { return nil }
+        let version = tokens.dropFirst().filter { $0.allSatisfy(\.isNumber) }.joined(separator: ".")
+        return (family, version)
+    }
+
+    private static func lastPathComponent(_ id: String) -> String {
+        id.split(separator: "/").last.map(String.init) ?? id
+    }
+}
