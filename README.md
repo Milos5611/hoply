@@ -81,12 +81,29 @@ Sources/AgentKit/      platform-neutral core
   VLLM.swift           Prometheus parser + vLLM snapshot and rates
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
   Settings/            AppSettings with lenient per-key decoding
-Sources/AgentSystem/   macOS I/O adapters (SQLite so far)
+  Usage/               usage records, Claude transcript parser, ledger value types
+  Pricing/             price table (bundled as a string literal), cost-state calibration
+  Projects/            cwd → project resolver (repo, worktree, folder, home, scratch)
+Sources/AgentSystem/   macOS I/O adapters
+  Store/               SQLite schema + migrations, Store (writer), StoreReader (queries)
+  Ingest/              file tailer, FSEvents watcher, Claude transcript ingester, coordinator
 Sources/Hoply/         SwiftUI menu bar app: App/, Services/, Panel/, Components/
 Tests/AgentKitTests/   tests; fixtures were produced by the official OpenTelemetry JS exporters
 Tests/AgentSystemTests/  adapter tests (in-memory SQLite, temp directories)
 scripts/               install.sh (build, install, connect agents), simulate.sh (dev)
 ```
+
+## Usage history
+
+Hoply keeps its own usage ledger in `~/Library/Application Support/Hoply/hoply.sqlite`. For Claude Code it reads the transcripts under `~/.claude/projects` (read-only), including subagents, so it has history from before Hoply was installed and works with OTel off. Claude Code deletes transcripts after about 30 days; the ledger never deletes rows, so it outlives them.
+
+Costs are API-equivalent list prices from a table bundled in the app. Local models (any model whose name contains `qwen`, configurable) cost $0 and are also priced at a reference model (default `claude-sonnet-5-5`) to show what they saved. Unknown models show as unpriced, not $0. To add or correct a price, put the same shape as the bundled table in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
+
+```json
+{ "models": { "claude-opus-4-5": { "input": 5, "output": 25 } } }
+```
+
+Cache prices default to 0.1× input (read), 1.25× (5 minute write) and 2× (1 hour write); `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, `fast` and `longContext` can be set per model.
 
 ## Known gaps
 
@@ -94,3 +111,4 @@ scripts/               install.sh (build, install, connect agents), simulate.sh 
 - Copilot CLI's OTel service name and encoding aren't documented in detail. If its tokens appear as a separate "Copilot IDE" row, adjust `TelemetryMapper.source(of:)`.
 - JetBrains Copilot and Qwen Code have no hooks here, so they can't show "needs permission" or "your turn", only working and idle.
 - OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP and no compression.
+- Claude Code's own `cost-state` totals include calls it never writes to the transcript (title generation, web search, and in subagent-heavy sessions much more), so per-session ledger totals are usually a few percent below it.

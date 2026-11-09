@@ -45,27 +45,7 @@ public struct ClaudeLimits: Sendable, Equatable {
     static func window(_ raw: Any?) -> Window? {
         guard let dict = raw as? [String: Any],
               let utilization = (dict["utilization"] as? NSNumber)?.doubleValue else { return nil }
-        return Window(utilization: min(max(utilization, 0), 100), resetsAt: date(dict["resets_at"]))
-    }
-
-    static func date(_ raw: Any?) -> Date? {
-        if let number = raw as? NSNumber {
-            let value = number.doubleValue
-            return Date(timeIntervalSince1970: value > 10_000_000_000 ? value / 1000 : value)
-        }
-        guard let text = raw as? String, !text.isEmpty else { return nil }
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: text) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        if let date = plain.date(from: text) { return date }
-        // Fractions longer than milliseconds trip up ISO8601DateFormatter; drop them.
-        if let dot = text.firstIndex(of: "."),
-           let zone = text[dot...].firstIndex(where: { $0 == "Z" || $0 == "+" || $0 == "-" }) {
-            return plain.date(from: String(text[..<dot]) + String(text[zone...]))
-        }
-        return nil
+        return Window(utilization: min(max(utilization, 0), 100), resetsAt: Timestamps.date(dict["resets_at"]))
     }
 }
 

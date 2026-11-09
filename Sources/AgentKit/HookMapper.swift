@@ -14,9 +14,11 @@ public enum HookMapper {
         let key = SessionKey(source: source, id: sessionID)
         let cwd = string(json, ["cwd"])
         let model = string(json, ["model"])
+        let transcriptPath = string(json, ["transcript_path", "transcriptPath"])
 
         func make(_ kind: AgentEvent.Kind) -> AgentEvent {
-            AgentEvent(key: key, kind: kind, time: now, cwd: cwd, model: model, fromHook: true)
+            AgentEvent(key: key, kind: kind, time: now, cwd: cwd, model: model, fromHook: true,
+                       transcriptPath: transcriptPath)
         }
 
         switch name {

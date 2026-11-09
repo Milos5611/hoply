@@ -133,13 +133,17 @@ public struct AgentEvent: Sendable, Equatable {
     public var cwd: String?
     public var model: String?
     public var fromHook: Bool
+    /// The agent's transcript file (Claude Code hooks send `transcript_path`), so the ledger can tail it at once.
+    public var transcriptPath: String?
 
-    public init(key: SessionKey, kind: Kind, time: Date, cwd: String? = nil, model: String? = nil, fromHook: Bool) {
+    public init(key: SessionKey, kind: Kind, time: Date, cwd: String? = nil, model: String? = nil, fromHook: Bool,
+                transcriptPath: String? = nil) {
         self.key = key
         self.kind = kind
         self.time = time
         self.cwd = cwd
         self.model = model
         self.fromHook = fromHook
+        self.transcriptPath = transcriptPath
     }
 }

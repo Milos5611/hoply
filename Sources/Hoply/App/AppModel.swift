@@ -1,4 +1,5 @@
 import AgentKit
+import AgentSystem
 import AppKit
 import Foundation
 import Observation
@@ -19,6 +20,8 @@ final class AppModel {
     private(set) var activity = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
     private(set) var throughput = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
     var showingSettings = false
+    let history = History()
+    @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
 
     @ObservationIgnored private var board = SessionBoard()
     @ObservationIgnored private let server = HubServer()
@@ -32,14 +35,6 @@ final class AppModel {
     var activeCount: Int { sessions.filter { $0.state != .ended }.count }
     var grouping: SessionGrouping { SessionGrouping(sessions: sessions) }
     var vllmOnline: Bool { vllm != nil && vllmError == nil }
-    var liveTokens: Int { sessions.reduce(0) { $0 + $1.totalTokens } }
-    var liveCost: Double { sessions.reduce(0) { $0 + $1.costUSD } }
-    var tokensBySource: [(source: AgentSource, tokens: Double)] {
-        AgentSource.allCases.compactMap { source in
-            let tokens = sessions.filter { $0.key.source == source }.reduce(0) { $0 + $1.totalTokens }
-            return tokens > 0 ? (source, Double(tokens)) : nil
-        }
-    }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     /// `live: false` builds an inert model (no listener, no polling) for snapshots.
@@ -60,6 +55,7 @@ final class AppModel {
             Task { @MainActor in self?.lastNote = note }
         }
         server.start(port: UInt16(clamping: settings.port))
+        history.open(LedgerConfiguration(settings: settings))
 
         if settings.notificationsEnabled { notifier.requestAuthorization() }
         refreshLaunchAtLogin()
@@ -92,7 +88,21 @@ final class AppModel {
             guard let change = board.apply(event) else { continue }
             if shouldNotify(change) { notifier.post(change.session) }
         }
+        history.tail(Set(events.compactMap(\.transcriptPath)))
+        publishSessions()
+    }
+
+    private func publishSessions() {
         sessions = board.ordered
+        history.track(sessions.map(\.key))
+    }
+
+    func ledgerTotals(for key: SessionKey) -> LedgerTotals? {
+        history.sessionTotals[key]
+    }
+
+    func openDashboard(_ page: DashboardPage? = nil) {
+        dashboardOpener?(page)
     }
 
     private func shouldNotify(_ change: StateChange) -> Bool {
@@ -113,12 +123,12 @@ final class AppModel {
         board.tick(now: now)
         activity.advance(to: now)
         throughput.advance(to: now)
-        sessions = board.ordered
+        publishSessions()
     }
 
     func dismiss(_ key: SessionKey) {
         board.dismiss(key)
-        sessions = board.ordered
+        publishSessions()
     }
 
     // MARK: - Local model (vLLM)
@@ -208,6 +218,11 @@ final class AppModel {
         if updated.notificationsEnabled && !old.notificationsEnabled {
             notifier.requestAuthorization()
         }
+        if updated.claudeConfigDir != old.claudeConfigDir {
+            history.reopen(LedgerConfiguration(settings: updated))
+        } else if updated.localModelPatterns != old.localModelPatterns || updated.referenceModel != old.referenceModel {
+            history.updatePricing(localModelPatterns: updated.localModelPatterns, referenceModel: updated.referenceModel)
+        }
     }
 
     func refreshLaunchAtLogin() {
@@ -245,6 +260,7 @@ extension AppModel {
         model.vllm = PreviewData.vllm(now: now)
         model.claudeLimits = PreviewData.claudeLimits(now: now)
         model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
+        model.history.show(PreviewData.history(now: now))
         return model
     }
 }

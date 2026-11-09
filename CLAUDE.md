@@ -17,8 +17,9 @@ swift build
 swift test                                                    # all tests (AgentKitTests + AgentSystemTests)
 swift test --filter SessionBoardTests                         # one test class
 swift test --filter SessionBoardTests/testClaudeLifecycle     # one test
+HOPLY_REAL_TRANSCRIPTS=1 swift test --filter RealTranscriptsTests  # opt-in: ingest the real ~/.claude (read-only) into a temp DB, compare with cost-state
 swift run Hoply                                               # run unbundled; icon appears in the menu bar
-swift run Hoply --snapshot build/snapshots                    # render the panel with sample data to PNGs (light, dark, full height, settings)
+swift run Hoply --snapshot build/snapshots                    # render sample data to PNGs: panel (light, dark, full height, settings) + Dashboard pages
 scripts/simulate.sh                                           # with the app running: post fake hook/OTLP traffic (DELAY=0 for no pauses)
 scripts/install.sh [--uninstall]                              # release build → ~/Applications/Hoply.app, open it, connect Claude Code + Copilot CLI
 HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh            # sign with a stable self-signed cert instead of ad-hoc
@@ -32,15 +33,21 @@ Notifications and "Launch at login" only work in the bundled `.app` (`AppModel.i
 Three targets:
 
 - **`AgentKit`**: platform-neutral core: HTTP parsing, routing, OTLP decoding, event mapping, the session state machine, Prometheus/vLLM, Claude limits, `AppSettings` (tolerant decoding). No UI and no new I/O. `HubServer` (wrapped in `#if canImport(Network)`) and `ClaudeLimitsClient` are the existing I/O exceptions.
-- **`AgentSystem`**: macOS I/O adapters (SQLite via the system `SQLite3`, later files, processes, Keychain) that feed AgentKit types. No UI. Today it holds only `SQLiteConnection`.
+  - `Usage/`: `UsageRecord`/`TokenCounts`, `ClaudeTranscriptParser` (+ `ClaudeTranscriptBatch`), `LedgerBatch` (the Store's write unit) and the read-API value types (`LedgerTotals`, `SessionSummary`, `DailySpendSeries`, `SpendSlice`, `SpendOverview`, `IngestProgress`).
+  - `Pricing/`: `PricingTable`, `BundledPricing` (JSON in a Swift string literal), `PricingCalibration`. `Projects/`: `ProjectResolver` (filesystem injected through `ProjectFileSystem`) and `SessionGrouping`. `Support/`: `Timestamps`, `FNV1a`, `JSONLines`.
+- **`AgentSystem`**: macOS I/O adapters that feed AgentKit types. No UI.
+  - `SQLite/SQLiteConnection` (prepared statements, transactions). `Store/`: `Schema` (migrations + `VACUUM INTO` backups), the `Store` actor (the only writer) and the `StoreReader` actor (read-only connection, all read queries).
+  - `Ingest/`: `FileTailer`, `DirectoryWatcher` (FSEvents), `ClaudeTranscriptIngester`, `IngestCoordinator`. `Projects/ProjectRegistry` (+ `LocalProjectFileSystem`). `Pricing/PricingOverrides` loads `pricing.json`. `Ledger` bundles store, reader and coordinator for the app.
 - **`Hoply`**: the menu bar app (SwiftUI views in AppKit hosts), built with default `MainActor` isolation. `StatusItemController` owns an `NSStatusItem` and an `NSPopover` hosting `PanelView`. It replaced `MenuBarExtra`, which code can't open or close and which draws an opaque window. `AppModel` (`@Observable`) owns all state and is injected with `.environment(model)`; views read it through `@Environment(AppModel.self)`. Folders:
-  - `App/`: entry point, `AppModel`, `StatusItemController`, settings storage, and `PreviewData` + `Snapshot` for `--snapshot`.
+  - `App/`: entry point, `AppModel`, `StatusItemController`, `DashboardWindowController` (one reusable `NSWindow`; activation policy `.regular` while open, `.accessory` after), settings storage, and `PreviewData` + `Snapshot` for `--snapshot` (preview ledger data never opens the real DB).
+  - `Models/`: `History`, the app's view of the usage ledger (see "Usage ledger" below).
   - `Services/`: `Notifier`, `WorkspaceActions` (Finder, Terminal, pasteboard).
-  - `Panel/`: the 448×600 panel. A stat strip, then "Waiting on you", project cards (grouped by `SessionGrouping`), and a widget strip (Claude limits, local model, live usage). Settings live here too.
+  - `Panel/`: the 448×600 panel. Header (Dashboard, notifications, settings), a stat strip, then "Waiting on you", project cards (grouped by `SessionGrouping`), and a widget strip (Claude limits, local model, Today). Session rows and Today show ledger totals; the footer shows backfill progress. Settings live here too, including History (status, Reindex, local model patterns, reference model, Claude dir).
+  - `Dashboard/`: `DashboardView` (`NavigationSplitView`) with the Overview, Sessions and Spending pages, `SpendChart` (Swift Charts, `chartXSelection` hover) and shared Dashboard components.
   - `Components/`: `Card` (the white rounded surface), `StatTile`, `WidgetTile`, `RingGauge`, `MiniBars`, `StackedBar`, `IconTile`, `SourceBadge`, `StatePill`, `CountChip`, `TileButtonStyle`, `SectionTitle`, `Hint`, `LabeledRow`, `Meter`, `Metric`, `Format`.
-  - v2 adds `Models/`, `Dashboard/` and `Palette/`.
+  - v2 adds `Palette/` (M8).
 
-The panel follows Mizu's look: system popover material behind it, white `Card`s on top (prominent = solid with a soft shadow), 16 pt corners, 10 pt gaps, 12.5–15 pt text and 24 pt figures. Check UI changes with `--snapshot`. It needs no Screen Recording permission, but it can't show glass or vibrancy because the window server composites those.
+The panel follows Mizu's look: system popover material behind it, white `Card`s on top (prominent = solid with a soft shadow), 16 pt corners, 10 pt gaps, 12.5–15 pt text and 24 pt figures. Check UI changes with `--snapshot`. It needs no Screen Recording permission, but it can't show glass or vibrancy because the window server composites those; for the same reason Dashboard snapshots draw a plain stand-in for the sidebar (`DashboardView(plainSidebar:)`).
 
 Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories, in-memory DB). The app target has no tests, so keep testable logic out of it.
 
@@ -55,6 +62,25 @@ Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories
 
 `AgentEvent` is the normalization boundary. Every source, whether hook or telemetry, maps into its `Kind` cases. `SessionBoard` never sees raw payloads.
 
+### Usage ledger (v2, M2)
+
+SQLite at `~/Library/Application Support/Hoply/hoply.sqlite` (WAL). One source of truth per agent; for Claude Code that is its transcripts, never its OTel.
+
+1. `IngestCoordinator` discovers `<claude config>/projects/*/*.jsonl` and `*/*/subagents/*.jsonl`, backfills newest first, then tails on FSEvents (0.5 s), on a 60 s stat-only rescan, and at once when a hook carries `transcript_path` (`AgentEvent.transcriptPath` → `tailTranscript(atPath:)`). One file at a time.
+2. `FileTailer` reads complete lines past an `ingest_cursors` row (inode, size, offset, FNV of the first 512 bytes) and restarts at 0 on rotation, truncation or a rewritten head.
+3. `ClaudeTranscriptParser` skips known bulky types by prefix (`api-request*`, `file-history-*`, `last-prompt`…), merges repeated content blocks per `cc:<message.id>:<requestId>` (field-wise max), drops `<synthetic>`, and never keeps prompt text.
+4. `Store.apply` writes a `LedgerBatch` plus its cursor in one transaction.
+5. In the app, `History` opens the `Ledger` at launch (failure → "History off", the rest keeps working), is the single consumer of `IngestCoordinator.updates`, and re-queries `StoreReader` at most once a second during backfill (150 ms otherwise). It serves the live sessions' totals, today by source and the visible Dashboard page. `AppModel.ingest` forwards hook `transcriptPath`s to `History.tail`. A `claudeConfigDir` change reopens the ledger; local-pattern or reference-model changes call `Ledger.updatePricing`.
+
+Rules (easy to break):
+- The panel and the Dashboard read the same ledger totals and plot `apiEquivUSD`. `hasUnpriced` renders as "unpriced" (or "$x+"), never $0 (`Format.spend`).
+- Usage rows are upserted (`ON CONFLICT(dedupe_key)` with `max(…)`), never deleted. "Reindex" only resets cursors. Totals are always `GROUP BY` over `usage`.
+- Cost is computed in Swift after the upsert (`RETURNING`), so a call whose blocks arrive in two reads is priced on the merged counts. A new `pricing_rev` (content hash of table + local patterns + reference model) re-prices every row in one transaction.
+- Unknown non-local model → `cost_usd` NULL (unpriced), never $0. Local models (`AppSettings.localModelPatterns`) → $0, with `api_equiv_usd` at `referenceModel`.
+- `sessions.turns` counts typed prompts. A batch that starts at offset 0 of a main transcript replaces the count, a tail adds to it; subagent files never touch it.
+- Claude Code copies earlier calls into a continued session's file. The session with the earlier `first_at` keeps such a call, whatever the read order.
+- `~/.claude` and `~/.copilot` are read-only. Tests use temp directories only.
+
 ### SessionBoard rules (easy to break)
 
 - Once any hook event arrives for a session (`fromHook`), `hasLiveState` is set. From then on, telemetry only adds token/cost usage and never changes state, because OTLP arrives in delayed batches.
@@ -64,7 +90,7 @@ Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories
 
 ### Source detection
 
-`SessionGrouping` (AgentKit) splits sessions into waiting-on-you plus per-cwd project groups, and `RollingSeries` keeps the in-memory sparkline buckets. Both are stand-ins until the v2 project resolver and the `samples` table land.
+`SessionGrouping` (AgentKit) splits sessions into waiting-on-you plus per-cwd project groups, and `RollingSeries` keeps the in-memory sparkline buckets. Both are stand-ins until the panel groups by `ProjectResolver` projects (M3) and the `samples` table lands (M5).
 
 `TelemetryMapper.source(of:)` picks the `AgentSource` from `service.name` and the record name. Session IDs come from a list of candidate attribute keys (`sessionKeys`). To add a source, update `AgentSource`, `TelemetryMapper` and/or `HookMapper`, and add a connect/disconnect pair to `scripts/install.sh`.
 
@@ -77,6 +103,8 @@ Tests: `AgentKitTests` (pure, fixtures) and `AgentSystemTests` (temp directories
 ## Tests and fixtures
 
 `Tests/AgentKitTests/Fixtures/` holds real payloads captured from the official OpenTelemetry JS exporters. Several come as `.json` + `.pb` pairs, and tests assert both decode identically. Load fixtures with the `Fixture` helper in `Support.swift`. Hook fixtures are a JSON dictionary of named payloads (`Fixture.hookPayloads`).
+
+`claude_transcript.jsonl` is real transcript line shapes with synthetic ids and `"x"` for all text (it ends in a deliberately partial line). `claude_calibration.jsonl` is one real session's assistant lines stripped to ids and usage, plus its `cost-state`; `PricingTests` checks the ledger total lands within 2%. `AgentSystemTests` build their transcripts inline in temp directories (`TempDirectory` in `Support.swift`).
 
 ## Setup scripts
 

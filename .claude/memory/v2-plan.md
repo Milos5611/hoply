@@ -5,12 +5,12 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 65b7a48e-4bed-4913-a456-69fcc04298ea
-  modified: 2026-11-09T14:44:26.375Z
+  modified: 2026-11-09T16:33:19.508Z
 ---
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. Next: M1. Work milestone by milestone and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0 done**, plus **M0.5 panel look** (the M4 panel visuals, pulled forward at the user's request). Both are in the working tree, not committed; see "M0 outcome" and "M0.5 outcome" below. **M2 built** (core + UI, see "M2 core outcome" / "M2 UI outcome"); finishing cleanup (backfill cancel, chart logic → AgentKit), then user live checks. Next: M3. **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M6 → M7 → M8 → M1.** Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -187,14 +187,14 @@ Rules for the data:
 | # | Ships | Key tests |
 |---|---|---|
 | **M0 Foundation** | tools 6.2 / macOS 26 / Swift 6; `AgentSystem` target; `Views.swift` split into folders with no behavior change; `@Observable` AppModel; **tolerant `AppSettings` decoding** (`decodeIfPresent`; today any new field silently resets settings); `HOPLY_SIGN_IDENTITY` in `install.sh` (a stable self-signed cert stops Keychain/TCC re-prompts after each ad-hoc rebuild); spikes for the hotkey and the glass MenuBarExtra | old settings JSON still decodes; existing 40 tests green |
-| **M1 Cloudflare Access** | endpoint settings, Keychain, CF headers, error classification, Test button. Ships early so the tunnel move doesn't break the vLLM card | `RemoteEndpointTests` (headers, 302/403/HTML) |
 | **M2 Store + Claude history** | SQLite + migrations, ProjectResolver, transcript backfill and tailing, pricing; ledger cost per session in the panel; Dashboard with Overview, Sessions, Spending | `ClaudeTranscriptParserTests` (stripped real lines: repeated blocks, sidechain, `<synthetic>`, Qwen model, title, cost-state, partial last line); `PricingTests` with **cost-state calibration**; `ProjectResolverTests` (temp repo + worktree); ingesting twice gives the same totals; tailer append/truncate/rotate; migrations |
 | **M3 Copilot + OTel persistence + Projects** | CopilotStoreIngester, UsageAuthority filter, OTel IDs, Projects page and project grouping | `CopilotUsageMapperTests`; a temp DB built with the Copilot schema; OTel JSON/protobuf ID parity; `UsageAuthorityTests` |
 | **M4 Notifications + Limits** (panel visuals done in M0.5) | panel numbers from the ledger, `NotificationPolicy`, `limit_samples`, Limits page | `NotificationPolicyTests`, `LimitsProjectionTests` |
-| **M5 Local model + GPU** | `SampleAggregator` with rollups, GPU parsing, Local model page, saved vs API, energy | `SampleAggregatorTests` (counter reset), `GPUSnapshotTests` (captured ZGX `/metrics`) |
+| **M5 Local model + GPU** | `SampleAggregator` with rollups; GPU, energy and memory from sparkDash (JSON API with a Bearer token; the Keychain item and `RemoteEndpoint` request building move here from M1); Local model page, saved vs API | `SampleAggregatorTests` (counter reset), `GPUSnapshotTests` (captured sparkDash JSON), Bearer header test |
 | **M6 Dev servers** | scanner, classifier, panel pills, Dev servers page, Stop | `DevServerClassifierTests`, `LsofParserTests`; integration test opening a listening socket in-process |
 | **M7 Clean up** | worktrees, caches, transcripts, orphans; review sheet; Trash + log | `CleanupRulesTests`, `ProcessLineageTests`, `GitClientTests` (temp repo with a merged worktree) |
 | **M8 Palette** | NSPanel, providers, fuzzy ranking, Resume | `FuzzyMatcherTests` |
+| **M1 Cloudflare Access** (built last, by user decision) | endpoint settings, CF headers on top of M5's Keychain/`RemoteEndpoint`, error classification, Test button. Until it lands, moving the ZGX behind the tunnel breaks the local model card and sparkDash | `RemoteEndpointTests` (headers, 302/403/HTML) |
 
 **Keep in sync along the way:**
 - `simulate.sh`: send `transcript_path` and Qwen resource attributes.
@@ -235,6 +235,22 @@ Rules for the data:
 - **Unused for now:** `Meter` and `Metric` are kept for the Dashboard Limits and Local model pages.
 - **Still in M4:** `NotificationPolicy`, `limit_samples`, the Limits page, and switching panel numbers to ledger totals.
 
+**M2 core outcome (2026-11-09):**
+- Entry point: `AgentSystem.Ledger.open(LedgerConfiguration(settings:))` bundles `Store`, `StoreReader` and `IngestCoordinator`. Read-API value types live in `AgentKit/Usage/LedgerSummaries.swift`. Charts plot `apiEquivUSD`.
+- New `AppSettings` keys: `localModelPatterns` (default `["qwen"]`), `referenceModel` (`claude-sonnet-5-5`), `claudeConfigDir` (`""` = `~/.claude`).
+- Tests: AgentKitTests 80, AgentSystemTests 30 (one opt-in: `HOPLY_REAL_TRANSCRIPTS=1` ingests the real `~/.claude` into a temp DB).
+- Real data: 132 files / 290 MB ingest in 3.7 s. Pricing reproduces each cost-state's per-model totals exactly (Opus 5.5, Haiku 5.5). Ledger vs `cost-state.totalCostUSD`: 41 of 77 sessions within 2% (bar was 5). Outliers run low because Claude Code bills calls it never writes to the transcript (title generation, some subagent calls); continuations carry the parent's cost-state over.
+- Pricing: web search $10/1k; cache writes without a 5m/1h split are treated as unknown split; Opus 4.8 fast priced at $10/$50 (from the skill's platform-availability table); fast-mode cache prices scaled by the fast/standard ratio (assumption). Opus 4.5 / Sonnet 4.5 unpriced (add via `pricing.json`).
+- Schema v1 deviations: `usage.speed`, `sessions.title_rank`, `limit_samples.kind` (not `window`), extra indexes on `sessions(last_at)` / `sessions(project_id)`. `turn_index` and `ended_at` stay NULL in M2. Reindex resets cursors via `UPDATE`. Hook tails are limited to the configured Claude dir.
+
+**M2 UI outcome (2026-11-09):**
+- `Hoply/Models/History.swift` (`@Observable`) owns the Ledger: single `updates` consumer, re-queries ≤1/s during backfill, generation counters drop stale results. Open failure shows "History off" and the app keeps working.
+- Panel: "Live usage" became **Today** (ledger, API-equiv $); session rows show ledger cost, falling back to live OTel numbers (tooltip) for sources without ledger rows yet (Qwen, Copilot until M3); footer backfill indicator; header Dashboard button.
+- `DashboardWindowController` (single `NSWindow`, `.regular` policy while open) with Overview, Sessions, Spending; also "Open Dashboard" in the status item's right-click menu. Settings gains a History section (status, Reindex, local patterns, reference model, Claude dir).
+- Snapshots render the Dashboard with a stand-in sidebar (`DashboardView(plainSidebar: true)`): the real `NavigationSplitView` draws black offscreen. Money grouping fixed to `en_US`.
+- Live run on real data: 133 files backfilled in ~8 s; 82 sessions, $578 API-equiv, 0 unpriced.
+- Unverified (user): live glass sidebar/toolbar, hover, Reduce Transparency, Dock icon on open/close, ⌘W, ~1 s hook→tail cost update, app-menu "Settings…" opens the empty SwiftUI `Settings` scene under `.regular`.
+
 **ZGX facts (checked 2026-11-09 from this Mac):**
 - Host `zgx-ff24` is at 192.168.40.141.
 - **Model server:** `http://192.168.40.141:8888`, OpenAI API, no auth. The engine is **tensorfold**, not vLLM. Model `Qwen3.8-Flash-Next`, 262k context.
@@ -242,7 +258,7 @@ Rules for the data:
 - **sparkDash** on `:5555` serves GPU, CPU, RAM, storage, network, energy and LLM stats as JSON, e.g. `/api/sparks/zgx-ff24/metrics`, `/gpu-history`, `/llm/daily`, `/api/fleet-energy`.
   - It needs `Authorization: Bearer <token>` (or `?token=`). The token lives in `~/sparkDash/.env` on the ZGX and must go to the Keychain, never into settings or URLs.
   - Its Prometheus `/metrics` and `/history` are off until enabled in sparkDash Settings.
-  - sparkDash replaces "install DCGM/node exporter" as the M5 GPU source. M1's token and Keychain plumbing should cover a Bearer token alongside the CF Access headers.
+  - sparkDash replaces "install DCGM/node exporter" as the M5 GPU source. M5 builds the Keychain and request plumbing for its Bearer token; M1 later adds the CF Access headers to the same requests.
 
 **Main risks:**
 - Swift 6 strict concurrency around the `HubServer` callbacks (M0).
@@ -254,8 +270,8 @@ Rules for the data:
 
 **User actions needed:**
 - Create the self-signed signing cert (M0).
-- Create the Cloudflare service token (M1).
-- Install a DCGM or node exporter on the ZGX (M5).
+- Create the Cloudflare service token (M1, now last).
+- Optionally enable sparkDash Prometheus/history in its Settings (M5). The DCGM/node exporter is no longer needed.
 - Optionally set `cleanupPeriodDays` in `~/.claude/settings.json` to keep transcripts longer.
 
 ## Verification

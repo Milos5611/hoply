@@ -6,6 +6,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var vllmName = ""
     public var claudeLimitsEnabled = false
     public var notificationsEnabled = true
+    /// Models whose name contains one of these (case-insensitive) run locally: $0 cost, API-equivalent at `referenceModel`.
+    public var localModelPatterns = PricingTable.defaultLocalModelPatterns
+    public var referenceModel = PricingTable.defaultReferenceModel
+    /// Claude Code's config directory; empty means `~/.claude`.
+    public var claudeConfigDir = ""
 
     public init() {}
 
@@ -19,6 +24,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         vllmName = container.lenient(String.self, .vllmName) ?? defaults.vllmName
         claudeLimitsEnabled = container.lenient(Bool.self, .claudeLimitsEnabled) ?? defaults.claudeLimitsEnabled
         notificationsEnabled = container.lenient(Bool.self, .notificationsEnabled) ?? defaults.notificationsEnabled
+        localModelPatterns = container.lenient([String].self, .localModelPatterns) ?? defaults.localModelPatterns
+        referenceModel = container.lenient(String.self, .referenceModel) ?? defaults.referenceModel
+        claudeConfigDir = container.lenient(String.self, .claudeConfigDir) ?? defaults.claudeConfigDir
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

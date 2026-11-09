@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 enum Format {
@@ -5,7 +6,8 @@ enum Format {
         switch count {
         case ..<1_000: return "\(count)"
         case ..<1_000_000: return String(format: "%.1fk", Double(count) / 1_000)
-        default: return String(format: "%.1fM", Double(count) / 1_000_000)
+        case ..<1_000_000_000: return String(format: "%.1fM", Double(count) / 1_000_000)
+        default: return String(format: "%.2fB", Double(count) / 1_000_000_000)
         }
     }
 
@@ -15,7 +17,41 @@ enum Format {
     }
 
     static func cost(_ usd: Double) -> String {
-        usd >= 1 ? String(format: "$%.2f", usd) : String(format: "$%.3f", usd)
+        switch usd {
+        case ..<0.000_5: return "$0"
+        case ..<0.01: return "<$0.01"
+        case ..<1_000: return String(format: "$%.2f", usd)
+        default: return "$" + count(Int(usd.rounded()))
+        }
+    }
+
+    /// Grouped like the rest of the app's figures ("1,234"), whatever the system locale, so it never reads
+    /// as a decimal next to "$7.59" or "3.1M".
+    static func count(_ value: Int) -> String {
+        value.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
+    }
+
+    /// API-equivalent dollars from the ledger. A call with no known price must never read as $0.
+    static func spend(_ totals: LedgerTotals) -> String {
+        guard totals.hasUnpriced else { return cost(totals.apiEquivUSD) }
+        return totals.apiEquivUSD > 0 ? cost(totals.apiEquivUSD) + "+" : "unpriced"
+    }
+
+    static func model(_ id: String) -> String {
+        guard !id.isEmpty else { return "Unknown model" }
+        var name = id.split(separator: "/").last.map(String.init) ?? id
+        if name.hasPrefix("anthropic.") { name.removeFirst("anthropic.".count) }
+        if name.hasPrefix("claude-") { name.removeFirst("claude-".count) }
+        if let range = name.range(of: #"-\d{8}$"#, options: .regularExpression) { name.removeSubrange(range) }
+        return name
+    }
+
+    static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+    }
+
+    static func percent(_ fraction: Double) -> String {
+        "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
     /// "now", "42s", "12m", "3h", "2d"
@@ -30,6 +66,13 @@ enum Format {
         }
     }
 
+    static func duration(from start: Date, to end: Date) -> String {
+        let minutes = max(0, Int(end.timeIntervalSince(start) / 60))
+        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 24 * 60 { return "\(minutes / 60)h \(minutes % 60)m" }
+        return "\(minutes / (24 * 60))d \(minutes / 60 % 24)h"
+    }
+
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.setLocalizedDateFormatFromTemplate("jmm")
@@ -42,9 +85,43 @@ enum Format {
         return formatter
     }()
 
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("EEE MMM d")
+        return formatter
+    }()
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMM d jmm")
+        return formatter
+    }()
+
     static func resetTime(_ date: Date?) -> String {
         guard let date else { return "" }
         let formatter = date.timeIntervalSinceNow < 20 * 3_600 ? timeFormatter : dayTimeFormatter
         return "Resets \(formatter.string(from: date))"
+    }
+
+    static func day(_ date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+
+    private static let shortDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        return formatter
+    }()
+
+    /// Time only for today, otherwise the date.
+    static func shortWhen(_ date: Date, now: Date = Date()) -> String {
+        Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
+                                                        : shortDayFormatter.string(from: date)
+    }
+
+    /// Time only for today, otherwise date and time.
+    static func when(_ date: Date, now: Date = Date()) -> String {
+        Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
+                                                        : dateTimeFormatter.string(from: date)
     }
 }

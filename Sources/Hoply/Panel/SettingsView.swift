@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var draft = AppSettings()
     @State private var portText = ""
+    @State private var patternsText = ""
     @State private var loaded = false
 
     var body: some View {
@@ -36,6 +37,9 @@ struct SettingsView: View {
                         Hint("The base URL of the model server (vLLM or tensorfold), e.g. http://192.168.1.20:8000. Hoply reads <url>/metrics every 5 seconds.")
                     }
                 }
+
+                HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
+                                claudeConfigDir: $draft.claudeConfigDir)
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -79,6 +83,7 @@ struct SettingsView: View {
             guard !loaded else { return }
             draft = model.settings
             portText = String(model.settings.port)
+            patternsText = model.settings.localModelPatterns.joined(separator: ", ")
             loaded = true
         }
     }
@@ -90,6 +95,12 @@ struct SettingsView: View {
             updated.port = port
         }
         updated.vllmBaseURL = updated.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.localModelPatterns = patternsText.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let reference = updated.referenceModel.trimmingCharacters(in: .whitespaces)
+        updated.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference
+        updated.claudeConfigDir = updated.claudeConfigDir.trimmingCharacters(in: .whitespaces)
         model.apply(updated)
         model.showingSettings = false
     }
@@ -110,6 +121,82 @@ struct SwitchRow: View {
             Spacer()
             Toggle(label, isOn: $isOn)
                 .labelsHidden()
+        }
+    }
+}
+
+struct HistorySettings: View {
+    @Environment(AppModel.self) private var model
+    @Binding var patternsText: String
+    @Binding var referenceModel: String
+    @Binding var claudeConfigDir: String
+
+    var body: some View {
+        let history = model.history
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionTitle("History")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle()
+                        .fill(statusColor(history))
+                        .frame(width: 7, height: 7)
+                    Text(statusText(history))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Reindex") { model.history.reindex() }
+                        .buttonStyle(.bordered)
+                        .disabled(!history.isReady || history.progress.isBackfilling)
+                        .help("Re-read every Claude Code transcript. History is never deleted.")
+                }
+                if history.progress.isBackfilling {
+                    ProgressView(value: history.progress.fraction)
+                        .progressViewStyle(.linear)
+                }
+                if let error = history.progress.lastError ?? history.note {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                LabeledRow("Local models") {
+                    TextField("qwen, llama", text: $patternsText)
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledRow("Priced as") {
+                    TextField(PricingTable.defaultReferenceModel, text: $referenceModel)
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledRow("Claude dir") {
+                    TextField("~/.claude", text: $claudeConfigDir)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Hint("Usage comes from Claude Code's transcripts. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads every transcript without deleting history.")
+            }
+        }
+    }
+
+    private func statusText(_ history: History) -> String {
+        switch history.status {
+        case .off, .opening:
+            return "Opening the usage ledger…"
+        case .unavailable(let reason):
+            return reason
+        case .ready:
+            let progress = history.progress
+            if progress.isBackfilling {
+                return "Indexing \(progress.filesDone) of \(progress.filesTotal) transcripts · \(Format.percent(progress.fraction))"
+            }
+            return progress.filesTotal > 0 ? "Up to date · indexed \(progress.filesTotal) transcripts" : "Up to date"
+        }
+    }
+
+    private func statusColor(_ history: History) -> Color {
+        switch history.status {
+        case .off, .opening: return .secondary
+        case .unavailable: return .red
+        case .ready: return history.progress.isBackfilling ? .orange : .green
         }
     }
 }

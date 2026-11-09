@@ -171,28 +171,8 @@ struct WidgetStrip: View {
         HStack(alignment: .top, spacing: 10) {
             ClaudeLimitsWidget()
             LocalModelWidget()
-            UsageWidget()
+            TodayWidget()
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-struct UsageWidget: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        WidgetTile(title: "Live usage", symbol: "chart.bar.fill", tint: .blue, footer: footer) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(Format.tokens(model.liveTokens))
-                    .font(.system(size: 24, weight: .semibold).monospacedDigit())
-                    .lineLimit(1)
-                StackedBar(segments: model.tokensBySource.map { ($0.tokens, SourceBadge.color(for: $0.source)) })
-                    .frame(height: 6)
-            }
-        }
-    }
-
-    private var footer: String {
-        model.liveCost > 0 ? "tokens · \(Format.cost(model.liveCost))" : "tokens in open sessions"
     }
 }

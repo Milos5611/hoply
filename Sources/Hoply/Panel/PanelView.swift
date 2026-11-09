@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 
 struct PanelView: View {
@@ -31,6 +32,9 @@ struct PanelHeader: View {
             Text("Hoply")
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
+            HeaderIconButton(symbol: "macwindow", help: "Open Dashboard") {
+                model.openDashboard()
+            }
             HeaderIconButton(symbol: model.settings.notificationsEnabled ? "bell" : "bell.slash",
                              help: model.settings.notificationsEnabled ? "Pause notifications" : "Resume notifications") {
                 model.toggleNotifications()
@@ -77,6 +81,9 @@ struct PanelFooter: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
+            if model.history.progress.isBackfilling {
+                BackfillIndicator(progress: model.history.progress)
+            }
             Button {
                 model.quit()
             } label: {
@@ -105,5 +112,22 @@ struct PanelFooter: View {
         case .failed: return .red
         case .stopped: return .secondary
         }
+    }
+}
+
+struct BackfillIndicator: View {
+    let progress: IngestProgress
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ProgressView(value: progress.fraction)
+                .progressViewStyle(.circular)
+                .controlSize(.mini)
+            Text("Indexing history \(Format.percent(progress.fraction))")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help("Reading Claude Code transcripts: \(progress.filesDone) of \(progress.filesTotal) files, "
+              + "\(Format.bytes(progress.bytesDone)) of \(Format.bytes(progress.bytesTotal))")
     }
 }

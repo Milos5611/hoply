@@ -32,10 +32,11 @@ struct SessionRow: View {
                 if session.state.needsAttention {
                     StatePill(state: session.state)
                 }
-                if session.totalTokens > 0 {
+                if let usage {
                     Text(usage)
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .help(usageHelp)
                 }
             }
         }
@@ -94,9 +95,20 @@ struct SessionRow: View {
         }
     }
 
-    private var usage: String {
+    /// Ledger totals when the session has any (the same numbers as the Dashboard); otherwise the live
+    /// telemetry counts, for sources whose usage isn't in the ledger yet.
+    private var usage: String? {
+        if let totals = model.ledgerTotals(for: session.key) {
+            return "\(Format.tokens(totals.tokens.total)) tok · \(Format.spend(totals))"
+        }
+        guard session.totalTokens > 0 else { return nil }
         var text = "\(Format.tokens(session.totalTokens)) tok"
         if session.costUSD > 0 { text += " · \(Format.cost(session.costUSD))" }
         return text
+    }
+
+    private var usageHelp: String {
+        model.ledgerTotals(for: session.key) == nil ? "Live telemetry for this session"
+                                                    : "API-equivalent cost from the usage ledger"
     }
 }

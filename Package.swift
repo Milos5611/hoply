@@ -44,7 +44,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AgentSystemTests",
-            dependencies: ["AgentSystem"]
+            dependencies: ["AgentKit", "AgentSystem"]
         ),
     ]
 )

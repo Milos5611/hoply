@@ -23,11 +23,13 @@ otlp_log() { # service, session, event name, extra attributes JSON (array items)
 }
 
 CLAUDE_CWD="$HOME/Project/fiba"
+# Real Claude Code hooks always send transcript_path; this one doesn't exist, so the ledger ignores it.
+CLAUDE_TRANSCRIPT="${TMPDIR:-/tmp}/hoply-sim/sim-claude.jsonl"
 COPILOT_CWD="$HOME/Project/yasm-backend"
 
-post /hooks/claude-code "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"source\":\"startup\",\"model\":\"claude-opus-5\"}"
-post /hooks/claude-code "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"prompt\":\"Refactor the auth middleware to use refresh tokens\"}"
-post /hooks/claude-code "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}}"
+post /hooks/claude-code "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"source\":\"startup\",\"model\":\"claude-opus-5\"}"
+post /hooks/claude-code "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"prompt\":\"Refactor the auth middleware to use refresh tokens\"}"
+post /hooks/claude-code "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}}"
 post /v1/logs "$(otlp_log claude-code sim-claude api_request ',{"key":"model","value":{"stringValue":"claude-opus-5"}},{"key":"input_tokens","value":{"intValue":"5200"}},{"key":"output_tokens","value":{"intValue":"830"}},{"key":"cache_read_tokens","value":{"intValue":"48000"}},{"key":"cost_usd","value":{"doubleValue":0.21}}')"
 step "Claude Code is working (Bash)"
 
@@ -39,13 +41,13 @@ post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.user_prompt ',{"key":"pro
 post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.api_response ',{"key":"model","value":{"stringValue":"qwen3-coder"}},{"key":"input_token_count","value":{"intValue":"2400"}},{"key":"output_token_count","value":{"intValue":"610"}}')"
 step "Qwen Code is working (goes idle after ~45 s of silence)"
 
-post /hooks/claude-code "{\"hook_event_name\":\"Notification\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\"}"
+post /hooks/claude-code "{\"hook_event_name\":\"Notification\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\"}"
 step "Claude Code needs permission"
 
 post /hooks/copilot-cli/agentStop "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"stopReason\":\"end_turn\"}"
 step "Copilot CLI finished its turn"
 
-post /hooks/claude-code "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"tool_name\":\"Bash\"}"
-post /hooks/claude-code "{\"hook_event_name\":\"Stop\",\"session_id\":\"sim-claude\",\"cwd\":\"$CLAUDE_CWD\",\"last_assistant_message\":\"Middleware now refreshes tokens; all 214 tests pass.\"}"
+post /hooks/claude-code "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"tool_name\":\"Bash\"}"
+post /hooks/claude-code "{\"hook_event_name\":\"Stop\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"last_assistant_message\":\"Middleware now refreshes tokens; all 214 tests pass.\"}"
 echo "→ Claude Code finished its turn"
 echo "Done. Right-click a row → Dismiss to clear the demo sessions."
