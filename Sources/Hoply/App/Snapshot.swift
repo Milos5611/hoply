@@ -26,9 +26,18 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_880),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_080),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
+                for (state, statuses, notices) in [("update", PreviewData.connectionsToUpdate, [:]),
+                                                   ("unreadable", PreviewData.connectionsUnreadable,
+                                                    PreviewData.connectionFailure)] {
+                    model.connections.show(statuses: statuses, notices: notices)
+                    try render(AgentSettings().controlSize(.small).font(.system(size: 12.5)).padding(12).frame(width: 448),
+                               model: model, appearance: looks, surface: popover,
+                               to: directory.appendingPathComponent("panel-settings-agents-\(state)-\(name).png"))
+                }
+                model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
                 model.history.show(allPriced)
@@ -199,6 +208,14 @@ enum Snapshot {
                 approving.showPreview(approvals: PreviewData.approvals(now: now), events: PreviewData.approvalEvents(now: now))
                 try render(PanelView(), model: approving, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-approval-\(name).png"))
+                try render(PanelView(), model: AppModel.firstRunPreview(), appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-agents-connect-\(name).png"))
+                let outdated = AppModel.preview(now: now)
+                outdated.connections.show(statuses: PreviewData.connectionsToUpdate)
+                try render(VStack(spacing: 0) { PanelHeader(); PanelSections().padding(.horizontal, 12); PanelFooter() }
+                               .frame(width: 448),
+                           model: outdated, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-agents-update-\(name).png"))
                 try render(VStack(spacing: 6) {
                     TooltipBubble(text: "Resume this session in Terminal")
                     HStack(spacing: 8) {

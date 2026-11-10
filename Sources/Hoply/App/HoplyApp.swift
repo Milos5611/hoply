@@ -1,9 +1,18 @@
+import AgentKit
+import AgentSystem
 import AppKit
 import SwiftUI
 
 @main
 struct HoplyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    init() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if ConnectCommand.isRequested(arguments) {
+            exit(ConnectCommand.run(arguments: arguments, settings: AppSettings.load()))
+        }
+    }
 
     var body: some Scene {
         Settings { EmptyView() }

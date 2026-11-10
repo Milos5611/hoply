@@ -31,7 +31,7 @@ You implement changes in Hoply's non-UI code. `CLAUDE.md` is authoritative; for 
   its transcripts after ~30 days, so the DB is the only long-term history.
 - `~/.claude/` and `~/.copilot/` are read-only to Hoply. Open Copilot's DB with `mode=ro`, never `immutable=1`.
 - Fixtures come from real payloads stripped to the keys the test needs — no prompt or response text, no tokens.
-- Route, hook-event, or port changes must update `scripts/install.sh`, `scripts/simulate.sh`, `README.md` and
+- Route, hook-event, or port changes must update `Sources/AgentKit/Connect/`, `scripts/simulate.sh`, `README.md` and
   `CLAUDE.md` in the same change.
 - Comments: default to none. No `///` doc comments on types, properties, enum cases or functions, and nothing that says what code is or does. Write one only where a reader would otherwise "simplify" the code into a bug (a format quirk, a workaround, an ordering invariant), one or two lines. Before reporting, re-read the comments you added (`git diff -U0 | grep -E '^\+\s*//'`) and remove the rest.
 

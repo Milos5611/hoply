@@ -13,6 +13,8 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                AgentSettings()
+
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Listener")
@@ -26,7 +28,7 @@ struct SettingsView: View {
                             .frame(width: 90)
                             Spacer(minLength: 0)
                         }
-                        Hint("Agents send hooks and OpenTelemetry to http://127.0.0.1:<port>. The setup scripts default to 4318.")
+                        Hint("Agents send hooks and OpenTelemetry to http://127.0.0.1:<port>, 4318 by default. After a port change, connected agents ask for Update under Agents.")
                     }
                 }
 
@@ -84,6 +86,7 @@ struct SettingsView: View {
             .padding(.bottom, 12)
         }
         .onAppear {
+            model.connections.refresh()
             model.refreshLaunchAtLogin()
             model.refreshEditors()
             model.history.loadPricing()
@@ -352,7 +355,7 @@ struct NotificationSettings: View {
                 .disabled(!settings.notificationsEnabled)
                 Divider()
                 SwitchRow("Approve Claude Code prompts from Hoply", isOn: $settings.approveFromHoply)
-                Hint("Adds Allow and Deny for Claude Code's permission prompts to the panel and its notifications, for that one request. The terminal prompt stays up; whichever answers first wins. Needs the hooks from scripts/install.sh: run it again once.")
+                Hint("Adds Allow and Deny for Claude Code's permission prompts to the panel and its notifications, for that one request. The terminal prompt stays up; whichever answers first wins. Needs Claude Code connected under Agents; press Update there if it asks.")
                 Divider()
                 Text("Muted projects")
                 if settings.mutedProjectRoots.isEmpty {

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/sessionStart || true"
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/userPromptSubmitted || true"
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/preToolUse || true"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/postToolUse || true"
+      }
+    ],
+    "permissionRequest": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/permissionRequest || true"
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/notification || true"
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/agentStop || true"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/sessionEnd || true"
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/errorOccurred || true"
+      }
+    ]
+  }
+}

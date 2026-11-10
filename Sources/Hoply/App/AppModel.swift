@@ -30,6 +30,7 @@ final class AppModel {
     let palette: Palette
     let hotKey: HotKey
     let projectEdits: ProjectEdits
+    let connections: AgentConnections
     @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
@@ -84,10 +85,12 @@ final class AppModel {
         palette = Palette(live: live)
         hotKey = HotKey(live: live)
         projectEdits = ProjectEdits(history: history)
+        connections = AgentConnections(live: live)
         guard live else {
             settings = AppSettings()
             palette.model = self
             modelServers.settings = { [weak self] in self?.settings ?? AppSettings() }
+            connections.settings = { [weak self] in self?.settings ?? AppSettings() }
             return
         }
         settings = AppSettings.load()
@@ -132,6 +135,8 @@ final class AppModel {
         history.open(LedgerConfiguration(settings: settings))
         ResumeLauncher.prune()
         modelServers.settings = { [weak self] in self?.settings ?? AppSettings() }
+        connections.settings = { [weak self] in self?.settings ?? AppSettings() }
+        connections.refresh()
         modelServers.onChecked = { [weak self] server, availability, now in
             guard let self else { return }
             perform(policy.modelServerChecked(server, availability, now: now))
@@ -433,6 +438,7 @@ final class AppModel {
     func setPanelOnScreen(_ visible: Bool) {
         panelOnScreen = visible
         watchChanged(cameOnScreen: visible)
+        if visible { connections.refresh() }
     }
 
     func setDashboardOnScreen(_ visible: Bool) {
@@ -532,6 +538,10 @@ final class AppModel {
         if updated.notificationsEnabled && !old.notificationsEnabled {
             notifier.requestAuthorization()
         }
+        if updated.port != old.port || updated.claudeConfigDir != old.claudeConfigDir
+            || updated.copilotHome != old.copilotHome {
+            connections.settingsChanged()
+        }
         if updated.claudeConfigDir != old.claudeConfigDir || updated.copilotHome != old.copilotHome {
             unresolvedCwds = []
             history.reopen(LedgerConfiguration(settings: updated))
@@ -605,6 +615,14 @@ extension AppModel {
         model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
                            log: PreviewData.cleanupLog(now: now))
         model.projectEdits.show(PreviewData.projectEdits(now: now))
+        model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
+        return model
+    }
+
+    static func firstRunPreview() -> AppModel {
+        let model = AppModel(live: false)
+        model.serverStatus = .listening(UInt16(clamping: model.settings.port))
+        model.connections.show(statuses: PreviewData.connectionsNone)
         return model
     }
 

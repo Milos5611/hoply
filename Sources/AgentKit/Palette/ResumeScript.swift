@@ -59,7 +59,8 @@ public enum ResumeScript {
     private static func arguments(for source: AgentSource, sessionID: String) -> [String]? {
         switch source {
         case .claudeCode: return ["claude", "--resume", sessionID]
-        case .copilotCLI: return ["copilot", "--resume", sessionID]
+        // `--resume[=value]` takes an optional value; a separate argument is not read as the id.
+        case .copilotCLI: return ["copilot", "--resume=\(sessionID)"]
         case .qwenCode: return ["qwen", "--resume", sessionID]
         case .copilotIDE: return nil
         }

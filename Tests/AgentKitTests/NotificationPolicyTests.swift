@@ -270,7 +270,12 @@ final class NotificationPolicyTests: XCTestCase {
     private let server = "http://192.168.40.141:8888"
 
     private func check(_ online: Bool, at seconds: TimeInterval, server: String? = nil) -> NotificationActions {
-        policy.localModelChecked(server: server ?? self.server, name: "ZGX", online: online, now: at(seconds))
+        legacy(server ?? self.server, name: "ZGX", online, now: at(seconds))
+    }
+
+    private func legacy(_ url: String, name: String = "", _ online: Bool, now: Date) -> NotificationActions {
+        policy.modelServerChecked(ModelServer(id: ModelServer.legacyID, name: name, baseURL: url),
+                                  online ? .online : .offline, now: now)
     }
 
     /// Polls every 5 s over `seconds`, as the app does, and returns every action in order.
@@ -317,8 +322,8 @@ final class NotificationPolicyTests: XCTestCase {
     }
 
     func testNoServerOrANewServerNeverAlertsUntilSeenOnline() {
-        XCTAssertTrue(policy.localModelChecked(server: nil, online: true, now: at(0)).isEmpty)
-        XCTAssertTrue(policy.localModelChecked(server: "  ", online: false, now: at(600)).isEmpty)
+        XCTAssertTrue(legacy("", true, now: at(0)).isEmpty)
+        XCTAssertTrue(legacy("  ", false, now: at(600)).isEmpty)
 
         _ = check(true, at: 0)
         XCTAssertTrue(check(false, at: 5, server: "http://10.0.0.9:8000").isEmpty)
@@ -326,14 +331,14 @@ final class NotificationPolicyTests: XCTestCase {
 
         _ = check(true, at: 1000)
         XCTAssertEqual(poll(false, 1005...1200).map(\.post.count), [1])
-        XCTAssertEqual(policy.localModelChecked(server: "", online: false, now: at(1205)).withdraw,
+        XCTAssertEqual(legacy("", false, now: at(1205)).withdraw,
                        [NotificationPolicy.localModelOfflineID], "clearing the URL removes the alert")
     }
 
     func testOfflineAlertHeldByQuietHoursPostsWhenTheyEnd() {
         policy.preferences.quietHours = QuietHours(start: 22 * 60, end: 8 * 60)
         func poll(_ online: Bool, _ date: Date) -> NotificationActions {
-            policy.localModelChecked(server: server, online: online, now: date)
+            legacy(server, online, now: date)
         }
         XCTAssertTrue(poll(true, local(hour: 21, minute: 50)).isEmpty)
         let down = local(hour: 21, minute: 59)

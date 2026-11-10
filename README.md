@@ -29,15 +29,15 @@ Your chat UI talks to vLLM directly, so its activity shows up in the vLLM card.
 Requires macOS 26+ and Xcode 26+ (Swift 6.2 toolchain).
 
 ```bash
-scripts/install.sh              # build Hoply.app into ~/Applications, open it, connect Claude Code + Copilot CLI
+scripts/install.sh              # build Hoply.app into ~/Applications, connect Claude Code + Copilot CLI, open it
 scripts/install.sh --uninstall  # disconnect the agents again
 ```
 
-That's all. `install.sh` connects whichever of Claude Code and Copilot CLI it finds:
+That's all. `install.sh` connects whichever of Claude Code and Copilot CLI it finds (it runs `Hoply --connect`; no `jq` needed):
 - **Claude Code:** hooks and OTel log export, written to `~/.claude/settings.json` (backed up first). Restart running sessions afterwards.
 - **Copilot CLI:** hooks in `~/.copilot/hooks/hoply.json`.
 
-Re-running it is safe. Set `HOPLY_PORT` if you change the port in the app.
+Re-running it is safe. Installed from the DMG instead? Settings → Agents connects, updates and disconnects the same hooks; it also says when they need an update, for example after you change the port.
 
 By default the app is signed ad-hoc, which gives every build a new identity, so macOS asks again for Keychain and other permissions after each install. To avoid that, create a self-signed code-signing certificate once: Keychain Access → Certificate Assistant → Create a Certificate…, name it `Hoply Dev`, Identity Type "Self Signed Root", Certificate Type "Code Signing". Then install with `HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh`.
 
@@ -65,7 +65,7 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"t1","cwd":"'$PWD'","pr
 
 The installed hooks also send `X-Hoply-Pid: $PPID` (the agent's process id), which ties a session to the dev servers it started. Hoply uses it only after checking that the process is yours, was running before the hook fired and is the agent (or a shell under it).
 
-The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in settings and re-run `HOPLY_PORT=<port> scripts/install.sh`).
+The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in Settings, then press Update in Settings → Agents).
 
 **Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`. Its OTel is its only history, so Hoply stores it. To file the usage under the right project, optionally start Qwen with `OTEL_RESOURCE_ATTRIBUTES=hoply.cwd=$PWD`; without it Hoply asks Qwen's process (`process.pid`) for its working directory, and usage it can't place shows as "Unassigned".
 
@@ -132,7 +132,7 @@ Files go to the Trash, so Finder's Put Back works.
 
 ## Approve from Hoply
 
-Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by default) adds Allow and Deny to a Claude Code session's permission prompt, in the panel and on its notification. It needs the `PermissionRequest` hook from a current `scripts/install.sh`, so run that once after updating.
+Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by default) adds Allow and Deny to a Claude Code session's permission prompt, in the panel and on its notification. It needs Hoply's current `PermissionRequest` hook: if Settings → Agents shows Claude Code as needing an update, press Update once.
 
 - Hoply holds the hook's reply until you click, for at most 9½ minutes. Allow answers that one request (no rule is saved); Deny tells Claude you declined and lets it carry on.
 - The terminal prompt stays up the whole time, and whichever answers first wins. If you answer in the terminal, the buttons go away once Claude Code moves on or cancels the hook.
@@ -163,7 +163,7 @@ One-time setup:
 
 Release: `git tag v0.1.0 && git push origin v0.1.0`. The tag sets the version (`CFBundleShortVersionString`); the build number is the commit count. To build the same DMG locally: `HOPLY_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… scripts/package.sh`.
 
-A tester installs from the DMG, but the agents still need connecting: today that is `scripts/install.sh` from a checkout.
+A tester installs from the DMG and connects their agents in Settings → Agents.
 
 ## Known gaps
 

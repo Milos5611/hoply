@@ -4,26 +4,33 @@ description: "Hoply v3 plan — ship it (Developer ID DMG, in-app Connect, Spark
 metadata:
   node_type: memory
   type: project
-  modified: 2026-11-10T17:00:00.000Z
+  modified: 2026-11-10T17:57:34.902Z
+  originSessionId: 0061c9ef-f9fa-450e-b275-f8fe8c24f267
 ---
 
 # Hoply v3: what has to be done
 
-Status (2026-11-10): **v2 is built and its plan is retired.** Committed up to `99dfa53`. Uncommitted in the working tree, all built and tested (AgentKitTests 353, AgentSystemTests 146, 3 opt-in skipped, green): "Approve from Hoply", the v2 dead-code removal, `.claude/worktrees/` untracked and ignored, the app icon (`Sources/Hoply/Hoply.icon`) and menu bar mark (`HoplyMark`, also the Dock icon under `swift run`), instant tooltips (`.tooltip`), Settings that save immediately (`CommitField`), and the release pipeline (`scripts/build-app.sh`, `scripts/package.sh`, `.github/workflows/release.yml`). **Nothing below is built yet** except where a line says so. The user joined the Apple Developer Program on 2026-11-10. Update this line as things land.
+Status (2026-11-10): **v2 is built and its plan is retired.** Everything up to the release pipeline is committed (`7cd9eb6`). M0 started: its code items are done and uncommitted (tests green: AgentKitTests 353, AgentSystemTests 146, 3 opt-in skipped); its live checks are with the user. **Nothing from M1 on is built yet** except where a line says so. The user joined the Apple Developer Program on 2026-11-10. Update this line as things land.
 
 Suggested order: M0 alongside everything, then M1 → M2 → M3 (testers can install and get updates), then M4.
 
 ## M0. Live checks carried over from v2 (user)
 
-- **Approve from Hoply:** that the terminal prompt stays answerable while the hook is held (the docs imply it, they don't say it); whether Claude Code kills the hook when the prompt is answered in the terminal (Hoply copes either way); that Deny works, since its JSON shape is inferred from the docs' field table (they only show an allow example). Needs the new PermissionRequest hook from `scripts/install.sh`.
+The user agreed to all of M0 (2026-11-10).
+
+- **Approve from Hoply:** that the terminal prompt stays answerable while the hook is held (the docs imply it, they don't say it); whether Claude Code kills the hook when the prompt is answered in the terminal (Hoply copes either way); that Deny works, since its JSON shape is inferred from the docs' field table (they only show an allow example). Needs the new PermissionRequest hook from `scripts/install.sh`: on 2026-11-10 the installed hooks in `~/.claude/settings.json` were older and had no `X-Hoply-Approve` command, so `install.sh` has to run again first.
 - **Model servers:** only vLLM and tensorfold rest on real captures. llama.cpp, SGLang and TGI metric names, the Ollama and LM Studio shapes, and Cloudflare Access responses are from memory (fixtures marked synthetic).
-- **Deferred items:** `X-Hoply-Pid` validation on a real hook; Resume for Copilot CLI (`copilot --resume <id>`) and Qwen Code (`qwen --resume <id>`), neither run here; the Qwen `user_prompt` log shape (no fixture).
+- **Deferred items:** `X-Hoply-Pid` validation on a real hook; Resume for Copilot CLI and Qwen Code (`qwen --resume <id>`), neither run here; the Qwen `user_prompt` log shape (no fixture). Copilot CLI 1.0.83's `--help` lists `-r, --resume[=value]` (an optional value), so `ResumeScript` now passes `--resume=<id>` as one argument (done 2026-11-10); `--session-id <id>` also exists but starts a new session when the id is unknown. Qwen Code is not installed on the user's Mac, so its two checks need it installed first.
 - **This session's UI:** menu bar mark size next to the system icons (14 pt glyph; tweak `insetBy` in `HoplyMark.statusBarImage` if off); app icon in Finder, Dock and notifications after `install.sh`; instant tooltips above the popover and in the Dashboard; Settings text fields saving on Return, leaving the field, and closing Settings or the panel.
-- **Small decisions:** delete `NotificationPolicy.localModelChecked` (only tests call it)? The old sparkDash Keychain item (`com.coolcraftcoders.hoply.sparkdash`) stays until deleted by hand.
+- **Small decisions:** `NotificationPolicy.localModelChecked` is deleted; its tests call `modelServerChecked` with the `default` server (done 2026-11-10). The old sparkDash Keychain item (`com.coolcraftcoders.hoply.sparkdash`) stays until the user deletes it by hand.
 
 ## M1. Connect agents from the app (Settings → Agents)
 
-Why: someone who installs the DMG has no checkout, so `scripts/install.sh` can't connect their agents. Agreed design, not built:
+Why: someone who installs the DMG has no checkout, so `scripts/install.sh` can't connect their agents. The user agreed to the design on 2026-11-10.
+
+Status: **core built** (2026-11-10, uncommitted; AgentKitTests 369, AgentSystemTests 162): AgentKit `Connect/`, AgentSystem `AgentConnector` + `ConnectCommand`, the CLI in `HoplyApp.init()`, `install.sh` without jq (output checked against the old jq code on scratch copies: Copilot file byte-identical, Claude settings same content). CLAUDE.md and README updated. Deviations: a hand-written sorted-key JSON writer instead of `JSONSerialization` (which prints `0.1` as `0.10000000000000001`); the CLI also reads the app's saved folders (env, then setting, then default); disconnect also strips an old port's env. Known gap: `ClaudeTranscriptIngester.defaultConfigDirectory` ignores `$CLAUDE_CONFIG_DIR`, the connector honours it, so with that variable set the ledger and the connector can point at different folders. **UI built** (2026-11-10, uncommitted): `Models/AgentConnections`, `Panel/AgentSettings` (first Settings card), `AgentNudgeCard` below "Waiting on you", install.sh hints replaced, snapshot variants. Its nudge dismissal survives relaunch (UserDefaults `HoplyAgentsNudgeDismissed`, reset by any status change); the user may prefer in-memory. **Left for the user:** click Connect / Update / Disconnect in the real app (never clicked against real files; the core has tests) and check that the bundle binary's `--connect` shows no Dock icon flash. Then M1 is done.
+
+The design as agreed:
 
 - **One implementation, in Swift.** Pure parts in AgentKit (`Connect/`): the event lists, the two Claude Code hook commands (generic: `curl -s -m 2 -o /dev/null …`, timeout 5; PermissionRequest: `curl -sf -m 590 -H 'X-Hoply-Approve: 1' …`, timeout 600), the OTel log env, the Copilot CLI hooks file, and a status per agent: connected / outdated (port or commands changed) / not connected. File I/O in AgentSystem (`AgentConnector`): back up `settings.json` first, refuse invalid JSON, write atomically, keep the user's own hooks and env, Copilot disconnect renames `hooks/hoply.json` instead of deleting it.
 - **CLI mode** `Hoply --connect claude-code copilot-cli` / `--disconnect …`, handled before the UI starts (like `--snapshot`). `install.sh` calls it instead of its jq code, so jq is no longer needed and the script and app can't drift. It honours `CLAUDE_CONFIG_DIR`, `COPILOT_HOME`, `HOPLY_PORT`.
@@ -66,7 +73,7 @@ The user wants Hoply to cover all mainstream model providers, not only Claude Co
 ## Housekeeping
 
 - The user commits the working tree; nothing is committed on their behalf.
-- Leftover worktrees: `.claude/worktrees/agent-ae5029c65b9cf6982` (empty, prunable) and `.claude/worktrees/agent-ae80e243b6a721af3`, with branches `worktree-agent-ae5029c65b9cf6982` and `worktree-agent-ae80e243b6a721af3`. The user removes them (`git worktree remove --force …`, `git worktree prune`, `git branch -D …`).
+- The leftover agent worktrees and their branches are gone (checked 2026-11-10: only `main` is left).
 - Optional: rename `Sources/AgentKit/VLLM.swift` (now only the Prometheus parser) to `PrometheusParser.swift`.
 - Out of scope: WidgetKit widgets (SwiftPM can't build the extension target).
 - Left as is by decision (v2): the 2-minute per-session notification cooldown survives a withdraw; model-server counters are summed over label sets; squash-merged worktree branches count as unmerged and are kept; model servers leave out self-signed TLS trust, mDNS discovery, per-server poll intervals and pruning orphaned Keychain items.

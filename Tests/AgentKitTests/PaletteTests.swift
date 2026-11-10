@@ -261,16 +261,17 @@ final class ResumeScriptTests: XCTestCase {
     }
 
     func testCopilotCLIAndQwenScripts() throws {
-        for (source, binary) in [(AgentSource.copilotCLI, "copilot"), (.qwenCode, "qwen")] {
+        for (source, binary, resume) in [(AgentSource.copilotCLI, "copilot", "'--resume=\(id)'"),
+                                         (.qwenCode, "qwen", "'--resume' '\(id)'")] {
             XCTAssertTrue(ResumeScript.isSupported(source))
             let script = try XCTUnwrap(ResumeScript.script(source: source, sessionID: id, cwd: "/Users/dev/My Project"))
             XCTAssertEqual(script, """
                 #!/bin/zsh
                 cd -- '/Users/dev/My Project' || { print -r -- "Hoply: cannot open" '/Users/dev/My Project'; exit 1; }
                 if command -v '\(binary)' >/dev/null 2>&1; then
-                  exec '\(binary)' '--resume' '\(id)'
+                  exec '\(binary)' \(resume)
                 fi
-                exec /bin/zsh -ilc 'exec "$0" "$@"' '\(binary)' '--resume' '\(id)'
+                exec /bin/zsh -ilc 'exec "$0" "$@"' '\(binary)' \(resume)
 
                 """)
             XCTAssertEqual(ResumeScript.fileName(source: source, sessionID: id),

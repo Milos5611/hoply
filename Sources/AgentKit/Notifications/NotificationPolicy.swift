@@ -339,15 +339,6 @@ public struct NotificationPolicy: Sendable {
         serverID == ModelServer.legacyID ? localModelOfflineID : localModelOfflineID + ":" + serverID
     }
 
-    public mutating func localModelChecked(server raw: String?, name: String? = nil, online: Bool,
-                                           now: Date = Date()) -> NotificationActions {
-        guard let url = Self.nonEmpty(raw?.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return forget(ModelServer.legacyID)
-        }
-        return modelServerChecked(ModelServer(id: ModelServer.legacyID, name: name ?? "", baseURL: url),
-                                  online ? .online : .offline, now: now)
-    }
-
     public mutating func modelServersChanged(_ servers: [ModelServer]) -> NotificationActions {
         let active = Dictionary(servers.filter(\.isActive).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var actions = NotificationActions()

@@ -26,6 +26,9 @@ struct PanelSections: View {
                 if !grouping.waiting.isEmpty {
                     WaitingCard(grouping: grouping)
                 }
+                if let nudge = model.connections.nudge {
+                    AgentNudgeCard(nudge: nudge)
+                }
                 ForEach(grouping.projects) { group in
                     ProjectCard(group: group, grouping: grouping)
                 }
@@ -223,13 +226,65 @@ struct EmptySessionsCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("No agent sessions yet")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Start Claude Code, Copilot or Qwen Code after running scripts/install.sh. Sessions appear here as they report in.")
+                    Text("Start Claude Code, Copilot or Qwen Code once they're connected in Settings → Agents. Sessions appear here as they report in.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+}
+
+struct AgentNudgeCard: View {
+    @Environment(AppModel.self) private var model
+    let nudge: AgentConnections.Nudge
+
+    var body: some View {
+        Card(tint: .blue) {
+            HStack(spacing: 10) {
+                IconTile(symbol: isUpdate ? "arrow.triangle.2.circlepath" : "link", tint: isUpdate ? .orange : .blue,
+                         size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isUpdate ? "Agent hooks need an update" : "Connect your agents")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(reason)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button(isUpdate ? "Update…" : "Connect…") { model.showingSettings = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .help("Open Settings → Agents")
+                Button { model.connections.dismissNudge() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .tooltip("Hide until an agent's connection changes")
+            }
+        }
+    }
+
+    private var isUpdate: Bool {
+        if case .update = nudge { return true }
+        return false
+    }
+
+    private var reason: String {
+        switch nudge {
+        case .connect(let agents):
+            return "Without Hoply's hooks, \(Self.names(agents)) sessions don't show up here."
+        case .update(let agents):
+            return "\(Self.names(agents)) \(agents.count == 1 ? "still reports" : "still report") to an old port or with older hooks."
+        }
+    }
+
+    private static func names(_ agents: [ConnectableAgent]) -> String {
+        agents.map(\.displayName).joined(separator: " and ")
     }
 }
 
