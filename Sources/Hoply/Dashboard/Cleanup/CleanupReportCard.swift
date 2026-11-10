@@ -17,7 +17,7 @@ struct CleanupReportCard: View {
                     Spacer(minLength: 8)
                     Button { model.cleanup.dismissReport() } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless)
-                        .help("Dismiss")
+                        .tooltip("Dismiss")
                 }
                 ForEach(report.removed) { item in
                     row(item, symbol: "checkmark", tint: .green)

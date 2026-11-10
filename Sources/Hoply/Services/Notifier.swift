@@ -32,7 +32,13 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
 /// so this is a no-op outside the bundled .app.
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onOpen: ((NotificationTarget) -> Void)?
+    var onDecision: ((String, ApprovalDecision) -> Void)?
     private var queue: Task<Void, Never>?
+
+    private nonisolated static let approvalCategory = "hoply.approval"
+    private nonisolated static let allowAction = "hoply.allow"
+    private nonisolated static let denyAction = "hoply.deny"
+    private nonisolated static let approvalKey = "approval"
 
     private var isAvailable: Bool {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
@@ -41,7 +47,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Must run before launch finishes, so a click that launched the app still reaches the delegate.
     func activate() {
         guard isAvailable else { return }
-        UNUserNotificationCenter.current().delegate = self
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [.authenticationRequired])
+        let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny", options: [.destructive])
+        center.setNotificationCategories([UNNotificationCategory(identifier: Self.approvalCategory,
+                                                                 actions: [allow, deny], intentIdentifiers: [])])
     }
 
     func requestAuthorization() {
@@ -51,7 +62,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func post(_ request: NotificationRequest) {
+    func post(_ request: NotificationRequest, approval: ApprovalRequest? = nil) {
         guard isAvailable else { return }
         let content = UNMutableNotificationContent()
         content.title = request.title
@@ -63,6 +74,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         if let session = request.session {
             userInfo[NotificationTarget.sourceKey] = session.source.rawValue
             userInfo[NotificationTarget.sessionKey] = session.id
+        }
+        if let approval {
+            content.categoryIdentifier = Self.approvalCategory
+            content.body = [approval.summary, request.body].filter { !$0.isEmpty }.joined(separator: "\n")
+            userInfo[Self.approvalKey] = approval.id
         }
         content.userInfo = userInfo
         let notification = UNNotificationRequest(identifier: request.id, content: content, trigger: nil)
@@ -98,8 +114,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let target = NotificationTarget(userInfo: response.notification.request.content.userInfo) else { return }
-        await MainActor.run { onOpen?(target) }
+        let userInfo = response.notification.request.content.userInfo
+        switch response.actionIdentifier {
+        case Self.allowAction, Self.denyAction:
+            guard let id = userInfo[Self.approvalKey] as? String else { return }
+            let decision: ApprovalDecision = response.actionIdentifier == Self.allowAction ? .allow : .deny
+            await MainActor.run { onDecision?(id, decision) }
+        case UNNotificationDefaultActionIdentifier:
+            guard let target = NotificationTarget(userInfo: userInfo) else { return }
+            await MainActor.run { onOpen?(target) }
+        default:
+            break
+        }
     }
 }

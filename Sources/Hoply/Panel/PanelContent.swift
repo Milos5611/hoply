@@ -179,7 +179,8 @@ struct ProjectCard: View {
                             Button { model.openInEditor(path) } label: {
                                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                             }
-                            .help("Open in \(editor.name)")
+                            .tooltip(model.editors.count > 1 ? "Open in \(editor.name) · right-click for other editors"
+                                                             : "Open in \(editor.name)")
                             .contextMenu {
                                 ForEach(model.editors) { other in
                                     Button("Open in \(other.name)") { model.openInEditor(path, editor: other) }
@@ -187,13 +188,13 @@ struct ProjectCard: View {
                             }
                         }
                         Button { WorkspaceActions.openInTerminal(path) } label: { Image(systemName: "apple.terminal") }
-                            .help("Open in Terminal")
+                            .tooltip("Open Terminal in this folder")
                         Button { WorkspaceActions.revealInFinder(path) } label: { Image(systemName: "folder") }
-                            .help("Reveal in Finder")
+                            .tooltip("Show in Finder")
                         Button { WorkspaceActions.copy(path) } label: { Image(systemName: "doc.on.doc") }
-                            .help("Copy path")
+                            .tooltip("Copy the folder's path")
                         Button { model.toggleMute(path) } label: { Image(systemName: muted ? "bell.slash" : "bell") }
-                            .help(muted ? "Unmute notifications" : "Mute notifications")
+                            .tooltip(muted ? "Unmute this project's notifications" : "Mute this project's notifications")
                     }
                     .buttonStyle(.tile)
                 }

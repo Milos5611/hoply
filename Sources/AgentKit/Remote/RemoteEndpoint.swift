@@ -73,8 +73,7 @@ public struct RemoteEndpoint: Sendable, Equatable {
         value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value < 0x7F }
     }
 
-    public func classify(_ response: URLResponse, body: Data,
-                         auth: ModelServerAuthKind = .bearer) -> Result<Data, RemoteError> {
+    public func classify(_ response: URLResponse, body: Data, auth: ModelServerAuthKind) -> Result<Data, RemoteError> {
         guard let http = response as? HTTPURLResponse else { return .failure(RemoteError(.http(status: 0), endpoint: name)) }
         return classify(status: http.statusCode, contentType: http.value(forHTTPHeaderField: "Content-Type"),
                         location: http.value(forHTTPHeaderField: "Location"), body: body, auth: auth,
@@ -82,7 +81,7 @@ public struct RemoteEndpoint: Sendable, Equatable {
     }
 
     public func classify(status: Int, contentType: String?, location: String?, body: Data,
-                         auth: ModelServerAuthKind = .bearer, challenge: String? = nil) -> Result<Data, RemoteError> {
+                         auth: ModelServerAuthKind, challenge: String? = nil) -> Result<Data, RemoteError> {
         func fail(_ kind: RemoteError.Kind) -> Result<Data, RemoteError> { .failure(RemoteError(kind, endpoint: name)) }
         let html = Self.isHTML(contentType: contentType, body: body)
         let viaAccess = auth == .cloudflareAccess
@@ -111,7 +110,7 @@ public struct RemoteEndpoint: Sendable, Equatable {
             case .none:
                 return fail(.htmlPage(status: status))
             case .bearer, .cloudflareAccess, .headers:
-                // sparkDash-era callers classify a 403 page as a login page in front of the service.
+                // A 403 page to a bare bearer token is a login page in front of the server, not a verdict on the key.
                 if html, auth == .bearer, status == 403 { return fail(.htmlPage(status: status)) }
                 return fail(.tokenRejected(status: status, message: html ? nil : Self.errorMessage(body)))
             }
@@ -267,23 +266,5 @@ extension RemoteError.Kind {
             self = .tlsFailure("the TLS handshake failed; the port may speak plain http")
         default: self = .transport(description)
         }
-    }
-}
-
-public enum SparkDash {
-    public static let name = "sparkDash"
-    public static let fleetEnergy = "/api/fleet-energy"
-
-    public static func endpoint(settings: AppSettings) -> RemoteEndpoint? {
-        RemoteEndpoint(baseURL: settings.sparkDashURL, name: name)
-    }
-
-    public static func sparkPath(_ spark: String, _ route: String) -> String? {
-        let id = spark.trimmingCharacters(in: .whitespacesAndNewlines)
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "/?#")
-        guard !id.isEmpty, let encoded = id.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        let suffix = route.hasPrefix("/") ? String(route.dropFirst()) : route
-        return "/api/sparks/\(encoded)" + (suffix.isEmpty ? "" : "/\(suffix)")
     }
 }

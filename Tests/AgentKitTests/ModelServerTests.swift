@@ -26,18 +26,22 @@ final class ModelServerTests: XCTestCase {
         let settings = AppSettings.decode(Data(old.utf8))
         XCTAssertEqual(settings.modelServers, [ModelServer(id: "default", name: "ZGX", baseURL: "http://10.0.0.5:8000")])
         XCTAssertEqual(settings.modelServers.first?.id, ModelServer.legacyID)
-        XCTAssertEqual(settings.vllmBaseURL, "http://10.0.0.5:8000")
+        XCTAssertEqual(settings.legacyModelServer?.baseURL, "http://10.0.0.5:8000")
         XCTAssertEqual(settings.activeModelServers.count, 1)
         XCTAssertTrue(AppSettings.decode(Data(#"{"port":4400}"#.utf8)).modelServers.isEmpty)
 
         let saved = try XCTUnwrap(settings.encoded())
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
         XCTAssertNil(json["vllmBaseURL"], "the old keys are read, never written")
+        XCTAssertNil(json["vllmName"])
         XCTAssertEqual((json["modelServers"] as? [[String: Any]])?.first?["engine"] as? String, "auto")
         XCTAssertEqual(AppSettings.decode(saved), settings)
 
         let removed = #"{"vllmBaseURL":"http://10.0.0.5:8000","modelServers":[]}"#
         XCTAssertTrue(AppSettings.decode(Data(removed.utf8)).modelServers.isEmpty, "a deleted server doesn't come back")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"vllmName":"ZGX"}"#.utf8)).modelServers,
+                       [ModelServer(id: "default", name: "ZGX")], "a name alone still migrates")
+        XCTAssertTrue(AppSettings.decode(Data(#"{"vllmBaseURL":"","vllmName":""}"#.utf8)).modelServers.isEmpty)
     }
 
     func testServersDecodeLenientlyPerKeyAndPerElement() {
@@ -68,48 +72,13 @@ final class ModelServerTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
 
-    func testTheLegacyAccessorsEditTheLegacyServer() {
+    func testTheLegacyServerIsFoundByItsFixedID() {
         var settings = AppSettings()
         settings.modelServers = [ModelServer(id: "x1", name: "Ollama", baseURL: "http://localhost:11434")]
-        XCTAssertEqual(settings.vllmBaseURL, "")
-        settings.vllmName = "ZGX"
-        settings.vllmBaseURL = "http://192.168.40.141:8888"
-        XCTAssertEqual(settings.modelServers.map(\.id), ["default", "x1"])
+        XCTAssertNil(settings.legacyModelServer)
+        settings.modelServers.append(ModelServer(id: ModelServer.legacyID, name: "ZGX"))
         XCTAssertEqual(settings.legacyModelServer?.displayName, "ZGX")
-        settings.vllmBaseURL = ""
         XCTAssertEqual(settings.activeModelServers.map(\.id), ["x1"], "no URL = not polled")
-        settings.vllmName = ""
-        XCTAssertEqual(settings.modelServers.map(\.id), ["x1"])
-    }
-
-    func testSavingADraftMergesServersByID() {
-        let a = ModelServer(id: "a", name: "A", baseURL: "http://localhost:8000")
-        let b = ModelServer(id: "b", name: "B", baseURL: "http://localhost:8080")
-        var base = AppSettings()
-        base.modelServers = [a, b]
-
-        var draft = base
-        draft.modelServers[0].name = "A renamed"
-        draft.modelServers.remove(at: 1)
-        draft.modelServers.append(ModelServer(id: "c", name: "C", baseURL: "http://localhost:1234"))
-        draft.port = 5000
-
-        var current = base
-        current.modelServers[1].enabled = false
-        current.modelServers.append(ModelServer(id: "d", name: "Found", baseURL: "http://localhost:11434"))
-        current.mutedProjectRoots = ["/r/x"]
-
-        let merged = current.applying(draft, since: base)
-        XCTAssertEqual(merged.modelServers.map(\.id), ["a", "d", "c"])
-        XCTAssertEqual(merged.modelServers[0].name, "A renamed")
-        XCTAssertEqual(merged.port, 5000)
-        XCTAssertEqual(merged.mutedProjectRoots, ["/r/x"])
-
-        var untouched = base
-        untouched.referenceModel = "claude-opus-4-8"
-        let kept = current.applying(untouched, since: base)
-        XCTAssertEqual(kept.modelServers, current.modelServers, "a draft that left the servers alone keeps the current list")
-        XCTAssertEqual(kept.referenceModel, "claude-opus-4-8")
     }
 
     func testMetricsOverridesAndCredentialScope() throws {
@@ -326,20 +295,20 @@ final class ModelServerTests: XCTestCase {
 
     // MARK: - Engines
 
-    func testVLLMAndTensorfoldMatchTheOldParser() throws {
-        for name in ["vllm_metrics.txt", "tensorfold_metrics.txt"] {
+    func testVLLMAndTensorfoldFixtures() throws {
+        let expected: [(String, ModelEngine, ModelServerMetrics)] = [
+            ("vllm_metrics.txt", .vllm, ModelServerMetrics(
+                model: "Qwen/Qwen3-Coder-30B-A3B-Instruct", running: 2, waiting: 1, kvCacheUsage: 0.4375,
+                promptTokensTotal: 120_000, generationTokensTotal: 45_000, generationTokensCounter: 45_000)),
+            ("tensorfold_metrics.txt", .tensorfold, ModelServerMetrics(
+                running: 0, waiting: 0, kvCacheUsage: 0, promptTokensTotal: 7_725_987, generationTokensTotal: 54_353,
+                generationTokensCounter: 54_353, memoryBytes: 87_744_562_592)),
+        ]
+        for (name, engine, metrics) in expected {
             let samples = PrometheusParser.parse(try Fixture.text(name))
-            let old = VLLMSnapshot.from(samples: samples, at: t0)
             let dialect = try XCTUnwrap(PrometheusDialect.detect(samples), name)
-            let metrics = dialect.metrics(from: samples)
-            XCTAssertEqual(dialect.engine.rawValue, old.engine)
-            XCTAssertEqual(metrics.model, old.model)
-            XCTAssertEqual(metrics.running, old.running)
-            XCTAssertEqual(metrics.waiting, old.waiting)
-            XCTAssertEqual(metrics.kvCacheUsage, old.kvCacheUsage)
-            XCTAssertEqual(metrics.promptTokensTotal, old.promptTokensTotal)
-            XCTAssertEqual(metrics.generationTokensTotal, old.generationTokensTotal)
-            XCTAssertEqual(metrics.generationTokensCounter, old.generationTokensCounter)
+            XCTAssertEqual(dialect.engine, engine)
+            XCTAssertEqual(dialect.metrics(from: samples), metrics, name)
         }
         let tensorfold = try XCTUnwrap(snapshot([.metrics: .success(try Fixture.data("tensorfold_metrics.txt")),
                                                  .openAIModels: missing()]).get())
@@ -508,11 +477,14 @@ final class ModelServerTests: XCTestCase {
         XCTAssertEqual(ModelServerSeries.names(ModelServerSeries.counters, server: "a1b2"),
                        ["model.a1b2.generation_tokens", "model.a1b2.prompt_tokens"])
 
-        let samples = PrometheusParser.parse(try Fixture.text("vllm_metrics.txt"))
-        let old = VLLMStatus.compute(previous: VLLMSnapshot.from(samples: samples, at: t0),
-                                     current: VLLMSnapshot.from(samples: samples, at: t0.addingTimeInterval(5)))
-        XCTAssertEqual(ModelServerSeries.observations(ModelServerStatus(old), server: ModelServer.legacyID),
-                       ModelServerSeries.observations(old), "the legacy server writes exactly the series it always did")
+        let vllm = try XCTUnwrap(snapshot([.metrics: .success(try Fixture.data("vllm_metrics.txt"))]).get())
+        var later = vllm
+        later.takenAt = t0.addingTimeInterval(5)
+        let polled = ModelServerStatus.compute(previous: vllm, current: later)
+        XCTAssertEqual(ModelServerSeries.observations(polled, server: ModelServer.legacyID).map(\.series),
+                       ["model.generation_tps", "model.prompt_tps", "model.kv_cache_pct", "model.running", "model.waiting",
+                        "model.generation_tokens", "model.prompt_tokens"],
+                       "the legacy server writes exactly the series it always did")
 
         let ollama = ModelServerSnapshot(engine: .ollama,
                                          models: [ServedModel(id: "qwen3:8b", loaded: true, memoryBytes: 6e9)], takenAt: t0)

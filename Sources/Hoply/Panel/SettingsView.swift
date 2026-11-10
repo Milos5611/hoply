@@ -3,13 +3,12 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var draft = AppSettings()
-    @State private var baseline = AppSettings()
-    @State private var portText = ""
-    @State private var patternsText = ""
-    @State private var allowanceText = ""
-    @State private var usdText = ""
-    @State private var loaded = false
+
+    // Every change goes straight to the current settings, so edits made elsewhere (the header bell, a card's
+    // mute tile, Limits "Connect") are never overwritten by a stale copy.
+    private var live: Binding<AppSettings> {
+        Binding(get: { model.settings }, set: { model.apply($0) })
+    }
 
     var body: some View {
         ScrollView {
@@ -18,31 +17,35 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Listener")
                         LabeledRow("Port") {
-                            TextField("4318", text: $portText)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 90)
+                            CommitField("4318", value: String(model.settings.port)) { text in
+                                if let port = Int(text.trimmingCharacters(in: .whitespaces)), (1024...65535).contains(port) {
+                                    model.update { $0.port = port }
+                                }
+                                return String(model.settings.port)
+                            }
+                            .frame(width: 90)
+                            Spacer(minLength: 0)
                         }
                         Hint("Agents send hooks and OpenTelemetry to http://127.0.0.1:<port>. The setup scripts default to 4318.")
                     }
                 }
 
-                NotificationSettings(draft: $draft)
+                NotificationSettings(settings: live)
 
                 ModelServerSettings()
 
-                HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
-                                claudeConfigDir: $draft.claudeConfigDir, copilotHome: $draft.copilotHome)
+                HistorySettings()
 
-                PricingSettings(aliases: $draft.priceAliases)
+                PricingSettings(aliases: live.priceAliases)
 
-                CopilotPlanSettings(allowanceText: $allowanceText, usdText: $usdText)
+                CopilotPlanSettings()
 
                 PaletteSettings()
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Behaviour")
-                        SwitchRow("Show Claude plan limits", isOn: $draft.claudeLimitsEnabled)
+                        SwitchRow("Show Claude plan limits", isOn: live.claudeLimitsEnabled)
                         if !model.editors.isEmpty {
                             LabeledRow("Editor") {
                                 Picker("Editor", selection: Binding(get: { model.defaultEditor?.id ?? "" },
@@ -53,7 +56,7 @@ struct SettingsView: View {
                                 .fixedSize()
                                 Spacer(minLength: 0)
                             }
-                            .help("Used by Open in editor on project cards and in the Dashboard. Applies at once.")
+                            .help("Used by Open in editor on project cards and in the Dashboard.")
                         }
                         if model.isBundledApp {
                             SwitchRow("Launch at login", isOn: Binding(
@@ -71,15 +74,8 @@ struct SettingsView: View {
                         .padding(.horizontal, 4)
                 }
 
-                HStack {
-                    Spacer()
-                    Button("Cancel") { model.showingSettings = false }
-                        .buttonStyle(.bordered)
-                    Button("Save") { save() }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                }
-                .padding(.top, 2)
+                Hint("Changes are saved as you make them. A text field saves when you press Return or leave it.")
+                    .padding(.horizontal, 4)
             }
             .toggleStyle(.switch)
             .controlSize(.small)
@@ -91,59 +87,50 @@ struct SettingsView: View {
             model.refreshLaunchAtLogin()
             model.refreshEditors()
             model.history.loadPricing()
-            guard !loaded else { return rebase() }
-            draft = model.settings
-            baseline = model.settings
-            (portText, patternsText, allowanceText, usdText) = Self.texts(model.settings)
-            loaded = true
         }
-        .onChange(of: model.settings) { rebase() }
+    }
+}
+
+// Applies on Return, on leaving the field, and when Settings or the panel closes; never per keystroke,
+// because a half-typed port or folder would restart the listener or reopen the ledger.
+struct CommitField: View {
+    let placeholder: String
+    let value: String
+    let commit: (String) -> String
+
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    init(_ placeholder: String, value: String, commit: @escaping (String) -> String) {
+        self.placeholder = placeholder
+        self.value = value
+        self.commit = commit
     }
 
-    private static func texts(_ settings: AppSettings) -> (port: String, patterns: String, allowance: String,
-                                                           usd: String) {
-        (String(settings.port), settings.localModelPatterns.joined(separator: ", "),
-         String(settings.copilotMonthlyAllowance), String(settings.copilotUSDPerPremiumRequest))
-    }
-
-    /// Settings also change outside this view while it holds a draft (the header bell, a card's mute tile,
-    /// "Connect" on the Limits page). Fields the user hasn't edited here follow those changes; edited ones stay.
-    private func rebase() {
-        let current = model.settings
-        guard current != baseline else { return }
-        let old = Self.texts(baseline), new = Self.texts(current)
-        if portText == old.port { portText = new.port }
-        if patternsText == old.patterns { patternsText = new.patterns }
-        if allowanceText == old.allowance { allowanceText = new.allowance }
-        if usdText == old.usd { usdText = new.usd }
-        draft = current.applying(draft, since: baseline)
-        baseline = current
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.roundedBorder)
+            .focused($focused)
+            .overlay(alignment: .trailing) {
+                if text != value {
+                    Image(systemName: "return")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.trailing, 6)
+                        .tooltip("Press Return to save")
+                }
+            }
+            .onSubmit(save)
+            .onChange(of: focused) { _, isFocused in if !isFocused { save() } }
+            .onChange(of: value) { _, new in if !focused { text = new } }
+            .onAppear { text = value }
+            .onDisappear(perform: save)
+            .onReceive(NotificationCenter.default.publisher(for: NSPopover.willCloseNotification)) { _ in save() }
     }
 
     private func save() {
-        rebase()
-        var updated = draft
-        let trimmed = portText.trimmingCharacters(in: .whitespaces)
-        if let port = Int(trimmed), (1024...65535).contains(port) {
-            updated.port = port
-        }
-        updated.localModelPatterns = patternsText.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let reference = updated.referenceModel.trimmingCharacters(in: .whitespaces)
-        updated.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference
-        updated.claudeConfigDir = updated.claudeConfigDir.trimmingCharacters(in: .whitespaces)
-        updated.copilotHome = updated.copilotHome.trimmingCharacters(in: .whitespaces)
-        if let allowance = Int(allowanceText.trimmingCharacters(in: .whitespaces)), allowance >= 0 {
-            updated.copilotMonthlyAllowance = allowance
-        }
-        let usd = usdText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "")
-            .replacingOccurrences(of: ",", with: ".")
-        if let usd = Double(usd), usd >= 0, usd.isFinite {
-            updated.copilotUSDPerPremiumRequest = usd
-        }
-        model.apply(updated)
-        model.showingSettings = false
+        guard text != value else { return }
+        text = commit(text)
     }
 }
 
@@ -168,10 +155,6 @@ struct SwitchRow: View {
 
 struct HistorySettings: View {
     @Environment(AppModel.self) private var model
-    @Binding var patternsText: String
-    @Binding var referenceModel: String
-    @Binding var claudeConfigDir: String
-    @Binding var copilotHome: String
 
     var body: some View {
         let history = model.history
@@ -215,20 +198,31 @@ struct HistorySettings: View {
                     .help(copilot.detail ?? "Copilot CLI's session-store.db, read every 10 seconds")
                 }
                 LabeledRow("Local models") {
-                    TextField("qwen, llama", text: $patternsText)
-                        .textFieldStyle(.roundedBorder)
+                    CommitField("qwen, llama", value: model.settings.localModelPatterns.joined(separator: ", ")) { text in
+                        let patterns = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        model.update { $0.localModelPatterns = patterns }
+                        return model.settings.localModelPatterns.joined(separator: ", ")
+                    }
                 }
                 LabeledRow("Priced as") {
-                    TextField(PricingTable.defaultReferenceModel, text: $referenceModel)
-                        .textFieldStyle(.roundedBorder)
+                    CommitField(PricingTable.defaultReferenceModel, value: model.settings.referenceModel) { text in
+                        let reference = text.trimmingCharacters(in: .whitespaces)
+                        model.update { $0.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference }
+                        return model.settings.referenceModel
+                    }
                 }
                 LabeledRow("Claude dir") {
-                    TextField("~/.claude", text: $claudeConfigDir)
-                        .textFieldStyle(.roundedBorder)
+                    CommitField("~/.claude", value: model.settings.claudeConfigDir) { text in
+                        model.update { $0.claudeConfigDir = text.trimmingCharacters(in: .whitespaces) }
+                        return model.settings.claudeConfigDir
+                    }
                 }
                 LabeledRow("Copilot dir") {
-                    TextField("~/.copilot", text: $copilotHome)
-                        .textFieldStyle(.roundedBorder)
+                    CommitField("~/.copilot", value: model.settings.copilotHome) { text in
+                        model.update { $0.copilotHome = text.trimmingCharacters(in: .whitespaces) }
+                        return model.settings.copilotHome
+                    }
                 }
                 Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds. Reindex re-reads the transcripts and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
             }
@@ -290,7 +284,7 @@ struct PricingSettings: View {
                     ForEach(aliased, id: \.self) { name in
                         row(name, detail: nil)
                     }
-                    Hint("Price as charges a model at another model's list price and re-prices its history when you save. Spend stays \"unpriced\" until then, never $0.")
+                    Hint("Price as charges a model at another model's list price and re-prices its history as soon as you pick one. Spend stays \"unpriced\" until then, never $0.")
                 }
             }
         }
@@ -332,36 +326,39 @@ struct PricingSettings: View {
 
 struct NotificationSettings: View {
     @Environment(AppModel.self) private var model
-    @Binding var draft: AppSettings
+    @Binding var settings: AppSettings
 
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 SectionTitle("Notifications")
-                SwitchRow("Notify when an agent needs me", isOn: $draft.notificationsEnabled)
+                SwitchRow("Notify when an agent needs me", isOn: $settings.notificationsEnabled)
                 Group {
-                    SwitchRow("Claude limit alerts at 80% and 95%", isOn: $draft.limitAlertsEnabled)
-                    SwitchRow("Local model offline for 2 minutes", isOn: $draft.localModelAlertsEnabled)
-                    SwitchRow("Quiet hours", isOn: $draft.quietHoursEnabled)
-                    if draft.quietHoursEnabled {
+                    SwitchRow("Claude limit alerts at 80% and 95%", isOn: $settings.limitAlertsEnabled)
+                    SwitchRow("Local model offline for 2 minutes", isOn: $settings.localModelAlertsEnabled)
+                    SwitchRow("Quiet hours", isOn: $settings.quietHoursEnabled)
+                    if settings.quietHoursEnabled {
                         HStack(spacing: 8) {
                             Text("Silent from")
                                 .foregroundStyle(.secondary)
-                            TimeOfDayField(minutes: $draft.quietHoursStart)
+                            TimeOfDayField(minutes: $settings.quietHoursStart)
                             Text("to")
                                 .foregroundStyle(.secondary)
-                            TimeOfDayField(minutes: $draft.quietHoursEnd)
+                            TimeOfDayField(minutes: $settings.quietHoursEnd)
                             Spacer()
                         }
                     }
                 }
-                .disabled(!draft.notificationsEnabled)
+                .disabled(!settings.notificationsEnabled)
+                Divider()
+                SwitchRow("Approve Claude Code prompts from Hoply", isOn: $settings.approveFromHoply)
+                Hint("Adds Allow and Deny for Claude Code's permission prompts to the panel and its notifications, for that one request. The terminal prompt stays up; whichever answers first wins. Needs the hooks from scripts/install.sh: run it again once.")
                 Divider()
                 Text("Muted projects")
-                if draft.mutedProjectRoots.isEmpty {
+                if settings.mutedProjectRoots.isEmpty {
                     Hint("None. Mute a project with the bell button on its card; muting covers that project only, not the repos inside it.")
                 } else {
-                    ForEach(draft.mutedProjectRoots, id: \.self) { root in
+                    ForEach(settings.mutedProjectRoots, id: \.self) { root in
                         HStack(spacing: 8) {
                             Image(systemName: "bell.slash")
                                 .foregroundStyle(.secondary)
@@ -376,7 +373,7 @@ struct NotificationSettings: View {
                                     .truncationMode(.middle)
                             }
                             Spacer(minLength: 8)
-                            Button("Unmute") { draft.mutedProjectRoots.removeAll { $0 == root } }
+                            Button("Unmute") { settings.mutedProjectRoots.removeAll { $0 == root } }
                                 .buttonStyle(.bordered)
                         }
                     }
@@ -408,8 +405,7 @@ struct TimeOfDayField: View {
 }
 
 struct CopilotPlanSettings: View {
-    @Binding var allowanceText: String
-    @Binding var usdText: String
+    @Environment(AppModel.self) private var model
 
     private static let plans: [(name: String, allowance: Int)] = [
         ("Free", 50), ("Pro", 300), ("Pro+", 1_500), ("Business", 300), ("Enterprise", 1_000),
@@ -420,25 +416,37 @@ struct CopilotPlanSettings: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionTitle("Copilot plan")
                 LabeledRow("Allowance") {
-                    TextField("300", text: $allowanceText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 70)
+                    CommitField("300", value: String(model.settings.copilotMonthlyAllowance)) { text in
+                        if let allowance = Int(text.trimmingCharacters(in: .whitespaces)), allowance >= 0 {
+                            model.update { $0.copilotMonthlyAllowance = allowance }
+                        }
+                        return String(model.settings.copilotMonthlyAllowance)
+                    }
+                    .frame(width: 70)
                     Text("premium requests a month")
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     Menu("Plan") {
                         ForEach(Self.plans, id: \.name) { plan in
-                            Button("\(plan.name) · \(Format.count(plan.allowance))") { allowanceText = String(plan.allowance) }
+                            Button("\(plan.name) · \(Format.count(plan.allowance))") {
+                                model.update { $0.copilotMonthlyAllowance = plan.allowance }
+                            }
                         }
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                 }
                 LabeledRow("Extra cost") {
-                    TextField("0.04", text: $usdText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 70)
+                    CommitField("0.04", value: String(model.settings.copilotUSDPerPremiumRequest)) { text in
+                        let usd = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "")
+                            .replacingOccurrences(of: ",", with: ".")
+                        if let usd = Double(usd), usd >= 0, usd.isFinite {
+                            model.update { $0.copilotUSDPerPremiumRequest = usd }
+                        }
+                        return String(model.settings.copilotUSDPerPremiumRequest)
+                    }
+                    .frame(width: 70)
                     Text("USD per request beyond it")
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

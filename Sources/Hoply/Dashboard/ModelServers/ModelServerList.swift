@@ -52,14 +52,14 @@ struct ModelServerList: View {
             if opensPage {
                 Button { model.showLocalModel(server: server.id) } label: { Image(systemName: "chart.xyaxis.line") }
                     .buttonStyle(.borderless)
-                    .help("Show \(server.displayName) on the Local model page")
+                    .tooltip("Show \(server.displayName) on the Local model page")
             }
             Button { model.beginEditingModelServer(server.id) } label: { Image(systemName: "slider.horizontal.3") }
                 .buttonStyle(.borderless)
-                .help("Edit \(server.displayName)")
+                .tooltip("Edit \(server.displayName)")
             Button { removing = server.id } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
-                .help("Remove \(server.displayName)")
+                .tooltip("Remove \(server.displayName)")
             Toggle("Watch \(server.displayName)", isOn: Binding(get: { server.enabled },
                                                                   set: { model.setModelServerEnabled(server.id, $0) }))
                 .labelsHidden()

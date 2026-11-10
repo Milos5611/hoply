@@ -1,4 +1,3 @@
-import AgentKit
 import Foundation
 import Security
 import Synchronization
@@ -10,27 +9,7 @@ public protocol SecretStore: Sendable {
 }
 
 public enum KeychainService {
-    public static let sparkDash = "com.coolcraftcoders.hoply.sparkdash"
-}
-
-extension SecretStore {
-    public func bearerToken(for endpoint: RemoteEndpoint, service: String = KeychainService.sparkDash) throws -> String? {
-        try secret(service: service, account: endpoint.host)
-    }
-
-    public func setBearerToken(_ token: String, for endpoint: RemoteEndpoint,
-                               service: String = KeychainService.sparkDash) throws {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try deleteSecret(service: service, account: endpoint.host)
-        } else {
-            try setSecret(trimmed, service: service, account: endpoint.host)
-        }
-    }
-
-    public func deleteBearerToken(for endpoint: RemoteEndpoint, service: String = KeychainService.sparkDash) throws {
-        try deleteSecret(service: service, account: endpoint.host)
-    }
+    public static let modelServer = "com.coolcraftcoders.hoply.model-server"
 }
 
 public struct Keychain: SecretStore {

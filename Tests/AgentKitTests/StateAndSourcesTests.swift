@@ -111,31 +111,35 @@ final class SessionBoardTests: XCTestCase {
 }
 
 final class PrometheusAndVLLMTests: XCTestCase {
-    func testTensorfoldEngineUsesVLLMNamesUnderItsPrefix() throws {
-        let samples = PrometheusParser.parse(try Fixture.text("tensorfold_metrics.txt"))
-        XCTAssertEqual(VLLMSnapshot.engine(of: samples), "tensorfold")
-        let snapshot = VLLMSnapshot.from(samples: samples, at: Date())
-        XCTAssertEqual(snapshot.engine, "tensorfold")
-        XCTAssertNil(snapshot.model)
-        XCTAssertEqual(snapshot.running, 0)
-        XCTAssertEqual(snapshot.waiting, 0)
-        XCTAssertEqual(snapshot.kvCacheUsage, 0)
-        XCTAssertEqual(snapshot.promptTokensTotal, 7_725_987)
-        XCTAssertEqual(snapshot.generationTokensTotal, 54_353)
-        XCTAssertNil(VLLMSnapshot.engine(of: PrometheusParser.parse("python_gc_objects_collected_total 1")))
+    private func snapshot(_ text: String, at time: Date = Date()) throws -> ModelServerSnapshot {
+        try ModelServerDetector.snapshot(from: [.metrics: .success(Data(text.utf8))], engine: nil, at: time,
+                                         endpoint: "Box").get()
     }
 
-    func testTensorfoldRateCountsTokensOfLiveStreams() {
+    func testTensorfoldEngineUsesVLLMNamesUnderItsPrefix() throws {
+        let snapshot = try self.snapshot(try Fixture.text("tensorfold_metrics.txt"))
+        XCTAssertEqual(snapshot.engine, .tensorfold)
+        XCTAssertEqual(snapshot.metricsPrefix, "tensorfold:")
+        XCTAssertNil(snapshot.metrics.model)
+        XCTAssertEqual(snapshot.metrics.running, 0)
+        XCTAssertEqual(snapshot.metrics.waiting, 0)
+        XCTAssertEqual(snapshot.metrics.kvCacheUsage, 0)
+        XCTAssertEqual(snapshot.metrics.promptTokensTotal, 7_725_987)
+        XCTAssertEqual(snapshot.metrics.generationTokensTotal, 54_353)
+        XCTAssertNil(PrometheusDialect.detect(PrometheusParser.parse("python_gc_objects_collected_total 1")))
+    }
+
+    func testTensorfoldRateCountsTokensOfLiveStreams() throws {
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-        func snapshot(total: Int, running: Int, at seconds: TimeInterval) -> VLLMSnapshot {
+        func snapshot(total: Int, running: Int, at seconds: TimeInterval) throws -> ModelServerSnapshot {
             let text = "tensorfold:generation_tokens_total \(total)\ntensorfold:generation_tokens_running \(running)\n"
-            return VLLMSnapshot.from(samples: PrometheusParser.parse(text), at: t0.addingTimeInterval(seconds))
+            return try self.snapshot(text, at: t0.addingTimeInterval(seconds))
         }
-        let start = snapshot(total: 100, running: 50, at: 0)
-        let decoding = snapshot(total: 100, running: 300, at: 5)
-        let finished = snapshot(total: 400, running: 0, at: 10)
-        XCTAssertEqual(VLLMStatus.compute(previous: start, current: decoding).generationTokensPerSecond, 50)
-        XCTAssertEqual(VLLMStatus.compute(previous: decoding, current: finished).generationTokensPerSecond, 0)
+        let start = try snapshot(total: 100, running: 50, at: 0)
+        let decoding = try snapshot(total: 100, running: 300, at: 5)
+        let finished = try snapshot(total: 400, running: 0, at: 10)
+        XCTAssertEqual(ModelServerStatus.compute(previous: start, current: decoding).generationTokensPerSecond, 50)
+        XCTAssertEqual(ModelServerStatus.compute(previous: decoding, current: finished).generationTokensPerSecond, 0)
     }
 
     func testParsesVLLMMetrics() throws {
@@ -149,37 +153,36 @@ final class PrometheusAndVLLMTests: XCTestCase {
     }
 
     func testSnapshotAndRates() throws {
-        let samples = PrometheusParser.parse(try Fixture.text("vllm_metrics.txt"))
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-        let snapshot = VLLMSnapshot.from(samples: samples, at: t0.addingTimeInterval(10))
-        XCTAssertEqual(snapshot.model, "Qwen/Qwen3-Coder-30B-A3B-Instruct")
-        XCTAssertEqual(snapshot.running, 2)
-        XCTAssertEqual(snapshot.waiting, 1)
-        XCTAssertEqual(snapshot.kvCacheUsage, 0.4375)
-        XCTAssertEqual(snapshot.generationTokensTotal, 45_000)
+        let snapshot = try self.snapshot(try Fixture.text("vllm_metrics.txt"), at: t0.addingTimeInterval(10))
+        XCTAssertEqual(snapshot.metrics.model, "Qwen/Qwen3-Coder-30B-A3B-Instruct")
+        XCTAssertEqual(snapshot.metrics.running, 2)
+        XCTAssertEqual(snapshot.metrics.waiting, 1)
+        XCTAssertEqual(snapshot.metrics.kvCacheUsage, 0.4375)
+        XCTAssertEqual(snapshot.metrics.generationTokensTotal, 45_000)
 
         var previous = snapshot
         previous.takenAt = t0
-        previous.generationTokensTotal = 44_000
-        previous.promptTokensTotal = 110_000
-        let status = VLLMStatus.compute(previous: previous, current: snapshot)
+        previous.metrics.generationTokensTotal = 44_000
+        previous.metrics.promptTokensTotal = 110_000
+        let status = ModelServerStatus.compute(previous: previous, current: snapshot)
         XCTAssertEqual(status.generationTokensPerSecond ?? -1, 100, accuracy: 0.001)
         XCTAssertEqual(status.promptTokensPerSecond ?? -1, 1_000, accuracy: 0.001)
 
-        previous.generationTokensTotal = 90_000  // server restarted: counter went down
-        XCTAssertNil(VLLMStatus.compute(previous: previous, current: snapshot).generationTokensPerSecond)
+        previous.metrics.generationTokensTotal = 90_000  // server restarted: counter went down
+        XCTAssertNil(ModelServerStatus.compute(previous: previous, current: snapshot).generationTokensPerSecond)
     }
 
-    func testLegacyCacheMetricAndEscapedLabels() {
+    func testLegacyCacheMetricAndEscapedLabels() throws {
         let text = """
         vllm:gpu_cache_usage_perc{model_name="a \\"quoted\\" model"} 0.25
         vllm:num_requests_running 3
         """
         let samples = PrometheusParser.parse(text)
         XCTAssertEqual(samples.first?.labels["model_name"], "a \"quoted\" model")
-        let snapshot = VLLMSnapshot.from(samples: samples, at: Date())
-        XCTAssertEqual(snapshot.kvCacheUsage, 0.25)
-        XCTAssertEqual(snapshot.running, 3)
+        let snapshot = try self.snapshot(text)
+        XCTAssertEqual(snapshot.metrics.kvCacheUsage, 0.25)
+        XCTAssertEqual(snapshot.metrics.running, 3)
     }
 }
 

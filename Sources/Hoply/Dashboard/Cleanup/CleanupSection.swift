@@ -103,7 +103,7 @@ private struct CleanupRow: View {
                     Image(systemName: "folder")
                 }
                 .buttonStyle(.borderless)
-                .help("Reveal in Finder")
+                .tooltip("Show in Finder")
             }
         }
     }

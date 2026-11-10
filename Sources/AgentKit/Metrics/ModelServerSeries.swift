@@ -16,24 +16,6 @@ public enum ModelServerSeries {
     public static let counters = [generatedTokens, promptTokens]
     public static var all: [String] { gauges + counters }
 
-    public static func observations(_ status: VLLMStatus) -> [SampleObservation] {
-        let snapshot = status.snapshot
-        let time = snapshot.takenAt
-        var result: [SampleObservation] = []
-        func add(_ series: String, _ value: Double?, _ kind: SampleKind = .gauge) {
-            guard let value, value.isFinite, value >= 0 else { return }
-            result.append(SampleObservation(series: series, ts: time, value: value, kind: kind))
-        }
-        add(generationTokensPerSecond, status.generationTokensPerSecond)
-        add(promptTokensPerSecond, status.promptTokensPerSecond)
-        add(kvCachePercent, snapshot.kvCacheUsage.map { $0 * 100 })
-        add(running, Double(snapshot.running))
-        add(waiting, Double(snapshot.waiting))
-        add(generatedTokens, snapshot.generationTokensCounter, .counter)
-        add(promptTokens, snapshot.promptTokensTotal, .counter)
-        return result
-    }
-
     static let prefix = "model."
 
     // The server that predates per-server series keeps the bare names its history was written under.
@@ -64,10 +46,6 @@ public enum ModelServerSeries {
         add(generatedTokens, metrics.generationTokensCounter, .counter)
         add(promptTokens, metrics.promptTokensTotal, .counter)
         return result
-    }
-
-    public static func observations(current: VLLMSnapshot, previous: VLLMSnapshot?) -> [SampleObservation] {
-        observations(VLLMStatus.compute(previous: previous, current: current))
     }
 }
 

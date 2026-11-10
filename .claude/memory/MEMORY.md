@@ -1,4 +1,4 @@
-- [Hoply v2 plan](v2-plan.md) — M0, M2–M8 and glass committed and checked live; in progress (2026-11-10): Model servers (replaces M1 Cloudflare Access) and the deferred items, cores built, UI pending; GPU stats dropped; ZGX/Copilot facts
+- [Hoply v2 plan](v2-plan.md) — M0, M2–M8 and glass committed and checked live; Model servers (replaces M1) and deferred items committed in 99dfa53; Approve from Hoply + dead-code removal uncommitted; all awaiting live check (2026-11-10); GPU stats dropped; ZGX/Copilot facts
 - [No deletes](no-deletes.md) — never delete project files; avoid `rm` in shell commands, overwrite instead
 - [Comments only on complex parts](comments-only-complex.md) — default to none; only where code would otherwise be "simplified" into a bug; no doc comments; check the diff (and every subagent's) before reporting
 - [Mizu is the UI bar](ui-mizu-reference.md) — user compares the panel with Mizu's real screenshots; check UI with --snapshot before reporting

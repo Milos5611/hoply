@@ -21,6 +21,7 @@ final class AppModel {
     private(set) var gitStats: [String: GitDiffStat] = [:]
     private(set) var editors: [Editor] = []
     private(set) var defaultEditorID = ""
+    private(set) var approvals: [ApprovalRequest] = []
     var showingSettings = false
     let history = History()
     let modelServers: ModelServers
@@ -96,6 +97,7 @@ final class AppModel {
         policy.preferences = NotificationPreferences(settings: settings)
         history.setPlan(settings)
         notifier.onOpen = { [weak self] target in self?.open(target) }
+        notifier.onDecision = { [weak self] id, decision in self?.decide(id, decision) }
         notifier.activate()
 
         server.onEvents = { [weak self] events in
@@ -113,6 +115,17 @@ final class AppModel {
         server.onNote = { [weak self] note in
             Task { @MainActor in self?.lastNote = note }
         }
+        // One task, approval first: the permission notification its events post must find it.
+        server.onApproval = { [weak self] approval, events in
+            Task { @MainActor in
+                self?.approvals.append(approval)
+                self?.ingest(events)
+            }
+        }
+        server.onApprovalClosed = { [weak self] id in
+            Task { @MainActor in self?.approvals.removeAll { $0.id == id } }
+        }
+        server.setHoldsApprovals(settings.approveFromHoply)
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
         projectEdits.onEdited = { [weak self] in self?.projectsEdited() }
@@ -161,6 +174,7 @@ final class AppModel {
             perform(policy.sessionChanged(change, project: project(of: change.session), now: now))
         }
         history.recordStateChanges(changes)
+        releaseApprovals(PermissionApproval.answered(approvals, by: events))
         history.tail(Set(events.compactMap(\.transcriptPath)))
         if events.contains(where: { $0.key.source == .copilotCLI && $0.fromHook }) {
             history.pollCopilot()
@@ -295,6 +309,8 @@ final class AppModel {
         for session in sweep.dropped {
             perform(policy.sessionDismissed(session.key))
         }
+        let dropped = Set(sweep.dropped.map(\.key))
+        releaseApprovals(approvals.filter { dropped.contains($0.key) }.map(\.id))
         history.closeStateSpans(for: sweep.dropped.map(\.key))
         activity.advance(to: now)
         modelServers.advance(to: now)
@@ -308,6 +324,7 @@ final class AppModel {
     }
 
     func dismiss(_ key: SessionKey) {
+        releaseApprovals(approvals.filter { $0.key == key }.map(\.id))
         board.dismiss(key)
         perform(policy.sessionDismissed(key))
         history.closeStateSpans(for: [key])
@@ -323,7 +340,28 @@ final class AppModel {
     private func perform(_ actions: NotificationActions) {
         guard !actions.isEmpty else { return }
         notifier.withdraw(actions.withdraw)
-        for request in actions.post { notifier.post(request) }
+        for request in actions.post {
+            let approval = request.kind == .permission ? request.session.flatMap { approvals(for: $0).last } : nil
+            notifier.post(request, approval: approval)
+        }
+    }
+
+    // MARK: - Approvals
+
+    func approvals(for key: SessionKey) -> [ApprovalRequest] {
+        approvals.filter { $0.key == key }
+    }
+
+    func decide(_ id: String, _ decision: ApprovalDecision) {
+        guard approvals.contains(where: { $0.id == id }) else { return }
+        approvals.removeAll { $0.id == id }
+        server.resolve(id, decision)
+    }
+
+    private func releaseApprovals(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        approvals.removeAll { ids.contains($0.id) }
+        server.release(ids)
     }
 
     func open(_ target: NotificationTarget) {
@@ -457,6 +495,12 @@ final class AppModel {
 
     // MARK: - Settings
 
+    func update(_ change: (inout AppSettings) -> Void) {
+        var updated = settings
+        change(&updated)
+        apply(updated)
+    }
+
     func apply(_ updated: AppSettings) {
         let old = settings
         guard updated != old else { return }
@@ -467,6 +511,10 @@ final class AppModel {
         hotKey.update(enabled: updated.paletteEnabled, combo: updated.paletteHotKey)
         if updated.port != old.port {
             server.start(port: UInt16(clamping: updated.port))
+        }
+        if updated.approveFromHoply != old.approveFromHoply {
+            server.setHoldsApprovals(updated.approveFromHoply)
+            if !updated.approveFromHoply { approvals = [] }
         }
         if updated.modelServers != old.modelServers {
             perform(policy.modelServersChanged(updated.modelServers))
@@ -562,5 +610,10 @@ extension AppModel {
 
     func showPreview(settings: AppSettings) {
         self.settings = settings
+    }
+
+    func showPreview(approvals: [ApprovalRequest], events: [AgentEvent]) {
+        ingest(events)
+        self.approvals = approvals
     }
 }

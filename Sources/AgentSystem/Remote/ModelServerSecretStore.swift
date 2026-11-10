@@ -1,10 +1,6 @@
 import AgentKit
 import Foundation
 
-extension KeychainService {
-    public static let modelServer = "com.coolcraftcoders.hoply.model-server"
-}
-
 extension SecretStore {
     public func modelServerSecrets(for serverID: String) throws -> ModelServerSecrets {
         guard let json = try secret(service: KeychainService.modelServer, account: serverID),

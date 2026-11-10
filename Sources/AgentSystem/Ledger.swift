@@ -109,38 +109,7 @@ public struct Ledger: Sendable {
         return CopilotAllowance(used: used, settings: settings, now: now)
     }
 
-    // MARK: - Samples (local model, later GPU)
-
-    @discardableResult
-    public func recordModelSamples(_ status: VLLMStatus) async throws -> [SampleBucket] {
-        try await store.recordSamples(ModelServerSeries.observations(status))
-    }
-
-    public func resetModelCounters() async {
-        await store.resetCounterBaselines(ModelServerSeries.counters)
-    }
-
-    @discardableResult
-    public func recordSamples(_ observations: [SampleObservation]) async throws -> [SampleBucket] {
-        try await store.recordSamples(observations)
-    }
-
-    public func samples(_ series: String, resolution: Int = SampleAggregator.resolution,
-                        in range: DateInterval) async throws -> [SampleBucket] {
-        try await reader.samples(series, resolution: resolution, in: range)
-    }
-
-    public func recentModelSamples(since: Date, now: Date = Date()) async throws -> [String: [SampleBucket]] {
-        try await reader.recentSamples(ModelServerSeries.all, since: since, now: now)
-    }
-
-    public func modelTokensPerDay(days: Int, now: Date = Date(),
-                                  calendar: Calendar = .current) async throws -> [ModelTokenDay] {
-        let generated = try await reader.dailySums(ModelServerSeries.generatedTokens, days: days, now: now,
-                                                   calendar: calendar)
-        let prompt = try await reader.dailySums(ModelServerSeries.promptTokens, days: days, now: now, calendar: calendar)
-        return ModelTokenDay.days(generated: generated, prompt: prompt)
-    }
+    // MARK: - Local model and pricing
 
     public func localModelSpend(days: Int, split: SpendSeriesSplit = .source, now: Date = Date(),
                                 calendar: Calendar = .current) async throws -> DailySpendSeries {

@@ -80,7 +80,7 @@ Sources/AgentKit/      platform-neutral core
   HookMapper.swift     Claude Code / Copilot CLI hook payloads → events
   TelemetryMapper.swift  Claude, Qwen, Copilot (GenAI conventions) telemetry → events
   SessionBoard.swift   session state machine
-  VLLM.swift           Prometheus parser + vLLM snapshot and rates
+  VLLM.swift           Prometheus text parser (snapshots and rates live in ModelServers/)
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
   Settings/            AppSettings with lenient per-key decoding
   Usage/               usage records, Claude transcript parser, Copilot store and OTel usage mappers, ledger value types
@@ -129,6 +129,17 @@ Files go to the Trash, so Finder's Put Back works.
 
 - **Resume:** Return on a finished Claude Code session writes a small `.command` script (`cd <folder>` then `claude --resume <id>`) to `~/Library/Application Support/Hoply/Resume/` and opens it in Terminal. Other agents open in the Dashboard instead.
 - **Shortcut:** change it or turn the palette off in Settings → Command palette, which also shows whether the shortcut has fired. If ⌥Space does nothing, macOS or another app owns it; use ⌃⌥Space or record another combination. The panel's search button and the menu bar icon's right-click menu open the palette too.
+
+## Approve from Hoply
+
+Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by default) adds Allow and Deny to a Claude Code session's permission prompt, in the panel and on its notification. It needs the `PermissionRequest` hook from a current `scripts/install.sh`, so run that once after updating.
+
+- Hoply holds the hook's reply until you click, for at most 9½ minutes. Allow answers that one request (no rule is saved); Deny tells Claude you declined and lets it carry on.
+- The terminal prompt stays up the whole time, and whichever answers first wins. If you answer in the terminal, the buttons go away once Claude Code moves on or cancels the hook.
+- With the setting off, or with Hoply not running, the hook returns nothing and Claude Code's own prompt decides as before.
+- Questions (`AskUserQuestion`) and plan approval (`ExitPlanMode`) are never offered: they need your answer, not a yes.
+- Copilot CLI is not supported: its `permissionRequest` hook runs before its own allow rules and its prompt, so holding it would stall every tool call.
+- The Allow button on a notification asks macOS to unlock first.
 
 ## Known gaps
 

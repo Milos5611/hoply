@@ -158,7 +158,7 @@ struct ModelServerEditorSheet: View {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.borderless)
-                    .help("Remove this header")
+                    .tooltip("Remove this header")
                 }
             }
             ForEach(editor.headerNotes) { note in

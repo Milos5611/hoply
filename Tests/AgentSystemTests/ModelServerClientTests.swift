@@ -256,7 +256,11 @@ final class ModelServerClientTests: XCTestCase {
         XCTAssertNil(try store.secret(service: KeychainService.modelServer, account: "srv9"), "nothing to keep, no item")
 
         let query = Keychain.query(service: KeychainService.modelServer, account: "srv9")
+        XCTAssertEqual(query[kSecClass as String] as? String, kSecClassGenericPassword as String)
+        XCTAssertEqual(query[kSecAttrService as String] as? String, "com.coolcraftcoders.hoply.model-server")
+        XCTAssertEqual(query[kSecAttrAccount as String] as? String, "srv9")
         XCTAssertNil(query[kSecAttrSynchronizable as String], "never synced to iCloud")
+        XCTAssertNil(query[kSecUseDataProtectionKeychain as String])
     }
 
     func testAMissingSecretFailsBeforeAnyRequest() async throws {
@@ -435,12 +439,12 @@ final class ModelServerHistoryTests: XCTestCase {
         let unseen = try await ledger.modelTokensPerDay(server: "never", days: 1, now: now, calendar: utc)
         XCTAssertEqual(unseen.map(\.observed), [false])
 
-        let old = try await ledger.modelTokensPerDay(days: 1, now: now, calendar: utc)
-        XCTAssertEqual(old, mine, "the legacy id reads the series the single-server build wrote")
         let all = DateInterval(start: .distantPast, end: .distantFuture)
-        let bare = try await ledger.samples(ModelServerSeries.generationTokensPerSecond, in: all)
+        let bare = try await ledger.reader.samples(ModelServerSeries.generationTokensPerSecond, in: all)
+        let mineRate = try await ledger.modelSamples(ModelServerSeries.generationTokensPerSecond, server: legacy, in: all)
         let keyed = try await ledger.modelSamples(ModelServerSeries.generationTokensPerSecond, server: "ol1", in: all)
-        XCTAssertEqual(bare.map(\.sum), [60])
+        XCTAssertEqual(bare.map(\.sum), [60], "the legacy id writes the series the single-server build wrote")
+        XCTAssertEqual(mineRate, bare, "and reads them back")
         XCTAssertEqual(keyed.map(\.sum), [6])
         XCTAssertEqual(keyed.first?.series, "model.ol1.generation_tps")
 

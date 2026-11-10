@@ -17,13 +17,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var localModelAlertsEnabled = true
     public var copilotMonthlyAllowance = 300
     public var copilotUSDPerPremiumRequest = 0.04
-    public var sparkDashURL = ""
-    public var sparkDashName = ""
-    public var energyPricePerKWh = 0.0
     public var priceAliases: [String: String] = [:]
     public var cleanupIncludesNodeModules = false
     public var paletteEnabled = true
     public var paletteHotKey = HotKeyCombo.optionSpace
+    public var approveFromHoply = false
 
     public init() {}
 
@@ -38,8 +36,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
             // Settings saved before several servers existed: the one server keeps a fixed id, so its
             // un-keyed `model.*` sample series stay attached to it.
             let legacy = try? decoder.container(keyedBy: LegacyKeys.self)
-            vllmBaseURL = legacy?.lenient(String.self, .vllmBaseURL) ?? ""
-            vllmName = legacy?.lenient(String.self, .vllmName) ?? ""
+            let url = legacy?.lenient(String.self, .vllmBaseURL) ?? ""
+            let name = legacy?.lenient(String.self, .vllmName) ?? ""
+            if !url.isEmpty || !name.isEmpty {
+                modelServers = [ModelServer(id: ModelServer.legacyID, name: name, baseURL: url)]
+            }
         }
         claudeLimitsEnabled = container.lenient(Bool.self, .claudeLimitsEnabled) ?? defaults.claudeLimitsEnabled
         notificationsEnabled = container.lenient(Bool.self, .notificationsEnabled) ?? defaults.notificationsEnabled
@@ -56,15 +57,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         copilotMonthlyAllowance = container.lenient(Int.self, .copilotMonthlyAllowance) ?? defaults.copilotMonthlyAllowance
         copilotUSDPerPremiumRequest = container.lenient(Double.self, .copilotUSDPerPremiumRequest)
             ?? defaults.copilotUSDPerPremiumRequest
-        sparkDashURL = container.lenient(String.self, .sparkDashURL) ?? defaults.sparkDashURL
-        sparkDashName = container.lenient(String.self, .sparkDashName) ?? defaults.sparkDashName
-        energyPricePerKWh = container.lenient(Double.self, .energyPricePerKWh) ?? defaults.energyPricePerKWh
         priceAliases = container.lenient([String: String].self, .priceAliases) ?? defaults.priceAliases
         cleanupIncludesNodeModules = container.lenient(Bool.self, .cleanupIncludesNodeModules)
             ?? defaults.cleanupIncludesNodeModules
         paletteEnabled = container.lenient(Bool.self, .paletteEnabled) ?? defaults.paletteEnabled
         paletteHotKey = container.lenient(HotKeyCombo.self, .paletteHotKey).flatMap { $0.isValid ? $0 : nil }
             ?? defaults.paletteHotKey
+        approveFromHoply = container.lenient(Bool.self, .approveFromHoply) ?? defaults.approveFromHoply
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -75,58 +74,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var activeModelServers: [ModelServer] { modelServers.filter(\.isActive) }
 
     public func modelServer(id: String) -> ModelServer? { modelServers.first { $0.id == id } }
-
-    public var vllmBaseURL: String {
-        get { legacyModelServer?.baseURL ?? "" }
-        set { updateLegacyServer { $0.baseURL = newValue } }
-    }
-
-    public var vllmName: String {
-        get { legacyModelServer?.name ?? "" }
-        set { updateLegacyServer { $0.name = newValue } }
-    }
-
-    private mutating func updateLegacyServer(_ change: (inout ModelServer) -> Void) {
-        var server = legacyModelServer ?? ModelServer(id: ModelServer.legacyID)
-        change(&server)
-        let index = modelServers.firstIndex { $0.isLegacy }
-        if server.baseURL.isEmpty, server.name.isEmpty {
-            if let index { modelServers.remove(at: index) }
-        } else if let index {
-            modelServers[index] = server
-        } else {
-            modelServers.insert(server, at: 0)
-        }
-    }
-
-    public func applying(_ edited: AppSettings, since base: AppSettings) -> AppSettings {
-        guard let current = jsonObject, let changed = edited.jsonObject, let origin = base.jsonObject else {
-            return edited
-        }
-        var merged = current
-        for (key, value) in changed where !Self.same(value, origin[key]) {
-            merged[key] = value
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: merged) else { return edited }
-        var result = AppSettings.decode(data)
-        // Lists both sides can edit: the draft's removals, additions and changes are applied to the current list.
-        let removed = Set(base.mutedProjectRoots).subtracting(edited.mutedProjectRoots)
-        let added = edited.mutedProjectRoots.filter { !base.mutedProjectRoots.contains($0) }
-        result.mutedProjectRoots = mutedProjectRoots.filter { !removed.contains($0) }
-            + added.filter { !mutedProjectRoots.contains($0) }
-        result.modelServers = ModelServer.merge(current: modelServers, edited: edited.modelServers,
-                                                base: base.modelServers)
-        return result
-    }
-
-    private var jsonObject: [String: Any]? {
-        encoded().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
-    }
-
-    private static func same(_ value: Any, _ other: Any?) -> Bool {
-        guard let other else { return false }
-        return (value as? NSObject)?.isEqual(other) ?? false
-    }
 
     public static func decode(_ data: Data?) -> AppSettings {
         guard let data, let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {

@@ -154,20 +154,6 @@ public struct ModelServerStatus: Sendable, Equatable {
             promptTokensPerSecond: sameEngine
                 ? rate(current.metrics.promptTokensTotal, previous?.metrics.promptTokensTotal) : nil)
     }
-
-    public init(_ legacy: VLLMStatus) {
-        let old = legacy.snapshot
-        let engine = ModelEngine(rawValue: old.engine) ?? .vllm
-        let metrics = ModelServerMetrics(model: old.model, running: old.running, waiting: old.waiting,
-                                         kvCacheUsage: old.kvCacheUsage, promptTokensTotal: old.promptTokensTotal,
-                                         generationTokensTotal: old.generationTokensTotal,
-                                         generationTokensCounter: old.generationTokensCounter)
-        self.init(snapshot: ModelServerSnapshot(engine: engine, metricsPrefix: old.engine + ":",
-                                                models: old.model.map { [ServedModel(id: $0, loaded: true)] } ?? [],
-                                                metrics: metrics, takenAt: old.takenAt),
-                  generationTokensPerSecond: legacy.generationTokensPerSecond,
-                  promptTokensPerSecond: legacy.promptTokensPerSecond)
-    }
 }
 
 public enum ModelServerAvailability: String, Sendable, Equatable {

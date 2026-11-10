@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if Bundle.main.bundleURL.pathExtension != "app" {
+            NSApp.applicationIconImage = HoplyMark.appIconImage()
+        }
 
         let arguments = CommandLine.arguments
         if let flag = arguments.firstIndex(of: "--snapshot") {

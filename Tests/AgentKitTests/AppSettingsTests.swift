@@ -9,8 +9,8 @@ final class AppSettingsTests: XCTestCase {
     func testV1SettingsStillDecode() {
         let settings = AppSettings.decode(Data(v1JSON.utf8))
         XCTAssertEqual(settings.port, 4400)
-        XCTAssertEqual(settings.vllmBaseURL, "http://10.0.0.5:8000")
-        XCTAssertEqual(settings.vllmName, "ZGX")
+        XCTAssertEqual(settings.legacyModelServer?.baseURL, "http://10.0.0.5:8000")
+        XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
         XCTAssertTrue(settings.claudeLimitsEnabled)
         XCTAssertFalse(settings.notificationsEnabled)
     }
@@ -18,7 +18,7 @@ final class AppSettingsTests: XCTestCase {
     func testMissingKeysKeepDefaults() {
         let settings = AppSettings.decode(Data(#"{"vllmName":"ZGX"}"#.utf8))
         var expected = AppSettings()
-        expected.vllmName = "ZGX"
+        expected.modelServers = [ModelServer(id: ModelServer.legacyID, name: "ZGX")]
         XCTAssertEqual(settings, expected)
     }
 
@@ -26,14 +26,14 @@ final class AppSettingsTests: XCTestCase {
         let json = #"{"port":"not a number","vllmName":"ZGX","futureSetting":{"a":1},"claudeLimitsEnabled":true}"#
         let settings = AppSettings.decode(Data(json.utf8))
         XCTAssertEqual(settings.port, 4318)
-        XCTAssertEqual(settings.vllmName, "ZGX")
+        XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
         XCTAssertTrue(settings.claudeLimitsEnabled)
     }
 
     func testCopilotHomeDecodesLenientlyAndRoundTrips() {
         XCTAssertEqual(AppSettings.decode(Data(v1JSON.utf8)).copilotHome, "", "older settings mean the default")
         XCTAssertEqual(AppSettings.decode(Data(#"{"copilotHome":42,"vllmName":"ZGX"}"#.utf8)).copilotHome, "")
-        XCTAssertEqual(AppSettings.decode(Data(#"{"copilotHome":42,"vllmName":"ZGX"}"#.utf8)).vllmName, "ZGX")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"copilotHome":42,"vllmName":"ZGX"}"#.utf8)).legacyModelServer?.name, "ZGX")
         var settings = AppSettings()
         settings.copilotHome = "~/scratch/copilot"
         XCTAssertEqual(AppSettings.decode(settings.encoded()).copilotHome, "~/scratch/copilot")
@@ -60,7 +60,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.limitAlertsEnabled)
         XCTAssertEqual(settings.copilotMonthlyAllowance, 300)
         XCTAssertEqual(settings.copilotUSDPerPremiumRequest, 0.04)
-        XCTAssertEqual(settings.vllmName, "ZGX")
+        XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
         XCTAssertEqual(AppSettings.decode(Data(#"{"copilotUSDPerPremiumRequest":1}"#.utf8)).copilotUSDPerPremiumRequest, 1,
                        "a whole-number price is still a price")
 
@@ -76,28 +76,19 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(changed.encoded()), changed)
     }
 
-    func testSparkDashKeysDecodeLeniently() {
-        let older = AppSettings.decode(Data(v1JSON.utf8))
-        XCTAssertEqual(older.sparkDashURL, "")
-        XCTAssertEqual(older.sparkDashName, "")
-        XCTAssertEqual(older.energyPricePerKWh, 0)
-        XCTAssertEqual(older.vllmName, "ZGX")
+    func testDroppedSparkDashKeysStillDecodeAndAreNotWritten() throws {
+        let saved = #"{"port":4400,"sparkDashURL":"http://192.168.40.141:5555","sparkDashName":"zgx-ff24","energyPricePerKWh":0.31,"vllmName":"ZGX","notificationsEnabled":false}"#
+        let settings = AppSettings.decode(Data(saved.utf8))
+        XCTAssertEqual(settings.port, 4400)
+        XCTAssertFalse(settings.notificationsEnabled)
+        XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
 
-        let wrong = #"{"sparkDashURL":5555,"sparkDashName":["zgx"],"energyPricePerKWh":"0.30","vllmName":"ZGX"}"#
-        let settings = AppSettings.decode(Data(wrong.utf8))
-        XCTAssertEqual(settings.sparkDashURL, "")
-        XCTAssertEqual(settings.sparkDashName, "")
-        XCTAssertEqual(settings.energyPricePerKWh, 0)
-        XCTAssertEqual(settings.vllmName, "ZGX")
-        XCTAssertEqual(AppSettings.decode(Data(#"{"energyPricePerKWh":1}"#.utf8)).energyPricePerKWh, 1)
+        let wrong = #"{"sparkDashURL":5555,"sparkDashName":["zgx"],"energyPricePerKWh":"0.30","port":4400}"#
+        XCTAssertEqual(AppSettings.decode(Data(wrong.utf8)).port, 4400)
 
-        var changed = AppSettings()
-        changed.sparkDashURL = "http://192.168.40.141:5555"
-        changed.sparkDashName = "zgx-ff24"
-        changed.energyPricePerKWh = 0.31
-        XCTAssertEqual(AppSettings.decode(changed.encoded()), changed)
-        XCTAssertFalse(String(decoding: changed.encoded() ?? Data(), as: UTF8.self).lowercased().contains("token"),
-                       "the token is never a setting")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(settings.encoded())) as? [String: Any])
+        for key in ["sparkDashURL", "sparkDashName", "energyPricePerKWh"] { XCTAssertNil(json[key], key) }
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
 
     func testGarbageOrMissingDataGivesDefaults() {
@@ -108,7 +99,8 @@ final class AppSettingsTests: XCTestCase {
     func testRoundTrip() {
         var settings = AppSettings()
         settings.port = 5000
-        settings.vllmBaseURL = "https://zgx.example.com"
+        settings.modelServers = [ModelServer(id: ModelServer.legacyID, baseURL: "https://zgx.example.com"),
+                                 ModelServer(id: "a1", name: "Ollama", baseURL: "http://localhost:11434")]
         settings.notificationsEnabled = false
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
@@ -145,7 +137,7 @@ final class AppSettingsTests: XCTestCase {
             let settings = AppSettings.decode(Data("{\(wrong),\"paletteEnabled\":\"no\",\"vllmName\":\"ZGX\"}".utf8))
             XCTAssertEqual(settings.paletteHotKey, .optionSpace, wrong)
             XCTAssertTrue(settings.paletteEnabled)
-            XCTAssertEqual(settings.vllmName, "ZGX")
+            XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
         }
 
         var changed = AppSettings()

@@ -381,7 +381,7 @@ struct ProjectDetailView: View {
                             Label("Open in Terminal", systemImage: "apple.terminal")
                         }
                         Button { WorkspaceActions.copy(root) } label: { Image(systemName: "doc.on.doc") }
-                            .help("Copy path")
+                            .tooltip("Copy the project's path")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)

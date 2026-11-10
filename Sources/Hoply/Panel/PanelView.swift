@@ -26,9 +26,10 @@ struct PanelHeader: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: "circle.hexagongrid.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.tint)
+            HoplyMark()
+                .fill(.tint)
+                .frame(width: 17, height: 17)
+                .accessibilityHidden(true)
             Text("Hoply")
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
@@ -83,7 +84,7 @@ struct HeaderIconButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
         .onHover { hovering = $0 }
-        .help(help)
+        .tooltip(help)
     }
 }
 

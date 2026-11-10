@@ -32,6 +32,9 @@ has_copilot() { command -v copilot >/dev/null || [ -d "$COPILOT_DIR" ]; }
 CLAUDE_EVENTS='["SessionStart","UserPromptSubmit","PreToolUse","PostToolUse","PermissionRequest","Notification","Elicitation","ElicitationResult","SubagentStart","SubagentStop","Stop","StopFailure","SessionEnd"]'
 # X-Hoply-Pid: the hook shell's parent, which is the agent process (or a shell under it; Hoply walks up and checks).
 CLAUDE_HOOK="curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: \$PPID\" --data-binary @- ${ENDPOINT}/hooks/claude-code || true ${MARKER}"
+# PermissionRequest: with "Approve from Hoply" on, Hoply holds the reply until Allow/Deny (at most 570 s) and the
+# decision JSON goes to stdout. Off, or Hoply not running: empty output, and Claude Code's own prompt decides.
+CLAUDE_APPROVE_HOOK="curl -sf -m 590 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Approve: 1' -H \"X-Hoply-Pid: \$PPID\" --data-binary @- ${ENDPOINT}/hooks/claude-code || true ${MARKER}"
 # Logs-only, signal-specific OTel variables, so any other OpenTelemetry export (metrics, traces) keeps working.
 CLAUDE_ENV=$(jq -n --arg logs "${ENDPOINT}/v1/logs" '{
   CLAUDE_CODE_ENABLE_TELEMETRY: "1",
@@ -64,7 +67,7 @@ edit_claude_settings() {
   local backup
   backup="$CLAUDE_SETTINGS.hoply-backup-$(date +%Y%m%d%H%M%S)"
   cp "$CLAUDE_SETTINGS" "$backup"
-  jq --arg marker "$MARKER" --arg cmd "$CLAUDE_HOOK" --argjson events "$CLAUDE_EVENTS" \
+  jq --arg marker "$MARKER" --arg cmd "$CLAUDE_HOOK" --arg approve "$CLAUDE_APPROVE_HOOK" --argjson events "$CLAUDE_EVENTS" \
      --argjson ours "$CLAUDE_ENV" "$CLAUDE_STRIP$1" "$backup" > "$CLAUDE_SETTINGS"
   echo "Claude Code: $2 ($CLAUDE_SETTINGS, backup: $backup)"
 }
@@ -74,7 +77,9 @@ connect_claude() {
     strip_hoply
     | .hooks = (.hooks // {})
     | reduce $events[] as $e (.;
-        .hooks[$e] = ((.hooks[$e] // []) + [{hooks: [{type: "command", command: $cmd, timeout: 5}]}]))
+        .hooks[$e] = ((.hooks[$e] // []) + [{hooks: [
+          if $e == "PermissionRequest" then {type: "command", command: $approve, timeout: 600}
+          else {type: "command", command: $cmd, timeout: 5} end]}]))
     | .env = ((.env // {}) + $ours)' "connected; restart running sessions"
 }
 
@@ -112,11 +117,21 @@ install_app() {
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
   cp "$bin" "$app/Contents/MacOS/Hoply"
   cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
+  # Hoply.icon (Icon Composer) → Assets.car (Liquid Glass) + Hoply.icns; actool ships with Xcode.
+  if xcrun --find actool >/dev/null 2>&1; then
+    xcrun actool Sources/Hoply/Hoply.icon --compile "$app/Contents/Resources" --platform macosx \
+      --minimum-deployment-target 26.0 --app-icon Hoply \
+      --output-partial-info-plist "$(mktemp -t hoply-icon)" --output-format human-readable-text >/dev/null
+  else
+    echo "Hoply: actool not found (needs Xcode), building without an app icon" >&2
+  fi
   codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$app"
   mkdir -p "$HOME/Applications"
   pkill -x Hoply 2>/dev/null || true
   rm -rf "$target"
   ditto "$app" "$target"
+  # Re-register so Finder and Notification Center pick up a changed icon.
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$target" || true
   open "$target"
   echo "Hoply: installed to $target and opened (signed with: $SIGN_IDENTITY)"
 }

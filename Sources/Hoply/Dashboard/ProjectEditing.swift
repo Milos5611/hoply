@@ -15,7 +15,7 @@ struct ProjectEditBanner: View {
                     Spacer(minLength: 8)
                     Button { model.projectEdits.clearError() } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless)
-                        .help("Dismiss")
+                        .tooltip("Dismiss")
                 }
             }
         }

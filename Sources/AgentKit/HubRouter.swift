@@ -7,14 +7,16 @@ public struct HubRouter: Sendable {
         public var usage: [UsageRecord]
         public var prompts: [PromptRecord]
         public var note: String?
+        public var approval: ApprovalRequest?
 
         public init(response: HTTPResponse, events: [AgentEvent], usage: [UsageRecord] = [],
-                    prompts: [PromptRecord] = [], note: String?) {
+                    prompts: [PromptRecord] = [], note: String?, approval: ApprovalRequest? = nil) {
             self.response = response
             self.events = events
             self.usage = usage
             self.prompts = prompts
             self.note = note
+            self.approval = approval
         }
     }
 
@@ -83,7 +85,9 @@ public struct HubRouter: Sendable {
         }
         let events = HookMapper.events(source: source, eventName: eventName, json: json,
                                        agentPID: Self.agentPID(request), now: now)
-        return Outcome(response: .json(), events: events, note: nil)
+        let approval = PermissionApproval.request(source: source, eventName: eventName, json: json,
+                                                  headers: request.headers, now: now)
+        return Outcome(response: .json(), events: events, note: nil, approval: approval)
     }
 
     public static let agentPIDHeader = "x-hoply-pid"

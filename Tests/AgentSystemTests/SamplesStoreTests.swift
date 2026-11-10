@@ -203,7 +203,7 @@ final class SamplesStoreTests: XCTestCase {
         let ledger = try Ledger(configuration: LedgerConfiguration(
             databasePath: store.databasePath, claudeConfigDirectory: "/nonexistent/claude",
             copilotHome: "/nonexistent/copilot", pricingOverridesURL: nil, watchForChanges: false))
-        let perDay = try await ledger.modelTokensPerDay(days: 2, now: t0, calendar: utc)
+        let perDay = try await ledger.modelTokensPerDay(server: ModelServer.legacyID, days: 2, now: t0, calendar: utc)
         XCTAssertEqual(perDay.map(\.generated), [600, 300])
         XCTAssertEqual(perDay.map(\.prompt), [900, 0])
         XCTAssertEqual(perDay.map(\.observed), [true, true])
@@ -220,26 +220,30 @@ final class SamplesStoreTests: XCTestCase {
         let ledger = try Ledger(configuration: LedgerConfiguration(
             databasePath: directory.path("hoply.sqlite"), claudeConfigDirectory: directory.path("claude"),
             copilotHome: directory.path("copilot"), pricingOverridesURL: nil, watchForChanges: false))
-        func snapshot(_ generated: Int, at time: Date) -> VLLMSnapshot {
-            VLLMSnapshot.from(samples: PrometheusParser.parse("""
+        func snapshot(_ generated: Int, at time: Date) throws -> ModelServerSnapshot {
+            let metrics = """
                 vllm:num_requests_running 2
                 vllm:num_requests_waiting 0
                 vllm:generation_tokens_total \(generated)
                 vllm:prompt_tokens_total 100
                 vllm:kv_cache_usage_perc 0.5
-                """), at: time)
+                """
+            return try ModelServerDetector.snapshot(from: [.metrics: .success(Data(metrics.utf8))], engine: nil, at: time,
+                                                    endpoint: "Box").get()
         }
+        let legacy = ModelServer.legacyID
         let now = Date()
-        let first = snapshot(1000, at: now.addingTimeInterval(-5))
-        try await ledger.recordModelSamples(VLLMStatus.compute(previous: nil, current: first))
-        try await ledger.recordModelSamples(VLLMStatus.compute(previous: first, current: snapshot(1250, at: now)))
-        let recent = try await ledger.recentModelSamples(since: now.addingTimeInterval(-600), now: now)
+        let first = try snapshot(1000, at: now.addingTimeInterval(-5))
+        try await ledger.recordModelSamples(ModelServerStatus.compute(previous: nil, current: first), server: legacy)
+        try await ledger.recordModelSamples(ModelServerStatus.compute(previous: first, current: try snapshot(1250, at: now)),
+                                            server: legacy)
+        let recent = try await ledger.recentModelSamples(server: legacy, since: now.addingTimeInterval(-600), now: now)
         XCTAssertEqual(Set(recent.keys), Set(ModelServerSeries.all).subtracting([ModelServerSeries.memoryBytes]),
-                       "the old poll path never reads memory")
+                       "vLLM reports no memory, so there is no memory series")
         XCTAssertEqual(recent[ModelServerSeries.generationTokensPerSecond]?.last?.max, 50)
         XCTAssertEqual(recent[ModelServerSeries.kvCachePercent]?.last?.max, 50)
         XCTAssertEqual(recent[ModelServerSeries.generatedTokens]?.map(\.sum).reduce(0, +), 250)
-        let today = try await ledger.modelTokensPerDay(days: 1, now: now)
+        let today = try await ledger.modelTokensPerDay(server: legacy, days: 1, now: now)
         XCTAssertEqual(today.first?.generated, 250)
     }
 

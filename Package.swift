@@ -30,7 +30,7 @@ let package = Package(
         .executableTarget(
             name: "Hoply",
             dependencies: ["AgentKit", "AgentSystem"],
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "Hoply.icon"],
             swiftSettings: [.defaultIsolation(MainActor.self)],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",

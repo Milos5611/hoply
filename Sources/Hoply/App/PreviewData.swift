@@ -13,6 +13,19 @@ enum PreviewData {
         return settings
     }
 
+    static let approvalSession = SessionKey(source: .claudeCode, id: "approval")
+
+    static func approvalEvents(now: Date) -> [AgentEvent] {
+        [AgentEvent(key: approvalSession, kind: .promptSubmitted("Upgrade the build to Node 24"), time: now - 300,
+                    cwd: "\(NSHomeDirectory())/Project/fiba", model: "claude-opus-5", fromHook: true),
+         AgentEvent(key: approvalSession, kind: .needsPermission("Allow Bash?"), time: now - 20, fromHook: true)]
+    }
+
+    static func approvals(now: Date) -> [ApprovalRequest] {
+        [ApprovalRequest(key: approvalSession, tool: "Bash", detail: "rm -rf node_modules && npm ci && npm run build",
+                         received: now - 20)]
+    }
+
     static func events(now: Date) -> [AgentEvent] {
         func at(_ minutesAgo: Double) -> Date { now.addingTimeInterval(-minutesAgo * 60) }
         func key(_ source: AgentSource, _ id: String) -> SessionKey { SessionKey(source: source, id: id) }

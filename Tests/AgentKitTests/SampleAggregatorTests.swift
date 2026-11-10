@@ -113,7 +113,7 @@ final class ModelServerSeriesTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_794_200_400)
 
     private func snapshot(finished: Int, running: Int, prompt: Int = 1000, kv: Double = 0.25,
-                          at seconds: TimeInterval) -> VLLMSnapshot {
+                          at seconds: TimeInterval) throws -> ModelServerSnapshot {
         let text = """
             tensorfold:num_requests_running 1
             tensorfold:num_requests_waiting 2
@@ -122,26 +122,36 @@ final class ModelServerSeriesTests: XCTestCase {
             tensorfold:prompt_tokens_total \(prompt)
             tensorfold:kv_cache_usage_perc{stream="0"} \(kv)
             """
-        return VLLMSnapshot.from(samples: PrometheusParser.parse(text), at: t0.addingTimeInterval(seconds))
+        return try metrics(text, at: t0.addingTimeInterval(seconds))
+    }
+
+    private func metrics(_ text: String, at time: Date) throws -> ModelServerSnapshot {
+        try ModelServerDetector.snapshot(from: [.metrics: .success(Data(text.utf8))], engine: nil, at: time,
+                                         endpoint: "Box").get()
+    }
+
+    private func observations(current: ModelServerSnapshot, previous: ModelServerSnapshot?) -> [SampleObservation] {
+        ModelServerSeries.observations(ModelServerStatus.compute(previous: previous, current: current),
+                                       server: ModelServer.legacyID)
     }
 
     func testTheFixtureMapsToTheStableSet() throws {
-        let samples = PrometheusParser.parse(try Fixture.text("tensorfold_metrics.txt"))
-        let snapshot = VLLMSnapshot.from(samples: samples, at: t0)
-        XCTAssertEqual(snapshot.generationTokensCounter, 54353)
-        let first = ModelServerSeries.observations(current: snapshot, previous: nil)
+        let snapshot = try metrics(try Fixture.text("tensorfold_metrics.txt"), at: t0)
+        XCTAssertEqual(snapshot.metrics.generationTokensCounter, 54353)
+        let first = observations(current: snapshot, previous: nil)
         XCTAssertEqual(first.map(\.series), [ModelServerSeries.kvCachePercent, ModelServerSeries.running,
-                                             ModelServerSeries.waiting, ModelServerSeries.generatedTokens,
-                                             ModelServerSeries.promptTokens], "no rates without a previous poll")
+                                             ModelServerSeries.waiting, ModelServerSeries.memoryBytes,
+                                             ModelServerSeries.generatedTokens, ModelServerSeries.promptTokens],
+                       "no rates without a previous poll")
         XCTAssertEqual(first.filter { $0.kind == .counter }.map(\.value), [54353, 7_725_987])
         XCTAssertTrue(first.allSatisfy { $0.ts == t0 })
         XCTAssertEqual(Set(ModelServerSeries.all).count, 8)
     }
 
     func testRatesGaugesAndCounters() throws {
-        let previous = snapshot(finished: 1000, running: 0, at: 0)
-        let current = snapshot(finished: 1000, running: 250, prompt: 3000, at: 5)
-        let values = Dictionary(uniqueKeysWithValues: ModelServerSeries.observations(current: current, previous: previous)
+        let previous = try snapshot(finished: 1000, running: 0, at: 0)
+        let current = try snapshot(finished: 1000, running: 250, prompt: 3000, at: 5)
+        let values = Dictionary(uniqueKeysWithValues: observations(current: current, previous: previous)
             .map { ($0.series, ($0.value, $0.kind)) })
         XCTAssertEqual(values[ModelServerSeries.generationTokensPerSecond]?.0, 50, "live streams count toward tok/s")
         XCTAssertEqual(values[ModelServerSeries.promptTokensPerSecond]?.0, 400)
@@ -153,14 +163,14 @@ final class ModelServerSeriesTests: XCTestCase {
         XCTAssertEqual(values[ModelServerSeries.waiting]?.1, .gauge)
     }
 
-    func testACancelledStreamIsNotARestart() {
+    func testACancelledStreamIsNotARestart() throws {
         var aggregator = SampleAggregator()
-        let polls = [snapshot(finished: 1000, running: 0, at: 0), snapshot(finished: 1000, running: 400, at: 5),
-                     snapshot(finished: 1000, running: 0, at: 10), snapshot(finished: 1300, running: 0, at: 15)]
+        let polls = [try snapshot(finished: 1000, running: 0, at: 0), try snapshot(finished: 1000, running: 400, at: 5),
+                     try snapshot(finished: 1000, running: 0, at: 10), try snapshot(finished: 1300, running: 0, at: 15)]
         var generated = 0.0
         for (index, poll) in polls.enumerated() {
-            let observations = ModelServerSeries.observations(current: poll, previous: index > 0 ? polls[index - 1] : nil)
-            generated += aggregator.add(observations)
+            let polled = observations(current: poll, previous: index > 0 ? polls[index - 1] : nil)
+            generated += aggregator.add(polled)
                 .filter { $0.series == ModelServerSeries.generatedTokens }.map(\.sum).reduce(0, +)
         }
         XCTAssertEqual(generated, 300, "the 400 tokens of the cancelled stream never count as a restart")

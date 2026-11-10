@@ -26,7 +26,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_760),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_880),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 var allPriced = PreviewData.history(now: now)
@@ -195,6 +195,21 @@ enum Snapshot {
                            appearance: looks,
                            to: directory.appendingPathComponent("dashboard-projects-merge-\(name).png"))
                 model.projectEdits.show(edits)
+                let approving = AppModel.preview(now: now)
+                approving.showPreview(approvals: PreviewData.approvals(now: now), events: PreviewData.approvalEvents(now: now))
+                try render(PanelView(), model: approving, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-approval-\(name).png"))
+                try render(VStack(spacing: 6) {
+                    TooltipBubble(text: "Resume this session in Terminal")
+                    HStack(spacing: 8) {
+                        ForEach(["play.fill", "chevron.left.forwardslash.chevron.right", "doc.text.magnifyingglass",
+                                 "apple.terminal", "number"], id: \.self) { symbol in
+                            Button {} label: { Image(systemName: symbol) }
+                        }
+                    }
+                    .buttonStyle(.tile)
+                }.padding(16).frame(width: 322), model: model, appearance: looks,
+                           to: directory.appendingPathComponent("tooltip-\(name).png"))
                 try render(VStack(spacing: 12) {
                     ForEach(Array(PreviewData.timelineSamples(now: now).enumerated()), id: \.offset) { _, spans in
                         SessionTimelineCard(spans: spans)

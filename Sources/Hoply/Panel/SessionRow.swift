@@ -50,6 +50,10 @@ struct SessionRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 2)
                 }
+                ForEach(model.approvals(for: session.key)) { approval in
+                    ApprovalStrip(approval: approval)
+                        .padding(.top, 4)
+                }
                 if let subagents {
                     Label(subagents, systemImage: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 11.5))

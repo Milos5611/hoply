@@ -53,7 +53,7 @@ struct PaletteSettings: View {
                     }
                 }
                 .disabled(!enabled)
-                Hint("Searches sessions, projects, dev servers, Dashboard pages and actions from any app. These settings apply at once, without Save. If pressing the shortcut does nothing, macOS or another app owns it: record another one.")
+                Hint("Searches sessions, projects, dev servers, Dashboard pages and actions from any app. If pressing the shortcut does nothing, macOS or another app owns it: record another one.")
             }
         }
         .onDisappear { endRecording() }

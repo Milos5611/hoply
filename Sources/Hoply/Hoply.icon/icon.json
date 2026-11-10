@@ -1,0 +1,31 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.40000,0.46000,1.00000,1.00000",
+      "display-p3:0.27000,0.22000,0.82000,1.00000"
+    ],
+    "orientation" : {
+      "start" : { "x" : 0.5, "y" : 0 },
+      "stop" : { "x" : 0.5, "y" : 1 }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        { "glass" : true, "image-name" : "nodes.svg", "name" : "nodes" }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
+      "translucency" : { "enabled" : true, "value" : 0.4 }
+    },
+    {
+      "layers" : [
+        { "glass" : true, "image-name" : "spokes.svg", "name" : "spokes", "opacity" : 0.7 }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.4 },
+      "translucency" : { "enabled" : true, "value" : 0.5 }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [ "macOS" ]
+  }
+}

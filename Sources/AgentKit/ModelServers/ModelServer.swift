@@ -295,22 +295,6 @@ public struct ModelServer: Codable, Equatable, Sendable, Identifiable {
         return Target(endpoint: other, path: path, sendsCredentials: host == endpoint.host)
     }
 
-    public static func merge(current: [ModelServer], edited: [ModelServer], base: [ModelServer]) -> [ModelServer] {
-        let before = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let after = Dictionary(edited.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var result: [ModelServer] = []
-        for server in current {
-            if let old = before[server.id] {
-                guard let new = after[server.id] else { continue }
-                result.append(new != old ? new : server)
-            } else {
-                result.append(server)
-            }
-        }
-        let known = Set(result.map(\.id)).union(current.map(\.id))
-        result += edited.filter { before[$0.id] == nil && !known.contains($0.id) }
-        return result
-    }
 }
 
 public enum ModelServerRoute: String, Sendable, CaseIterable, Codable {

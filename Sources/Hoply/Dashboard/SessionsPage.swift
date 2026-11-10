@@ -174,10 +174,10 @@ struct Pager: View {
             Spacer()
             Button { go(offset - History.pageSize) } label: { Image(systemName: "chevron.left") }
                 .disabled(offset == 0)
-                .help("Newer sessions")
+                .tooltip("Newer sessions")
             Button { go(offset + History.pageSize) } label: { Image(systemName: "chevron.right") }
                 .disabled(offset + count >= total)
-                .help("Older sessions")
+                .tooltip("Older sessions")
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 14)
@@ -382,22 +382,22 @@ struct SessionDetail: View {
                     let started = ResumeLauncher.resume(source: session.key.source, sessionID: session.key.id, cwd: cwd)
                     resumeFailed = started ? nil : session.key
                 } label: { Image(systemName: "play.fill") }
-                    .help("Resume in Terminal, in the session's folder")
+                    .tooltip("Resume this session in Terminal")
             }
             if let cwd = session.cwd, let editor = model.defaultEditor {
                 Button { model.openInEditor(cwd) } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
-                    .help("Open in \(editor.name)")
+                    .tooltip("Open the session's folder in \(editor.name)")
             }
             if let path = session.transcriptPath {
                 Button { WorkspaceActions.revealInFinder(path) } label: { Image(systemName: "doc.text.magnifyingglass") }
-                    .help("Reveal transcript in Finder")
+                    .tooltip("Show the transcript file in Finder")
             }
             if let cwd = session.cwd {
                 Button { WorkspaceActions.openInTerminal(cwd) } label: { Image(systemName: "apple.terminal") }
-                    .help("Open in Terminal")
+                    .tooltip("Open Terminal in the session's folder")
             }
             Button { WorkspaceActions.copy(session.key.id) } label: { Image(systemName: "number") }
-                .help("Copy session ID")
+                .tooltip("Copy the session ID")
         }
         .buttonStyle(.tile)
     }

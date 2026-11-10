@@ -114,7 +114,7 @@ private struct LiveModelCard: View {
                         Image(systemName: "slider.horizontal.3")
                     }
                     .buttonStyle(.borderless)
-                    .help("Edit \(server.displayName)")
+                    .tooltip("Edit \(server.displayName)")
                 }
                 Divider()
                 if let online = state?.online {

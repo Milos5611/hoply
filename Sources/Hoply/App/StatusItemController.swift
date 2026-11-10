@@ -8,6 +8,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private let dashboard: DashboardWindowController
     private let palette: PaletteWindowController
+    private let idleImage = HoplyMark.statusBarImage(hollowHub: true)
+    private let activeImage = HoplyMark.statusBarImage(hollowHub: false)
 
     /// `.transient` closes the panel the moment Hoply resigns active, so Spotlight or the screen-capture
     /// toolbar makes it vanish mid-recording. `HOPLY_HOLD_OPEN=1` keeps it up until the status item is
@@ -141,10 +143,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func updateLabel(attention: Int, working: Int) {
         guard let button = statusItem.button else { return }
-        let symbol = attention > 0 || working > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Hoply")
-        image?.isTemplate = true
-        button.image = image
+        button.image = attention > 0 || working > 0 ? activeImage : idleImage
         button.title = attention > 0 ? "\(attention)" : ""
     }
 }

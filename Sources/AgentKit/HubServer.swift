@@ -14,10 +14,19 @@ public final class HubServer: @unchecked Sendable {
     public var onPrompts: (@Sendable ([PromptRecord]) -> Void)?
     public var onStatus: (@Sendable (Status) -> Void)?
     public var onNote: (@Sendable (String) -> Void)?
+    public var onApproval: (@Sendable (ApprovalRequest, [AgentEvent]) -> Void)?
+    public var onApprovalClosed: (@Sendable (String) -> Void)?
 
     private let queue = DispatchQueue(label: "hoply.hub")
     private let router = HubRouter()
     private var listener: NWListener?
+    private var holdsApprovals = false
+    private var held: [String: HeldApproval] = [:]
+
+    private struct HeldApproval {
+        let connection: NWConnection
+        let expiry: DispatchWorkItem
+    }
 
     public init() {}
 
@@ -27,9 +36,29 @@ public final class HubServer: @unchecked Sendable {
 
     public func stop() {
         queue.async { [weak self] in
+            self?.releaseAll()
             self?.listener?.cancel()
             self?.listener = nil
             self?.onStatus?(.stopped)
+        }
+    }
+
+    public func setHoldsApprovals(_ enabled: Bool) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            holdsApprovals = enabled
+            if !enabled { releaseAll() }
+        }
+    }
+
+    public func resolve(_ id: String, _ decision: ApprovalDecision) {
+        queue.async { [weak self] in self?.finish(id, with: PermissionApproval.response(decision), notify: false) }
+    }
+
+    public func release(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        queue.async { [weak self] in
+            for id in ids { self?.finish(id, with: PermissionApproval.response(nil), notify: false) }
         }
     }
 
@@ -107,6 +136,11 @@ public final class HubServer: @unchecked Sendable {
             switch HTTPRequestParser.parse(buffer) {
             case .complete(let request):
                 let outcome = self.router.handle(request)
+                if let approval = outcome.approval, self.holdsApprovals, let onApproval = self.onApproval {
+                    self.hold(approval, on: connection)
+                    onApproval(approval, outcome.events)
+                    return
+                }
                 if !outcome.events.isEmpty { self.onEvents?(outcome.events) }
                 if !outcome.usage.isEmpty { self.onUsage?(outcome.usage) }
                 if !outcome.prompts.isEmpty { self.onPrompts?(outcome.prompts) }
@@ -128,6 +162,42 @@ public final class HubServer: @unchecked Sendable {
                 self.send(.badRequest(reason), on: connection)
             }
         }
+    }
+
+    private func hold(_ approval: ApprovalRequest, on connection: NWConnection) {
+        let expiry = DispatchWorkItem { [weak self] in
+            self?.finish(approval.id, with: PermissionApproval.response(nil), notify: true)
+        }
+        held[approval.id] = HeldApproval(connection: connection, expiry: expiry)
+        queue.asyncAfter(deadline: .now() + PermissionApproval.holdLimit, execute: expiry)
+        watchForClose(connection, id: approval.id)
+    }
+
+    // The hook's curl closes the socket when Claude Code cancels the hook; nothing is left to answer then.
+    private func watchForClose(_ connection: NWConnection, id: String) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] _, _, isComplete, error in
+            guard let self, self.held[id] != nil else { return }
+            if isComplete || error != nil {
+                if let entry = self.held.removeValue(forKey: id) {
+                    entry.expiry.cancel()
+                    entry.connection.cancel()
+                }
+                self.onApprovalClosed?(id)
+            } else {
+                self.watchForClose(connection, id: id)
+            }
+        }
+    }
+
+    private func finish(_ id: String, with response: HTTPResponse, notify: Bool) {
+        guard let entry = held.removeValue(forKey: id) else { return }
+        entry.expiry.cancel()
+        send(response, on: entry.connection)
+        if notify { onApprovalClosed?(id) }
+    }
+
+    private func releaseAll() {
+        for id in Array(held.keys) { finish(id, with: PermissionApproval.response(nil), notify: true) }
     }
 
     private func send(_ response: HTTPResponse, on connection: NWConnection) {

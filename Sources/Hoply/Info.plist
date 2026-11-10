@@ -12,6 +12,10 @@
 	<string>Hoply</string>
 	<key>CFBundleDisplayName</key>
 	<string>Hoply</string>
+	<key>CFBundleIconFile</key>
+	<string>Hoply</string>
+	<key>CFBundleIconName</key>
+	<string>Hoply</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

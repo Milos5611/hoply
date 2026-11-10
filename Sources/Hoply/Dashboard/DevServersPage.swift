@@ -187,7 +187,7 @@ private struct DevServerRow: View {
                     Button { devServers.cancelStop(server) } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless)
                         .font(.system(size: 10, weight: .semibold))
-                        .help("Dismiss")
+                        .tooltip("Dismiss")
                 }
                 .padding(.leading, 42)
             }

@@ -93,7 +93,7 @@ final class LedgerInputTests: XCTestCase {
         XCTAssertEqual(defaults.claudeConfigDir, "")
         let json = #"{"vllmName":"ZGX","localModelPatterns":"qwen","referenceModel":"claude-opus-5-5","claudeConfigDir":"~/alt"}"#
         let settings = AppSettings.decode(Data(json.utf8))
-        XCTAssertEqual(settings.vllmName, "ZGX")
+        XCTAssertEqual(settings.legacyModelServer?.name, "ZGX")
         XCTAssertEqual(settings.localModelPatterns, ["qwen"], "a wrongly typed list falls back to the default")
         XCTAssertEqual(settings.referenceModel, "claude-opus-5-5")
         XCTAssertEqual(settings.claudeConfigDir, "~/alt")

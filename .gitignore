@@ -8,3 +8,6 @@ DerivedData/
 # Personal
 .claude/settings.local.json
 .idea/
+
+# Claude Code agent worktrees
+.claude/worktrees/
