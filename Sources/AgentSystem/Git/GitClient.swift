@@ -48,43 +48,12 @@ public struct GitClient: Sendable {
 
     private static func execute(_ path: String, _ arguments: [String], directory: String?,
                                 timeout: TimeInterval) -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true) }
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_OPTIONAL_LOCKS"] = "0"
         environment["GIT_TERMINAL_PROMPT"] = "0"
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do { try process.run() } catch { return nil }
-
-        // Drained on another thread: a child that fills the pipe would otherwise never exit.
-        let collected = Collected()
-        let drained = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
-            collected.set(output.fileHandleForReading.readDataToEndOfFile())
-            drained.signal()
-        }
-        guard exited.wait(timeout: .now() + timeout) == .success else {
-            process.terminate()
-            return nil
-        }
-        guard drained.wait(timeout: .now() + timeout) == .success, process.terminationStatus == 0 else { return nil }
-        return collected.value
-    }
-
-    private final class Collected: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-
-        func set(_ new: Data) { lock.withLock { data = new } }
-        var value: Data { lock.withLock { data } }
+        guard let output = Subprocess.run(path, arguments, directory: directory, environment: environment,
+                                          timeout: timeout), output.status == 0 else { return nil }
+        return output.data
     }
 }
 

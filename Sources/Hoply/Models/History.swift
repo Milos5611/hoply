@@ -627,6 +627,8 @@ final class History {
                                       copilot: copilot, copilotMonth: month)
                 guard generation == pageGeneration[page] else { return }
                 if data != limits { limits = data }
+            case .devServers:
+                break
             case .localModel:
                 let range = localModelRange
                 let interval = range.interval(now: now)

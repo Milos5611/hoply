@@ -1,4 +1,5 @@
 import AgentKit
+import AgentSystem
 import AppKit
 import SwiftUI
 
@@ -49,6 +50,19 @@ enum Snapshot {
                                model: model, appearance: looks,
                                to: directory.appendingPathComponent("dashboard-\(page.rawValue)-\(name).png"))
                 }
+                let servers = PreviewData.devServers(now: now)
+                model.devServers.show(servers, stops: PreviewData.devServerStops(servers),
+                                      notice: DevServers.Notice(text: "Stopped Astro :4321", isError: false))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-stop-\(name).png"))
+                try render(VStack(spacing: 0) { PanelSections().padding(.horizontal, 12); PanelFooter() }.frame(width: 448),
+                           model: model, appearance: looks,
+                           to: directory.appendingPathComponent("panel-dev-servers-stop-\(name).png"))
+                model.devServers.show(DevServerScan(snapshot: ProcessSnapshot(takenAt: now, processes: [])))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-empty-\(name).png"))
+                model.devServers.show(servers)
+
                 var disconnected = PreviewData.settings
                 disconnected.claudeLimitsEnabled = false
                 disconnected.copilotMonthlyAllowance = 0

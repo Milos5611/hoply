@@ -27,6 +27,7 @@ final class AppModel {
     private(set) var defaultEditorID = ""
     var showingSettings = false
     let history = History()
+    let devServers: DevServers
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
     @ObservationIgnored var settingsOpener: (() -> Void)?
@@ -84,6 +85,7 @@ final class AppModel {
 
     init(live: Bool = true) {
         isLive = live
+        devServers = DevServers(live: live)
         guard live else {
             settings = AppSettings()
             return
@@ -122,6 +124,8 @@ final class AppModel {
             }
         })
         startModelLoop()
+        devServers.context = { [weak self] in self?.devServerContext }
+        devServers.start()
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshClaudeLimits()
@@ -291,15 +295,33 @@ final class AppModel {
         apply(updated)
     }
 
+    // MARK: - Dev servers
+
+    private var devServerContext: DevServers.Context {
+        let history = history
+        let live = sessions.filter { $0.state != .ended }.map { session in
+            DevServerClassifier.Session(key: session.key, cwd: session.cwd.flatMap { $0.isEmpty ? nil : $0 })
+        }
+        let resolve: DevServerMonitor.ProjectLookup = { cwds in await history.resolveProjects(cwds) ?? [:] }
+        return DevServers.Context(hubPort: settings.port, sessions: live,
+                                  resolveProjects: history.isReady ? resolve : nil)
+    }
+
+    func session(_ key: SessionKey?) -> AgentSession? {
+        key.flatMap { key in sessions.first { $0.key == key } }
+    }
+
     // MARK: - Local model (vLLM)
 
     func setPanelOnScreen(_ visible: Bool) {
         panelOnScreen = visible
+        devServers.setWatched(panelOnScreen || dashboardOnScreen)
         if visible { modelServerWatched() }
     }
 
     func setDashboardOnScreen(_ visible: Bool) {
         dashboardOnScreen = visible
+        devServers.setWatched(panelOnScreen || dashboardOnScreen)
         if visible { modelServerWatched() }
     }
 
@@ -569,6 +591,7 @@ extension AppModel {
         model.projectsByCwd = PreviewData.projectsByCwd
         model.gitStats = PreviewData.gitStats
         model.editors = PreviewData.editors
+        model.devServers.show(PreviewData.devServers(now: now))
         return model
     }
 

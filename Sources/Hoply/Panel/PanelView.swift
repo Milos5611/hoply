@@ -77,13 +77,24 @@ struct PanelFooter: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 6, height: 6)
-            Text(statusText)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if let notice = model.devServers.notice {
+                Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(notice.isError ? Color.red : Color.green)
+                Text(notice.text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(notice.text)
+            } else {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 6, height: 6)
+                Text(statusText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Spacer()
             if model.history.progress.isBackfilling {
                 BackfillIndicator(progress: model.history.progress)

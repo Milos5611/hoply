@@ -1,4 +1,4 @@
-- [Hoply v2 plan](v2-plan.md) — approved 2026-11-09, M0–M5 (no GPU) committed; review fixes + M5.5 built, uncommitted (2026-11-10, awaiting live check + glass pass), next M6; order M2→M8 then M1 (Cloudflare last): glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
+- [Hoply v2 plan](v2-plan.md) — approved 2026-11-09, M0–M5.5 (no GPU) committed; M6 built, uncommitted (2026-11-10); M4–M6 await a live check + glass pass; next M7; order M2→M8 then M1 (Cloudflare last): glass panel + Dashboard, SQLite usage ledger, Claude/Copilot backfill, Cloudflare Access, GPU, dev servers, clean up, palette; M0–M8
 - [No deletes](no-deletes.md) — never delete project files; avoid `rm` in shell commands, overwrite instead
 - [Comments only on complex parts](comments-only-complex.md) — default to none; only where code would otherwise be "simplified" into a bug; no doc comments; check the diff (and every subagent's) before reporting
 - [Mizu is the UI bar](ui-mizu-reference.md) — user compares the panel with Mizu's real screenshots; check UI with --snapshot before reporting

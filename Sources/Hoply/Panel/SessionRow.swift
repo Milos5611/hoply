@@ -58,6 +58,11 @@ struct SessionRow: View {
                         .padding(.top, 2)
                         .help(subagentHelp)
                 }
+                let servers = model.devServers.rowServers(for: session.key)
+                if !servers.isEmpty {
+                    DevServerStrip(servers: servers)
+                        .padding(.top, 3)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {

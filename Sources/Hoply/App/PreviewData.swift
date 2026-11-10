@@ -1,4 +1,5 @@
 import AgentKit
+import AgentSystem
 import Foundation
 
 enum PreviewData {
@@ -150,6 +151,66 @@ enum PreviewData {
                 "\(home)/Project/yasm-backend": refs[1], "\(home)/Project/hoply": refs[2],
                 "\(home)/Project/hoply/Sources/AgentSystem": refs[2],
                 "\(home)/Project/FIBA3x3.RuleEngine": refs[3], "\(home)/Documents/notes": refs[4]]
+    }
+
+    static func devServers(now: Date) -> DevServerScan {
+        let home = NSHomeDirectory()
+        let uid: UInt32 = 501
+        func process(_ pid: Int32, parent: Int32 = 1, group: Int32? = nil, minutesAgo: Double, executable: String,
+                     arguments: [String], cwd: String, megabytes: UInt64 = 0, port: Int? = nil,
+                     addresses: [String] = ["127.0.0.1"]) -> ScannedProcess {
+            ScannedProcess(identity: ProcessIdentity(pid: pid, startedAt: now.addingTimeInterval(-minutesAgo * 60)),
+                           parentPID: parent, groupID: group ?? pid, uid: uid,
+                           name: (executable as NSString).lastPathComponent, executable: executable,
+                           arguments: arguments, cwd: cwd, memoryBytes: megabytes * 1_048_576,
+                           listeners: port.map { port in
+                               addresses.map { ListeningSocket(port: port, family: $0.contains(":") ? .ipv6 : .ipv4, address: $0) }
+                           } ?? [])
+        }
+        let fiba = "\(home)/Project/fiba", backend = "\(home)/Project/yasm-backend"
+        let sparkdash = "\(home)/Project/sparkdash"
+        let node = "/opt/homebrew/bin/node"
+        let snapshot = ProcessSnapshot(takenAt: now.addingTimeInterval(-6), processes: [
+            process(4100, minutesAgo: 42, executable: "\(home)/.local/bin/claude", arguments: ["claude"], cwd: fiba),
+            process(4210, parent: 4100, minutesAgo: 40, executable: node,
+                    arguments: ["node", "\(fiba)/node_modules/next/dist/bin/next", "dev"], cwd: fiba, megabytes: 96),
+            process(4211, parent: 4210, group: 4210, minutesAgo: 40, executable: node,
+                    arguments: ["next-server (v15.4.1)"], cwd: fiba, megabytes: 316, port: 3000),
+            process(5300, minutesAgo: 190, executable: node,
+                    arguments: ["node", "\(fiba)/node_modules/vite/bin/vite.js"], cwd: "\(fiba)/apps/admin",
+                    megabytes: 148, port: 5173, addresses: ["127.0.0.1", "::1"]),
+            process(6100, minutesAgo: 1_500, executable: "/opt/homebrew/bin/python3.13",
+                    arguments: ["python3.13", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0"], cwd: sparkdash,
+                    megabytes: 86, port: 8000, addresses: ["0.0.0.0"]),
+            process(7000, minutesAgo: 13, executable: "/opt/homebrew/bin/copilot", arguments: ["copilot"], cwd: backend),
+            process(7040, parent: 7000, group: 7000, minutesAgo: 11, executable: "/usr/local/share/dotnet/dotnet",
+                    arguments: ["dotnet", "run"], cwd: backend, megabytes: 231, port: 5080),
+        ])
+        var projects = projectsByCwd
+        projects["\(fiba)/apps/admin"] = projectRefs[0]
+        projects[sparkdash] = ProjectRef(id: 7, root: sparkdash, name: "sparkdash", kind: .repo)
+        let sessions = [
+            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "pricing"), pid: 4100, cwd: fiba),
+            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "auth"), cwd: fiba),
+            DevServerClassifier.Session(key: SessionKey(source: .copilotCLI, id: "orders"), cwd: backend),
+            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "schema"), cwd: backend),
+        ]
+        let classifier = DevServerClassifier(ownPID: 1, uid: uid, homeDirectory: home)
+        return DevServerScan(servers: classifier.servers(in: snapshot, projects: projects, sessions: sessions),
+                             snapshot: snapshot, duration: 0.04)
+    }
+
+    static func devServerStops(_ scan: DevServerScan) -> [String: DevServers.StopState] {
+        var stops: [String: DevServers.StopState] = [:]
+        for server in scan.servers {
+            switch server.port {
+            case 3000: stops[server.id] = .confirming
+            case 5173: stops[server.id] = .stopping
+            case 8000: stops[server.id] = .failed(DevServerStop.Refusal.leaderGone.reason)
+            default: break
+            }
+        }
+        return stops
     }
 
     static var gitStats: [String: GitDiffStat] {

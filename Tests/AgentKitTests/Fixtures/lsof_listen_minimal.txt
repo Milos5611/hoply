@@ -1,0 +1,16 @@
+p1069
+cControlCe
+f9
+tIPv4
+PTCP
+n*:7000
+f10
+tIPv6
+PTCP
+n*:7000
+p2291
+cruby
+f7
+tIPv4
+PTCP
+n192.168.1.20:4567
