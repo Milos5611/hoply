@@ -1,0 +1,17 @@
+# SYNTHETIC: written from memory of Text Generation Inference's /metrics; not a capture.
+# TYPE tgi_queue_size gauge
+tgi_queue_size 4
+# TYPE tgi_batch_current_size gauge
+tgi_batch_current_size 2
+# TYPE tgi_request_count counter
+tgi_request_count 310
+# TYPE tgi_request_success counter
+tgi_request_success{method="single"} 305
+# TYPE tgi_request_generated_tokens histogram
+tgi_request_generated_tokens_bucket{le="+Inf"} 305
+tgi_request_generated_tokens_sum 48800
+tgi_request_generated_tokens_count 305
+# TYPE tgi_request_input_length histogram
+tgi_request_input_length_bucket{le="+Inf"} 305
+tgi_request_input_length_sum 210400
+tgi_request_input_length_count 305

@@ -1,0 +1,15 @@
+# SYNTHETIC: written from memory of SGLang's /metrics (--enable-metrics); not a capture.
+# TYPE sglang:prompt_tokens_total counter
+sglang:prompt_tokens_total{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 90500.0
+# TYPE sglang:generation_tokens_total counter
+sglang:generation_tokens_total{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 31200.0
+# TYPE sglang:num_running_reqs gauge
+sglang:num_running_reqs{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 3.0
+# TYPE sglang:num_queue_reqs gauge
+sglang:num_queue_reqs{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 1.0
+# TYPE sglang:token_usage gauge
+sglang:token_usage{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 0.31
+# TYPE sglang:gen_throughput gauge
+sglang:gen_throughput{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 142.5
+# TYPE sglang:cache_hit_rate gauge
+sglang:cache_hit_rate{model_name="Qwen/Qwen2.5-Coder-32B-Instruct"} 0.07
