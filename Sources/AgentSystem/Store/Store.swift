@@ -1,8 +1,6 @@
 import AgentKit
 import Foundation
 
-/// The single writer of the usage ledger. Usage rows are only ever upserted, never deleted, because
-/// Claude Code removes its own transcripts after about 30 days.
 public actor Store {
     public static var defaultDatabaseURL: URL {
         URL.applicationSupportDirectory.appending(path: "Hoply/hoply.sqlite")
@@ -39,7 +37,6 @@ public actor Store {
         self.registry = ProjectRegistry(resolver: resolver, fileSystem: fileSystem)
     }
 
-    /// Writes one batch and, if given, the cursor that produced it, atomically. Returns the sessions touched.
     @discardableResult
     public func apply(_ batch: LedgerBatch, cursor: IngestCursor? = nil) throws -> Set<SessionKey> {
         try db.transaction {
@@ -57,12 +54,21 @@ public actor Store {
                 }
             }
             for turn in turns { try bookPremiumRequests(turn) }
+            for subagent in batch.subagents {
+                try db.run("""
+                    INSERT INTO subagents (source, session_id, agent_id, agent_type, description) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(source, session_id, agent_id) DO UPDATE SET
+                        agent_type = COALESCE(excluded.agent_type, subagents.agent_type),
+                        description = COALESCE(excluded.description, subagents.description)
+                    """, [subagent.session.source.rawValue, subagent.session.id, subagent.agentID, subagent.agentType,
+                          subagent.description])
+                touched.insert(subagent.session)
+            }
             if let cursor { try save(cursor) }
             return touched
         }
     }
 
-    /// The project each cwd belongs to, resolving (and recording in `path_map`) cwds seen for the first time.
     public func projects(forCwds cwds: [String]) throws -> [String: ProjectRef] {
         let wanted = Set(cwds.filter { !$0.isEmpty })
         guard !wanted.isEmpty else { return [:] }
@@ -85,7 +91,6 @@ public actor Store {
         return ids
     }
 
-    /// Every row priced natively (`native_usd`) keeps its price; the rest are re-priced by `setPricing`.
     public static let nativePricingRevision = "native"
 
     public func cursors(source: AgentSource) throws -> [String: FileCursor] {
@@ -97,12 +102,10 @@ public actor Store {
         return Dictionary(rows, uniquingKeysWith: { _, last in last })
     }
 
-    /// "Reindex": every file is read again from the start. Ledger rows stay; the upserts make re-reading safe.
     public func resetCursors(source: AgentSource) throws {
         try db.run("UPDATE ingest_cursors SET offset = 0, size = 0, head_hash = 0 WHERE source = ?", [source.rawValue])
     }
 
-    /// Swaps the price table and re-prices every row priced under another revision, in one transaction.
     @discardableResult
     public func setPricing(_ table: PricingTable) throws -> Int {
         pricing = table
@@ -111,12 +114,8 @@ public actor Store {
 
     // MARK: - Limit samples
 
-    /// A reading identical to its kind's last stored one (same utilization and window) is stored at most this
-    /// often, so the table stays small while the 180 s fetch keeps repeating it.
     public static let limitSampleInterval: TimeInterval = 900
 
-    /// Stores plan-limit samples and returns each kind's latest stored sample from before them: the "previous"
-    /// that `NotificationPolicy.limitsUpdated` compares against.
     @discardableResult
     public func recordLimitSamples(_ samples: [LimitSample]) throws -> [LimitKind: LimitSample] {
         try db.transaction {
@@ -141,15 +140,12 @@ public actor Store {
 
     // MARK: - Samples
 
-    /// Rollups run when the store opens and then at most this often, on the next sample write.
     public static let sampleRollupInterval: TimeInterval = 86_400
 
-    /// Buckets the observations into 60 s rows and merges them into what is stored (n and sum add, min/max
-    /// widen), so each poll is recorded exactly once. A counter seen for the first time since launch takes its
-    /// baseline from its latest stored bucket. Returns the buckets this call added.
     @discardableResult
     public func recordSamples(_ observations: [SampleObservation], now: Date = Date()) throws -> [SampleBucket] {
-        let saved = aggregator
+        let saved = (aggregator, seededCounters)
+        let buckets: [SampleBucket]
         do {
             for series in Set(observations.filter { $0.kind == .counter }.map(\.series)).sorted()
             where !seededCounters.contains(series) {
@@ -162,20 +158,19 @@ public actor Store {
                 }
                 seededCounters.insert(series)
             }
-            let buckets = aggregator.add(observations)
+            let added = aggregator.add(observations)
             try db.transaction {
-                for bucket in buckets { try Self.upsert(bucket, db) }
+                for bucket in added { try Self.upsert(bucket, db) }
             }
-            if now.timeIntervalSince(lastRollup) >= Self.sampleRollupInterval { try rollUpSamples(now: now) }
-            return buckets
+            buckets = added
         } catch {
-            aggregator = saved
+            (aggregator, seededCounters) = saved
             throw error
         }
+        if now.timeIntervalSince(lastRollup) >= Self.sampleRollupInterval { _ = try? rollUpSamples(now: now) }
+        return buckets
     }
 
-    /// For a counter that now comes from a different server: its next reading only sets a baseline. Without
-    /// this, a new server whose counter is below the old one's reads as a restart and books its whole total.
     public func resetCounterBaselines(_ series: [String]) {
         for name in series {
             aggregator.forget(name)
@@ -183,12 +178,11 @@ public actor Store {
         }
     }
 
-    /// Moves sample buckets past each `SampleAggregator.rollups` age into the coarser resolution (merged, then
-    /// the fine rows removed), in one transaction. Running it again changes nothing. Returns the rows moved.
     @discardableResult
     public func rollUpSamples(now: Date = Date()) throws -> Int {
+        let moved = try Self.rollUpSamples(db, now: now)
         lastRollup = now
-        return try Self.rollUpSamples(db, now: now)
+        return moved
     }
 
     private static let mergeBucket = """
@@ -273,8 +267,6 @@ public actor Store {
         }
     }
 
-    /// When the same call shows up under two sessions (Claude Code copies earlier messages into a continued
-    /// session's file), the session that started first keeps it, whichever file was read first.
     private static let upsertUsage = """
         INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, model, is_local, sidechain, agent_id,
                            input, output, reasoning, cache_read, cache_write_5m, cache_write_1h, speed,
@@ -337,9 +329,6 @@ public actor Store {
         var turn: Int?
     }
 
-    /// A turn is one premium request times its highest multiplier, however many calls it made. That amount is
-    /// booked on the turn's earliest call (others get 0), so range and project totals stay plain sums. A call
-    /// with no turn index counts on its own.
     private func bookPremiumRequests(_ turn: CopilotTurn) throws {
         guard let index = turn.turn else {
             try db.run("""
@@ -368,7 +357,6 @@ public actor Store {
                   cursor.file.offset, Int64(bitPattern: cursor.file.headHash)])
     }
 
-    /// Columns 1…9 of the row must be model, the six token columns, speed and native_usd.
     private static func priced(_ row: SQLiteRow, pricing: PricingTable) -> PricedUsage {
         if let native = row.optionalDouble(9) {
             return PricedUsage(costUSD: native, apiEquivUSD: native, isLocal: false)

@@ -1,10 +1,8 @@
 import Foundation
 
 public struct TokenCounts: Sendable, Equatable, Hashable, Codable {
-    /// Always uncached input. Sources that fold cache reads into input must subtract them first.
     public var input: Int
     public var output: Int
-    /// Part of `output`, not extra: Claude bills thinking as output tokens.
     public var reasoning: Int
     public var cacheRead: Int
     public var cacheWrite5m: Int
@@ -24,8 +22,6 @@ public struct TokenCounts: Sendable, Equatable, Hashable, Codable {
     public var promptTokens: Int { input + cacheRead + cacheWrite }
     public var total: Int { promptTokens + output }
 
-    /// Field-wise maximum. Claude Code writes one line per content block and the later blocks of a
-    /// streamed message carry the final output count, so merging must never lose the larger value.
     public func merged(with other: TokenCounts) -> TokenCounts {
         TokenCounts(input: max(input, other.input), output: max(output, other.output),
                     reasoning: max(reasoning, other.reasoning), cacheRead: max(cacheRead, other.cacheRead),
@@ -41,7 +37,6 @@ public struct TokenCounts: Sendable, Equatable, Hashable, Codable {
     }
 }
 
-/// One model call in the usage ledger.
 public struct UsageRecord: Sendable, Equatable, Hashable {
     public var dedupeKey: String
     public var source: AgentSource
@@ -51,18 +46,13 @@ public struct UsageRecord: Sendable, Equatable, Hashable {
     public var isSidechain: Bool
     public var agentID: String?
     public var tokens: TokenCounts
-    /// Claude's `usage.speed`; `"fast"` selects fast-mode prices.
     public var speed: String?
-    /// The agent's own unit of charge (Copilot AIU).
     public var nativeCost: Double?
-    /// The agent's own price in USD. When set it is both the cost and the API-equivalent, and re-pricing never
-    /// replaces it.
     public var nativeUSD: Double?
     public var requestMultiplier: Double?
     public var turnIndex: Int?
     public var cwd: String?
     public var gitBranch: String?
-    /// The emitting process (OTel `process.pid`), used to find a cwd when the record has none. Not stored.
     public var processID: Int32?
 
     public init(dedupeKey: String, source: AgentSource, sessionID: String, timestamp: Date, model: String?,
@@ -87,7 +77,6 @@ public struct UsageRecord: Sendable, Equatable, Hashable {
         self.processID = processID
     }
 
-    /// Combines two sightings of the same call: the earliest time and the largest token counts.
     public func merged(with other: UsageRecord) -> UsageRecord {
         var result = self
         result.timestamp = min(timestamp, other.timestamp)

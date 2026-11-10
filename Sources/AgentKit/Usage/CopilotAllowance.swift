@@ -1,13 +1,9 @@
 import Foundation
 
-/// The monthly premium-request allowance. GitHub resets the counters on the 1st of each month at 00:00 UTC,
-/// whatever the user's time zone.
 public struct CopilotAllowance: Sendable, Equatable {
     public var used: Double
-    /// 0 means not set: no remaining, fraction or overage.
     public var allowance: Int
     public var usdPerExtraRequest: Double
-    /// The UTC month containing `now`; feed it to `StoreReader.totalsBySource(in:)` for `used`.
     public var month: DateInterval
 
     public init(used: Double, allowance: Int, usdPerExtraRequest: Double, now: Date = Date()) {
@@ -29,7 +25,6 @@ public struct CopilotAllowance: Sendable, Equatable {
         isSet ? max(Double(allowance) - used, 0) : nil
     }
 
-    /// `used / allowance`; above 1 once the allowance is spent.
     public var fraction: Double? {
         isSet ? used / Double(allowance) : nil
     }

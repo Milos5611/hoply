@@ -1,11 +1,8 @@
 import Foundation
 
-/// The ledger schema. `migrations[i]` takes `PRAGMA user_version` from i to i + 1. Never edit a shipped
-/// migration; append a new one.
 public enum Schema {
-    public static let migrations: [String] = [v1, v2]
+    public static let migrations: [String] = [v1, v2, v3]
 
-    /// Timestamps are unix seconds (REAL). Token columns are never NULL; cost columns are NULL when unpriced.
     static let v1 = """
     CREATE TABLE projects (
         id INTEGER PRIMARY KEY,
@@ -119,13 +116,21 @@ public enum Schema {
     );
     """
 
-    /// M3: `native_usd` is an agent's own price (Copilot CLI: AIU × $0.01); rows that have it are never re-priced.
-    /// `premium_requests` books a Copilot turn's premium requests (its highest request multiplier) on the turn's
-    /// earliest call, so every total stays a plain `SUM`.
     static let v2 = """
     ALTER TABLE usage ADD COLUMN native_usd REAL;
     ALTER TABLE usage ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0;
     CREATE INDEX usage_turn ON usage(source, session_id, turn_index) WHERE request_multiplier IS NOT NULL;
+    """
+
+    static let v3 = """
+    CREATE TABLE subagents (
+        source TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        agent_type TEXT,
+        description TEXT,
+        PRIMARY KEY (source, session_id, agent_id)
+    );
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {
@@ -138,8 +143,6 @@ public enum Schema {
         }
     }
 
-    /// Brings the database up to `migrations.count`, each step in its own transaction. A database that already
-    /// holds data is backed up first, so a bad migration can be undone by hand.
     public static func migrate(_ db: SQLiteConnection, databasePath: String, migrations: [String] = migrations,
                                backupsToKeep: Int = 2) throws {
         let current = try db.userVersion()
@@ -156,7 +159,6 @@ public enum Schema {
     }
 }
 
-/// `VACUUM INTO` copies kept in fixed slots next to the database: `<db>.1.bak` is the newest.
 public enum Backups {
     public static func slot(_ index: Int, databasePath: String) -> URL {
         URL(fileURLWithPath: "\(databasePath).\(index).bak")
@@ -179,7 +181,6 @@ public enum Backups {
         try place(temporary, at: slot(1, databasePath: databasePath))
     }
 
-    /// Weekly safety copy: rotates when the newest backup is older than `interval` (or missing).
     public static func rotateIfDue(_ db: SQLiteConnection, databasePath: String, keep: Int,
                                    interval: TimeInterval, now: Date = Date()) throws {
         guard isPersistent(databasePath) else { return }

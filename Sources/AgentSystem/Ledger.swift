@@ -4,13 +4,11 @@ import Foundation
 public struct LedgerConfiguration: Sendable, Equatable {
     public var databasePath: String
     public var claudeConfigDirectory: String
-    /// Copilot CLI's home, holding `session-store.db`.
     public var copilotHome: String
     public var pricingOverridesURL: URL?
     public var localModelPatterns: [String]
     public var referenceModel: String
-    /// FSEvents, the 60 s transcript rescan and the 10 s Copilot poll. Without it, `start()` reads everything
-    /// once and later reads happen only on request.
+    public var priceAliases: [String: String]
     public var watchForChanges: Bool
     public var rescanInterval: Duration
     public var copilotPollInterval: Duration
@@ -22,7 +20,8 @@ public struct LedgerConfiguration: Sendable, Equatable {
                 localModelPatterns: [String] = PricingTable.defaultLocalModelPatterns,
                 referenceModel: String = PricingTable.defaultReferenceModel,
                 watchForChanges: Bool = true, rescanInterval: Duration = .seconds(60),
-                copilotPollInterval: Duration = .seconds(10)) {
+                copilotPollInterval: Duration = .seconds(10), priceAliases: [String: String] = [:]) {
+        self.priceAliases = priceAliases
         self.databasePath = databasePath
         self.claudeConfigDirectory = claudeConfigDirectory
         self.copilotHome = copilotHome
@@ -42,7 +41,8 @@ public struct LedgerConfiguration: Sendable, Equatable {
         self.init(claudeConfigDirectory: directory(settings.claudeConfigDir,
                                                    default: ClaudeTranscriptIngester.defaultConfigDirectory),
                   copilotHome: directory(settings.copilotHome, default: CopilotStoreIngester.defaultHome),
-                  localModelPatterns: settings.localModelPatterns, referenceModel: settings.referenceModel)
+                  localModelPatterns: settings.localModelPatterns, referenceModel: settings.referenceModel,
+                  priceAliases: settings.priceAliases)
     }
 }
 
@@ -56,7 +56,8 @@ public struct Ledger: Sendable {
         self.configuration = configuration
         let pricing = PricingOverrides.table(overridesURL: configuration.pricingOverridesURL,
                                              localModelPatterns: configuration.localModelPatterns,
-                                             referenceModel: configuration.referenceModel)
+                                             referenceModel: configuration.referenceModel,
+                                             aliases: configuration.priceAliases)
         store = try Store(path: configuration.databasePath, pricing: pricing)
         reader = try StoreReader(path: configuration.databasePath)
         ingest = IngestCoordinator(store: store,
@@ -66,44 +67,32 @@ public struct Ledger: Sendable {
                                    copilotPollInterval: configuration.copilotPollInterval)
     }
 
-    /// Opening runs migrations, a weekly backup and possibly a full re-price, so keep it off the main actor.
     public static func open(_ configuration: LedgerConfiguration = LedgerConfiguration()) async throws -> Ledger {
         try await Task.detached(priority: .utility) { try Ledger(configuration: configuration) }.value
     }
 
-    /// Persists telemetry usage (`HubServer.onUsage`): Copilot IDE and Qwen Code rows; others are dropped.
-    /// Re-sent OTLP batches map to the same dedupe keys, so they never count twice.
     public func record(_ usage: [UsageRecord]) async {
         await ingest.record(usage)
     }
 
-    /// Reads Copilot CLI's session store now if it changed (call when a Copilot CLI hook arrives).
     public func pollCopilot() async {
         await ingest.pollCopilot()
     }
 
-    /// The ledger project for each cwd (worktrees and subfolders of a repo resolve to the repo), for grouping
-    /// live sessions. Cwds that cannot be resolved are absent; group those by cwd meanwhile.
     public func resolveProjects(_ cwds: [String]) async -> [String: ProjectRef] {
         (try? await store.projects(forCwds: cwds)) ?? [:]
     }
 
-    /// Stores one Claude limits fetch and returns each window's last stored sample from before it. Pass that to
-    /// `NotificationPolicy.limitsUpdated(_:previous:now:)` with `limits.samples(at:)`, so limit alerts survive
-    /// restarts without being repeated.
     @discardableResult
     public func recordLimits(_ limits: ClaudeLimits, at time: Date) async throws -> [LimitKind: LimitSample] {
         try await store.recordLimitSamples(limits.samples(at: time))
     }
 
-    /// Limits page history: samples from the last `days` days (rolling, not local midnights), oldest first.
-    /// `bucket` (seconds) keeps each window's peak per bucket, e.g. 3600 for a 30-day chart.
     public func limitHistory(days: Int, now: Date = Date(), bucket: TimeInterval? = nil) async throws -> [LimitSample] {
         let start = now.addingTimeInterval(-Double(max(days, 1)) * 86_400)
         return try await reader.limitSamples(in: DateInterval(start: start, end: .distantFuture), bucket: bucket)
     }
 
-    /// Each window's current state, burn rate and projection, from the last 7 days of samples.
     public func limitProjections(now: Date = Date()) async throws -> [LimitKind: LimitsProjection] {
         let start = now.addingTimeInterval(-LimitKind.sevenDay.windowLength - 3600)
         return LimitsProjection.projections(try await reader.limitSamples(in: DateInterval(start: start,
@@ -114,8 +103,6 @@ public struct Ledger: Sendable {
         try await reader.latestLimitSamples()
     }
 
-    /// Copilot CLI premium requests this UTC month against the allowance in `settings`. Copilot IDE requests
-    /// draw on the same allowance but never reach the ledger with a multiplier, so they are not counted.
     public func copilotAllowance(settings: AppSettings, now: Date = Date()) async throws -> CopilotAllowance {
         let month = CopilotAllowance.month(containing: now)
         let used = try await reader.totalsBySource(in: month)[.copilotCLI]?.premiumRequests ?? 0
@@ -124,14 +111,11 @@ public struct Ledger: Sendable {
 
     // MARK: - Samples (local model, later GPU)
 
-    /// Records one model-server poll (`VLLMStatus.compute` of the latest two snapshots) into the `samples`
-    /// series named in `ModelServerSeries`. Call once per successful poll.
     @discardableResult
     public func recordModelSamples(_ status: VLLMStatus) async throws -> [SampleBucket] {
         try await store.recordSamples(ModelServerSeries.observations(status))
     }
 
-    /// Call when the model server URL changes, before the new server's first reading is recorded.
     public func resetModelCounters() async {
         await store.resetCounterBaselines(ModelServerSeries.counters)
     }
@@ -141,18 +125,15 @@ public struct Ledger: Sendable {
         try await store.recordSamples(observations)
     }
 
-    /// A series over `range` at `resolution` seconds (coarser where only rollups are stored), oldest first.
     public func samples(_ series: String, resolution: Int = SampleAggregator.resolution,
                         in range: DateInterval) async throws -> [SampleBucket] {
         try await reader.samples(series, resolution: resolution, in: range)
     }
 
-    /// The model-server series' 60 s buckets since `since`, to seed the panel sparkline after a restart.
     public func recentModelSamples(since: Date, now: Date = Date()) async throws -> [String: [SampleBucket]] {
         try await reader.recentSamples(ModelServerSeries.all, since: since, now: now)
     }
 
-    /// Generated and prompt tokens per local day (the last `days`, today included), from the server's counters.
     public func modelTokensPerDay(days: Int, now: Date = Date(),
                                   calendar: Calendar = .current) async throws -> [ModelTokenDay] {
         let generated = try await reader.dailySums(ModelServerSeries.generatedTokens, days: days, now: now,
@@ -161,18 +142,54 @@ public struct Ledger: Sendable {
         return ModelTokenDay.days(generated: generated, prompt: prompt)
     }
 
-    /// Local-model usage per day from the ledger (agents' calls to models matching the local patterns): tokens,
-    /// and `apiEquivUSD` as "saved vs API" (their cost is $0).
     public func localModelSpend(days: Int, split: SpendSeriesSplit = .source, now: Date = Date(),
                                 calendar: Calendar = .current) async throws -> DailySpendSeries {
         try await reader.dailySpend(days: days, split: split, localOnly: true, now: now, calendar: calendar)
     }
 
-    /// Reloads `pricing.json` and applies new local-model settings; re-prices affected rows. Returns how many.
     @discardableResult
-    public func updatePricing(localModelPatterns: [String], referenceModel: String) async throws -> Int {
-        try await store.setPricing(PricingOverrides.table(overridesURL: configuration.pricingOverridesURL,
-                                                          localModelPatterns: localModelPatterns,
-                                                          referenceModel: referenceModel))
+    public func updatePricing(localModelPatterns: [String], referenceModel: String,
+                              priceAliases: [String: String]? = nil) async throws -> Int {
+        let aliases: [String: String]
+        if let priceAliases { aliases = priceAliases } else { aliases = await store.pricing.aliases }
+        return try await store.setPricing(PricingOverrides.table(overridesURL: configuration.pricingOverridesURL,
+                                                                 localModelPatterns: localModelPatterns,
+                                                                 referenceModel: referenceModel, aliases: aliases))
+    }
+
+    // MARK: - Session insight
+
+    public func lastMainCalls(for keys: [SessionKey]) async throws -> [SessionKey: SessionLastCall] {
+        try await reader.lastMainCalls(for: keys)
+    }
+
+    public func contextWindows(for sessions: [AgentSession]) async throws -> [SessionKey: ContextWindow] {
+        let claude = sessions.filter { $0.key.source == .claudeCode }
+        let calls = try await reader.lastMainCalls(for: claude.map(\.key))
+        var result: [SessionKey: ContextWindow] = [:]
+        for session in claude {
+            if let call = calls[session.key] { result[session.key] = ContextWindow(lastCall: call, liveModel: session.model) }
+        }
+        return result
+    }
+
+    public func subagents(of key: SessionKey) async throws -> [SubagentSummary] {
+        try await reader.subagents(of: key)
+    }
+
+    public func subagentCounts(for keys: [SessionKey]) async throws -> [SessionKey: Int] {
+        try await reader.subagentCounts(for: keys)
+    }
+
+    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil) async throws -> [ModelEfficiency] {
+        try await reader.modelEfficiency(in: range, project: project, pricing: await store.pricing)
+    }
+
+    public func unpricedModels() async throws -> [UnpricedModel] {
+        try await reader.unpricedModels()
+    }
+
+    public func pricedModels() async -> [String] {
+        await store.pricing.pricedModelIDs
     }
 }

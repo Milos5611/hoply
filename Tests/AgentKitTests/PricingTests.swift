@@ -85,6 +85,29 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(try PricingTable.Document.decode(Data("{}".utf8)).models.count, 0)
     }
 
+    func testPriceAsAliasPricesAnUnknownModelAndChangesTheRevision() {
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000)
+        let plain = PricingTable.bundled()
+        XCTAssertNil(plain.price(model: "claude-opus-4-5-20251101", tokens: tokens, speed: nil).costUSD)
+
+        let aliased = PricingTable.bundled(aliases: [" Claude-Opus-4-5 ": "claude-opus-4-6", "gpt-x": "no-such-model",
+                                                     "claude-sonnet-5": "claude-sonnet-5", "": "claude-opus-5"])
+        XCTAssertEqual(aliased.aliases, ["claude-opus-4-5": "claude-opus-4-6", "gpt-x": "no-such-model"])
+        XCTAssertEqual(aliased.match("claude-opus-4-5-20251101")?.id, "claude-opus-4-6", "found by the normalized id")
+        XCTAssertEqual(aliased.price(model: "claude-opus-4-5-20251101", tokens: tokens, speed: nil).costUSD ?? 0, 7.5,
+                       accuracy: 1e-9)
+        XCTAssertNil(aliased.price(model: "gpt-x", tokens: tokens, speed: nil).costUSD, "an alias to nothing stays unpriced")
+        XCTAssertEqual(aliased.price(model: "claude-sonnet-5", tokens: tokens, speed: nil),
+                       plain.price(model: "claude-sonnet-5", tokens: tokens, speed: nil))
+
+        XCTAssertNotEqual(aliased.revision, plain.revision)
+        XCTAssertEqual(PricingTable.bundled(aliases: [:]).revision, plain.revision)
+        XCTAssertEqual(PricingTable.bundled(aliases: ["claude-opus-4-5": "claude-opus-4-6", "gpt-x": "no-such-model"]).revision,
+                       aliased.revision)
+        XCTAssertTrue(plain.pricedModelIDs.contains("claude-opus-4-6"))
+        XCTAssertEqual(plain.pricedModelIDs, plain.pricedModelIDs.sorted())
+    }
+
     func testBundledTableDecodes() {
         XCTAssertEqual(BundledPricing.document.models.count, 14)
         XCTAssertEqual(BundledPricing.document.webSearchPerThousand, 10)

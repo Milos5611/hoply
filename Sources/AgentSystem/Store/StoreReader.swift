@@ -1,19 +1,15 @@
 import AgentKit
 import Foundation
 
-/// Read-only queries over the ledger on its own connection, so reads never wait behind ingest writes.
-/// Every total is a `GROUP BY` over `usage`.
 public actor StoreReader {
     private let db: SQLiteConnection
 
-    /// The database must already exist (open the `Store` first).
     public init(path: String = Store.defaultDatabaseURL.path) throws {
         let db = try SQLiteConnection(path: path, readOnly: true)
         try Schema.configure(db, readOnly: true)
         self.db = db
     }
 
-    /// Lifetime ledger totals per session. Keys without usage are absent from the result.
     public func sessionTotals(for keys: [SessionKey]) throws -> [SessionKey: LedgerTotals] {
         var result: [SessionKey: LedgerTotals] = [:]
         for (source, ids) in Dictionary(grouping: keys, by: \.source) {
@@ -42,7 +38,6 @@ public actor StoreReader {
         try totalsBySource(in: Self.days(1, endingAt: now, calendar: calendar))
     }
 
-    /// Sessions active in `range` (newest activity first). Each row's totals cover the whole session.
     public func sessions(in range: DateInterval, source: AgentSource? = nil, project: ProjectFilter? = nil,
                          limit: Int = 50, offset: Int = 0) throws -> SessionPage {
         var filter = "s.last_at >= ? AND s.first_at < ?"
@@ -80,8 +75,6 @@ public actor StoreReader {
         return found.first
     }
 
-    /// The last `days` local days including today, split by model or by source, optionally for one project.
-    /// `localOnly` keeps local-model rows only: their cost is $0 and `apiEquivUSD` is what they saved vs the API.
     public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, localOnly: Bool = false,
                            now: Date = Date(), calendar: Calendar = .current) throws -> DailySpendSeries {
         let count = max(days, 1)
@@ -110,7 +103,6 @@ public actor StoreReader {
         return DailySpendSeries(days: Array(dayStarts.dropLast()), points: points)
     }
 
-    /// Largest API-equivalent spend first. Usage without a project has `id == ""` and label "Unassigned".
     public func spendByProject(in range: DateInterval) throws -> [SpendSlice] {
         try db.query("""
             SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.")),
@@ -127,8 +119,6 @@ public actor StoreReader {
         }
     }
 
-    /// The Projects page: every project with usage in `range`, largest API-equivalent spend first. Usage
-    /// without a project is one summary with `project == nil` ("Unassigned").
     public func projects(in range: DateInterval, topModels: Int = 3) throws -> [ProjectSummary] {
         let bounds = Self.bounds(range)
         var summaries = try db.query("""
@@ -192,7 +182,6 @@ public actor StoreReader {
         }
     }
 
-    /// Today, the last 7 and 30 local days (each including today), and everything in the ledger.
     public func overview(now: Date = Date(), calendar: Calendar = .current) throws -> SpendOverview {
         func sum(_ range: DateInterval?) throws -> LedgerTotals {
             if let range {
@@ -207,10 +196,123 @@ public actor StoreReader {
                              allTime: try sum(nil))
     }
 
+    // MARK: - Session insight
+
+    public func lastMainCalls(for keys: [SessionKey]) throws -> [SessionKey: SessionLastCall] {
+        var result: [SessionKey: SessionLastCall] = [:]
+        for (source, ids) in Dictionary(grouping: keys, by: \.source) {
+            // SQLite takes the bare columns from the row that holds MAX(ts).
+            let rows = try db.query("""
+                SELECT session_id, MAX(ts), model, input, cache_read, cache_write_5m, cache_write_1h, output, reasoning
+                FROM usage
+                WHERE source = ? AND session_id IN (SELECT value FROM json_each(?)) AND sidechain = 0
+                      AND dedupe_key NOT LIKE '%:advisor:%'
+                GROUP BY session_id
+                """, [source.rawValue, Self.jsonArray(ids.map(\.id))]) { row in
+                SessionLastCall(key: SessionKey(source: source, id: row.text(0)), model: row.optionalText(2),
+                                timestamp: Date(timeIntervalSince1970: row.double(1)),
+                                tokens: TokenCounts(input: row.int(3), output: row.int(7), reasoning: row.int(8),
+                                                    cacheRead: row.int(4), cacheWrite5m: row.int(5),
+                                                    cacheWrite1h: row.int(6)))
+            }
+            for call in rows { result[call.key] = call }
+        }
+        return result
+    }
+
+    public func subagents(of key: SessionKey) throws -> [SubagentSummary] {
+        var models: [String: (model: String, weight: Double)] = [:]
+        for (agent, model, usd, tokens) in try db.query("""
+            SELECT agent_id, model, COALESCE(SUM(api_equiv_usd), 0),
+                   SUM(input + output + cache_read + cache_write_5m + cache_write_1h)
+            FROM usage WHERE source = ? AND session_id = ? AND \(Self.isSubagentRow()) AND model IS NOT NULL
+            GROUP BY agent_id, model ORDER BY model
+            """, [key.source.rawValue, key.id], { row in (row.text(0), row.text(1), row.double(2), row.double(3)) }) {
+            let weight = usd * 1e12 + tokens
+            if weight > (models[agent]?.weight ?? -1) { models[agent] = (model, weight) }
+        }
+        return try db.query("""
+            SELECT u.agent_id, MIN(u.ts), MAX(u.ts), a.agent_type, a.description, \(Self.totals(prefix: "u."))
+            FROM usage u
+            LEFT JOIN subagents a ON a.source = u.source AND a.session_id = u.session_id AND a.agent_id = u.agent_id
+            WHERE u.source = ? AND u.session_id = ? AND \(Self.isSubagentRow("u."))
+            GROUP BY u.agent_id
+            ORDER BY MIN(u.ts), u.agent_id
+            """, [key.source.rawValue, key.id]) { row in
+            let id = row.text(0)
+            return SubagentSummary(agentID: id, agentType: row.optionalText(3), description: row.optionalText(4),
+                                   model: models[id]?.model, firstAt: Date(timeIntervalSince1970: row.double(1)),
+                                   lastAt: Date(timeIntervalSince1970: row.double(2)), totals: Self.totals(row, from: 5))
+        }
+    }
+
+    public func subagentCounts(for keys: [SessionKey]) throws -> [SessionKey: Int] {
+        var result: [SessionKey: Int] = [:]
+        for (source, ids) in Dictionary(grouping: keys, by: \.source) {
+            let rows = try db.query("""
+                SELECT session_id, COUNT(DISTINCT agent_id) FROM usage
+                WHERE source = ? AND session_id IN (SELECT value FROM json_each(?)) AND \(Self.isSubagentRow())
+                GROUP BY session_id
+                """, [source.rawValue, Self.jsonArray(ids.map(\.id))]) { row in
+                (SessionKey(source: source, id: row.text(0)), row.int(1))
+            }
+            for (key, count) in rows { result[key] = count }
+        }
+        return result
+    }
+
+    private static func isSubagentRow(_ p: String = "") -> String {
+        "\(p)sidechain = 1 AND \(p)agent_id IS NOT NULL AND \(p)agent_id != ''"
+    }
+
+    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil,
+                                pricing: PricingTable) throws -> [ModelEfficiency] {
+        var filter = "ts >= ? AND ts < ?"
+        var values: [any SQLiteBindable] = Self.bounds(range)
+        Self.append(project, column: "project_id", to: &filter, values: &values)
+        var models = try db.query("""
+            SELECT COALESCE(model, ''), \(Self.totals()) FROM usage WHERE \(filter)
+            GROUP BY 1 ORDER BY COALESCE(SUM(api_equiv_usd), 0) DESC, 1
+            """, values) { row in ModelEfficiency(model: row.text(0), totals: Self.totals(row, from: 1)) }
+        let fast = try db.query("""
+            SELECT COALESCE(model, ''), input, output, reasoning, cache_read, cache_write_5m, cache_write_1h,
+                   api_equiv_usd, native_usd
+            FROM usage WHERE \(filter) AND lower(speed) = 'fast'
+            """, values) { row in
+            (model: row.text(0),
+             tokens: TokenCounts(input: row.int(1), output: row.int(2), reasoning: row.int(3), cacheRead: row.int(4),
+                                 cacheWrite5m: row.int(5), cacheWrite1h: row.int(6)),
+             usd: row.optionalDouble(7), native: !row.isNull(8))
+        }
+        for call in fast {
+            guard let index = models.firstIndex(where: { $0.model == call.model }) else { continue }
+            models[index].fastCalls += 1
+            models[index].fastUSD += call.usd ?? 0
+            if !call.native, let usd = call.usd,
+               let standard = pricing.price(model: call.model, tokens: call.tokens, speed: nil).apiEquivUSD {
+                models[index].fastPremiumUSD += usd - standard
+            }
+        }
+        return models
+    }
+
+    public func unpricedModels() throws -> [UnpricedModel] {
+        try db.query("""
+            SELECT COALESCE(model, ''), COUNT(*), SUM(input), SUM(output), SUM(reasoning), SUM(cache_read),
+                   SUM(cache_write_5m), SUM(cache_write_1h), MIN(ts), MAX(ts)
+            FROM usage WHERE cost_usd IS NULL AND is_local = 0 AND native_usd IS NULL
+            GROUP BY 1 ORDER BY COUNT(*) DESC, 1
+            """) { row in
+            UnpricedModel(model: row.text(0), calls: row.int(1),
+                          tokens: TokenCounts(input: row.int(2), output: row.int(3), reasoning: row.int(4),
+                                              cacheRead: row.int(5), cacheWrite5m: row.int(6), cacheWrite1h: row.int(7)),
+                          firstSeen: Date(timeIntervalSince1970: row.double(8)),
+                          lastSeen: Date(timeIntervalSince1970: row.double(9)))
+        }
+    }
+
     // MARK: - Limit samples
 
-    /// Plan-limit samples in `range`, oldest first, optionally for some kinds only. With `bucket` (seconds), each
-    /// kind keeps only its highest reading per bucket, which thins month-long chart ranges.
     public func limitSamples(_ kinds: Set<LimitKind>? = nil, in range: DateInterval,
                              bucket: TimeInterval? = nil) throws -> [LimitSample] {
         var filter = "ts >= ? AND ts < ?"
@@ -219,19 +321,28 @@ public actor StoreReader {
             filter += " AND kind IN (SELECT value FROM json_each(?))"
             values.append(Self.jsonArray(kinds.map(\.rawValue)))
         }
-        // SQLite fills the bare `ts` and `resets_at` columns from the row holding MAX(utilization).
-        let sql = if let bucket, bucket > 0 {
-            """
-            SELECT kind, ts, MAX(utilization), resets_at FROM limit_samples WHERE \(filter)
-            GROUP BY kind, CAST(ts / \(bucket) AS INTEGER) ORDER BY ts, kind
-            """
-        } else {
-            "SELECT kind, ts, utilization, resets_at FROM limit_samples WHERE \(filter) ORDER BY ts, kind"
-        }
-        return try db.query(sql, values) { Self.limitSample($0) }.compactMap { $0 }
+        let samples = try db.query("""
+            SELECT kind, ts, utilization, resets_at FROM limit_samples WHERE \(filter) ORDER BY ts, kind
+            """, values) { Self.limitSample($0) }.compactMap { $0 }
+        guard let bucket, bucket > 0 else { return samples }
+        return Self.peaks(samples, bucket: bucket)
     }
 
-    /// Each kind's most recent sample.
+    private static func peaks(_ samples: [LimitSample], bucket: TimeInterval) -> [LimitSample] {
+        var kept: [LimitSample] = []
+        var open: [LimitKind: (index: Int, slot: Double, first: LimitSample)] = [:]
+        for sample in samples {
+            let slot = (sample.ts.timeIntervalSince1970 / bucket).rounded(.down)
+            if let run = open[sample.kind], run.slot == slot, sample.isSameWindow(as: run.first) {
+                if sample.utilization > kept[run.index].utilization { kept[run.index] = sample }
+            } else {
+                open[sample.kind] = (kept.count, slot, sample)
+                kept.append(sample)
+            }
+        }
+        return kept.sorted { ($0.ts, $0.kind.rawValue) < ($1.ts, $1.kind.rawValue) }
+    }
+
     public func latestLimitSamples() throws -> [LimitKind: LimitSample] {
         try Self.latestLimitSamples(db)
     }
@@ -243,7 +354,6 @@ public actor StoreReader {
         return Dictionary(rows.compactMap { $0.map { ($0.kind, $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Columns: kind, ts, utilization, resets_at. Kinds this build doesn't know are skipped.
     private static func limitSample(_ row: SQLiteRow) -> LimitSample? {
         guard let kind = LimitKind(rawValue: row.text(0)) else { return nil }
         return LimitSample(kind: kind, ts: Date(timeIntervalSince1970: row.double(1)), utilization: row.double(2),
@@ -252,8 +362,6 @@ public actor StoreReader {
 
     // MARK: - Samples
 
-    /// One series' buckets overlapping `range`, oldest first, merged up to `resolution` seconds. Older stretches
-    /// are only stored coarser (900 s after 7 days, 3600 s after 90), and those buckets keep their resolution.
     public func samples(_ series: String, resolution: Int = SampleAggregator.resolution,
                         in range: DateInterval) throws -> [SampleBucket] {
         let rows = try db.query("""
@@ -267,8 +375,6 @@ public actor StoreReader {
         return SampleAggregator.rollup(rows, to: resolution)
     }
 
-    /// The 60 s buckets of each series since `since`, to seed in-memory sparklines after a restart. Series
-    /// without samples are absent.
     public func recentSamples(_ series: [String], since: Date, now: Date = Date()) throws -> [String: [SampleBucket]] {
         var result: [String: [SampleBucket]] = [:]
         for name in Set(series) {
@@ -278,8 +384,6 @@ public actor StoreReader {
         return result
     }
 
-    /// The last `days` local days including today (every day present, oldest first): the sum and reading count
-    /// of one series per day. For a counter series the sum is its increase, e.g. tokens per day.
     public func dailySums(_ series: String, days: Int, now: Date = Date(),
                           calendar: Calendar = .current) throws -> [DailySampleSum] {
         let count = max(days, 1)
@@ -305,7 +409,6 @@ public actor StoreReader {
         return sums
     }
 
-    /// The last `count` local days including the one containing `now`, ending at the next midnight.
     public static func days(_ count: Int, endingAt now: Date, calendar: Calendar = .current) -> DateInterval {
         let today = calendar.startOfDay(for: now)
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? now
@@ -353,7 +456,6 @@ public actor StoreReader {
             linesRemoved: row.optionalInt(11), prURL: row.optionalText(12), transcriptPath: row.optionalText(13))
     }
 
-    /// Columns: id, root, name, display_name, kind.
     private static func project(_ row: SQLiteRow, from start: Int32) -> ProjectRef? {
         guard let id = row.optionalInt64(start) else { return nil }
         return ProjectRef(id: id, root: row.text(start + 1), name: row.text(start + 2),

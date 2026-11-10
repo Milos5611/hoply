@@ -20,7 +20,6 @@ struct IconTile: View {
 }
 
 extension IconTile {
-    /// A ledger project's tile; `kind == nil` is Unassigned (usage no project claimed).
     init(projectKind kind: ProjectKind?, size: CGFloat = 30) {
         self.init(symbol: Self.symbol(for: kind), tint: Self.tint(for: kind), size: size)
     }

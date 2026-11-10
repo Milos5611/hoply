@@ -16,17 +16,21 @@ struct SpendingData: Equatable {
     var daily: DailySpendSeries
     var projects: [SpendSlice]
     var models: [SpendSlice]
+    var efficiency: [ModelEfficiency] = []
 
     var total: LedgerTotals { models.reduce(.zero) { $0 + $1.totals } }
 }
 
+struct SessionInsight: Equatable {
+    var context: ContextWindow?
+    var subagents: [SubagentSummary] = []
+}
+
 struct ProjectsData: Equatable {
     var range: HistoryRange
-    /// Largest spend first, Unassigned included (`project == nil`).
     var projects: [ProjectSummary]
 }
 
-/// The project the Projects page shows in detail; `project == nil` is Unassigned.
 struct OpenedProject: Equatable {
     var project: ProjectRef?
 
@@ -42,33 +46,25 @@ struct ProjectDetailData: Equatable {
 
 struct LimitsData: Equatable {
     var days: Int
-    /// The chart's samples, oldest first.
     var samples: [LimitSample]
     var projections: [LimitKind: LimitsProjection]
-    /// Claude Code's ledger totals from each window's start until now.
     var windowSpend: [LimitKind: LedgerTotals]
     var copilot: CopilotAllowance
-    /// Copilot CLI's totals over the allowance month (AIU, API-equivalent).
     var copilotMonth: LedgerTotals
 }
 
 struct LocalModelData: Equatable {
     var range: LocalModelRange
-    /// The speed and KV cache charts' span.
     var interval: DateInterval
     var generation: [SampleBucket]
     var kvCache: [SampleBucket]
     var tokenDays: [ModelTokenDay]
-    /// Local-model usage in the ledger by source; `apiEquivUSD` is what it saved vs the API.
     var saved: DailySpendSeries
-    /// The end of the latest bucket with a reading, for "last seen" while the server is offline.
     var lastSeen: Date?
 
     var savedTotal: LedgerTotals { saved.points.reduce(.zero) { $0 + $1.totals } }
 }
 
-/// Everything the UI reads from the usage ledger: ingest progress, totals for the live sessions and today,
-/// and the Dashboard pages. The panel and the Dashboard both read these ledger totals, so they always agree.
 @MainActor
 @Observable
 final class History {
@@ -83,6 +79,11 @@ final class History {
     private(set) var progress = IngestProgress()
     private(set) var sessionTotals: [SessionKey: LedgerTotals] = [:]
     private(set) var today: [AgentSource: LedgerTotals] = [:]
+    private(set) var contextWindows: [SessionKey: ContextWindow] = [:]
+    private(set) var subagentCounts: [SessionKey: Int] = [:]
+    private(set) var insights: [SessionKey: SessionInsight] = [:]
+    private(set) var unpricedModels: [UnpricedModel] = []
+    private(set) var pricedModels: [String] = []
     private(set) var note: String?
 
     private(set) var page: DashboardPage = .overview
@@ -111,7 +112,7 @@ final class History {
     private static let pendingUsageLimit = 5_000
 
     @ObservationIgnored private var ledger: Ledger?
-    @ObservationIgnored private var liveKeys: Set<SessionKey> = []
+    @ObservationIgnored private var liveSessions: [AgentSession] = []
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var stopping: Task<Void, Never>?
     @ObservationIgnored private var consumer: Task<Void, Never>?
@@ -126,10 +127,12 @@ final class History {
     @ObservationIgnored private var pendingUsage: [UsageRecord] = []
     @ObservationIgnored private var recordTask: Task<Void, Never>?
     @ObservationIgnored private var sampleTask: Task<Void, Never>?
+    /// Counter resets asked for, and how many of them a later sample write has settled. A Store opened in
+    /// between re-seeds its baselines from the old server's buckets, so an unsettled reset is repeated on it.
+    @ObservationIgnored private var counterResets = 0
+    @ObservationIgnored private var settledCounterResets = 0
     @ObservationIgnored private var localModelLoadedAt: Date?
-    /// A session to select on the Sessions page whatever its range (a notification click).
     @ObservationIgnored private var requestedSession: SessionKey?
-    /// The Copilot plan the Limits page measures against.
     @ObservationIgnored private var plan = AppSettings()
 
     var todayTotal: LedgerTotals { today.values.reduce(.zero, +) }
@@ -188,6 +191,7 @@ final class History {
             }
         }
         ingestTask = Task { await ledger.ingest.start() }
+        if settledCounterResets < counterResets { resetCounters(on: ledger) }
         if !pendingUsage.isEmpty {
             let held = pendingUsage
             pendingUsage = []
@@ -206,12 +210,10 @@ final class History {
 
     // MARK: - Requests from the app
 
-    func track(_ keys: [SessionKey]) {
-        let keys = Set(keys)
-        guard keys != liveKeys else { return }
-        let added = !keys.isSubset(of: liveKeys)
-        liveKeys = keys
-        if added { scheduleRefresh(after: .milliseconds(50)) }
+    func track(_ sessions: [AgentSession]) {
+        let known = Set(liveSessions.map(\.key))
+        liveSessions = sessions
+        if sessions.contains(where: { !known.contains($0.key) }) { scheduleRefresh(after: .milliseconds(50)) }
     }
 
     func tail(_ paths: Set<String>) {
@@ -244,7 +246,6 @@ final class History {
         Task { await ledger.pollCopilot() }
     }
 
-    /// nil while no ledger is open, so the caller can ask again later.
     func resolveProjects(_ cwds: [String]) async -> [String: ProjectRef]? {
         guard let ledger else { return nil }
         return await ledger.resolveProjects(cwds)
@@ -267,12 +268,15 @@ final class History {
         }
     }
 
-    /// One successful model-server poll into the `samples` series. Dropped while no ledger is open: the Store
-    /// re-seeds counter baselines from what it stored, so a missed poll costs nothing but its gauge readings.
-    /// Writes are chained, because a counter reading that lands after a later one is skipped.
-    /// Chained behind pending sample writes, so the old server's last reading still lands on its baseline.
+    /// The model server URL changed. Chained behind pending sample writes, so the old server's last reading
+    /// still lands on its baseline. With no ledger open, or one that is replaced before the new server's first
+    /// reading is stored, the reset is applied when the next ledger attaches.
     func resetModelCounters() {
-        guard let ledger else { return }
+        counterResets += 1
+        if let ledger { resetCounters(on: ledger) }
+    }
+
+    private func resetCounters(on ledger: Ledger) {
         let previous = sampleTask
         sampleTask = Task {
             await previous?.value
@@ -280,9 +284,13 @@ final class History {
         }
     }
 
+    /// One successful model-server poll into the `samples` series. Dropped while no ledger is open: the Store
+    /// re-seeds counter baselines from what it stored, so a missed poll costs nothing but its gauge readings.
+    /// Writes are chained, because a counter reading that lands after a later one is skipped.
     func recordModelSamples(_ status: VLLMStatus) {
         guard let ledger else { return }
         let previous = sampleTask
+        let resets = counterResets
         sampleTask = Task {
             await previous?.value
             do {
@@ -291,7 +299,7 @@ final class History {
                 note = "Recording model samples failed: \(Self.describe(error))"
                 return
             }
-            // The charts are per minute at best, so the visible page re-reads at most twice a minute.
+            settledCounterResets = max(settledCounterResets, resets)
             if isDashboardVisible, page == .localModel,
                Date().timeIntervalSince(localModelLoadedAt ?? .distantPast) >= 30 {
                 reload(.localModel)
@@ -299,7 +307,6 @@ final class History {
         }
     }
 
-    /// The model-server series since `since`, waiting for the ledger to open; nil when History is off.
     func recentModelSamples(since: Date) async -> [String: [SampleBucket]]? {
         await waitForOpen()
         guard let ledger else { return nil }
@@ -325,16 +332,28 @@ final class History {
         Task { await ingest.reindex() }
     }
 
-    func updatePricing(localModelPatterns: [String], referenceModel: String) {
+    func updatePricing(localModelPatterns: [String], referenceModel: String, priceAliases: [String: String]) {
         guard let ledger else { return }
         Task {
             do {
-                try await ledger.updatePricing(localModelPatterns: localModelPatterns, referenceModel: referenceModel)
+                try await ledger.updatePricing(localModelPatterns: localModelPatterns, referenceModel: referenceModel,
+                                               priceAliases: priceAliases)
                 note = nil
             } catch {
                 note = "Pricing update failed: \(Self.describe(error))"
             }
             scheduleRefresh(after: .zero)
+            loadPricing()
+        }
+    }
+
+    func loadPricing() {
+        guard let ledger else { return }
+        Task {
+            let priced = await ledger.pricedModels()
+            guard let unpriced = try? await ledger.unpricedModels(), ledger.store === self.ledger?.store else { return }
+            if priced != pricedModels { pricedModels = priced }
+            if unpriced != unpricedModels { unpricedModels = unpriced }
         }
     }
 
@@ -373,9 +392,9 @@ final class History {
 
     func selectSession(id: SessionSummary.ID?) {
         selectedSession = id.flatMap { id in sessionList?.sessions.first { $0.id == id } }
+        loadInsights()
     }
 
-    /// Shows one session on the Sessions page, selected even when it falls outside the page's range.
     func openSession(_ key: SessionKey) {
         requestedSession = key
         sessionsOffset = 0
@@ -404,8 +423,6 @@ final class History {
         reload(.projects)
     }
 
-    /// Shows a project's detail on the Projects page. `range` carries over the range of the figure the user
-    /// clicked (Overview's 30 days, Spending's range), so the detail starts with the same numbers.
     func openProject(_ project: ProjectRef?, range: HistoryRange? = nil) {
         let opened = OpenedProject(project: project)
         if opened != openedProject {
@@ -435,6 +452,30 @@ final class History {
 
     func selectProjectSession(id: SessionSummary.ID?) {
         selectedProjectSession = id.flatMap { id in projectDetail?.sessions.sessions.first { $0.id == id } }
+        loadInsights()
+    }
+
+    private func loadInsights() {
+        Task { await refreshInsights() }
+    }
+
+    private func refreshInsights() async {
+        guard let ledger else { return }
+        let keys = Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 })
+        var loaded: [SessionKey: SessionInsight] = [:]
+        do {
+            let calls = try await ledger.lastMainCalls(for: Array(keys))
+            for key in keys {
+                let live = liveSessions.first { $0.key == key }?.model
+                loaded[key] = SessionInsight(context: calls[key].flatMap { ContextWindow(lastCall: $0, liveModel: live) },
+                                             subagents: try await ledger.subagents(of: key))
+            }
+        } catch {
+            note = "Reading history failed: \(Self.describe(error))"
+            return
+        }
+        guard keys == Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 }) else { return }
+        if loaded != insights { insights = loaded }
     }
 
     // MARK: - Refresh
@@ -452,21 +493,31 @@ final class History {
 
     private func refresh() async {
         refreshTask = nil
-        guard let reader = ledger?.reader else { return }
+        guard let ledger else { return }
+        let reader = ledger.reader
         refreshGeneration += 1
         let generation = refreshGeneration
         let now = Date()
         do {
-            let totals = try await reader.sessionTotals(for: Array(liveKeys))
+            let sessions = liveSessions
+            let keys = sessions.map(\.key)
+            let totals = try await reader.sessionTotals(for: keys)
             let today = try await reader.todayBySource(now: now)
+            let windows = try await ledger.contextWindows(for: sessions)
+            let subagents = try await ledger.subagentCounts(for: keys)
             guard generation == refreshGeneration else { return }
             if totals != sessionTotals { sessionTotals = totals }
             if today != self.today { self.today = today }
+            if windows != contextWindows { contextWindows = windows }
+            if subagents != subagentCounts { subagentCounts = subagents }
             refreshedDay = Calendar.current.startOfDay(for: now)
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
         }
-        if isDashboardVisible { await load(page) }
+        if isDashboardVisible {
+            await load(page)
+            await refreshInsights()
+        }
     }
 
     private func reload(_ page: DashboardPage) {
@@ -495,7 +546,8 @@ final class History {
                 let data = SpendingData(range: range, split: split,
                                         daily: try await reader.dailySpend(days: range.days ?? 30, split: split, now: now),
                                         projects: try await reader.spendByProject(in: interval),
-                                        models: try await reader.spendByModel(in: interval))
+                                        models: try await reader.spendByModel(in: interval),
+                                        efficiency: try await ledger.modelEfficiency(in: interval))
                 guard generation == pageGeneration[page] else { return }
                 if data != spending { spending = data }
             case .sessions:
@@ -523,6 +575,7 @@ final class History {
                 if requested != nil, requested == requestedSession { requestedSession = nil }
                 if list != sessionList { sessionList = list }
                 if selected != selectedSession { selectedSession = selected }
+                await refreshInsights()
             case .projects:
                 let range = projectsRange, opened = openedProject
                 let interval = range.interval(now: now)
@@ -555,6 +608,7 @@ final class History {
                     projectAutoSelect = false
                     if detail != projectDetail { projectDetail = detail }
                     if selected != selectedProjectSession { selectedProjectSession = selected }
+                    await refreshInsights()
                 }
             case .limits:
                 let days = limitsDays, plan = self.plan
@@ -594,8 +648,6 @@ final class History {
         }
     }
 
-    /// Every successful poll writes `model.running`, so its latest bucket is when the server last answered.
-    /// The last day is read per minute; older stretches only exist hourly.
     private func lastModelReading(_ ledger: Ledger, now: Date) async throws -> Date? {
         let series = ModelServerSeries.running
         let recent = try await ledger.samples(series, in: DateInterval(start: now.addingTimeInterval(-86_400), end: now))
@@ -607,7 +659,6 @@ final class History {
         return bucket.map { min($0.startDate.addingTimeInterval(TimeInterval($0.resolution)), now) }
     }
 
-    /// "All time" charts start at the project's first usage, but never show fewer than 30 days.
     private static func dayCount(since first: Date?, now: Date) -> Int {
         guard let first else { return 30 }
         let calendar = Calendar.current
@@ -621,7 +672,6 @@ final class History {
     }
 }
 
-/// Fixed ledger state for `--snapshot`; never touches the real database.
 struct HistoryPreview {
     var progress: IngestProgress
     var sessionTotals: [SessionKey: LedgerTotals]
@@ -634,6 +684,11 @@ struct HistoryPreview {
     var projectDetail: ProjectDetailData?
     var limits: LimitsData?
     var localModel: LocalModelData?
+    var contextWindows: [SessionKey: ContextWindow] = [:]
+    var subagentCounts: [SessionKey: Int] = [:]
+    var insights: [SessionKey: SessionInsight] = [:]
+    var unpricedModels: [UnpricedModel] = []
+    var pricedModels: [String] = []
 }
 
 extension History {
@@ -657,6 +712,11 @@ extension History {
         limitsDays = preview.limits?.days ?? 7
         localModel = preview.localModel
         localModelRange = preview.localModel?.range ?? .day
+        contextWindows = preview.contextWindows
+        subagentCounts = preview.subagentCounts
+        insights = preview.insights
+        unpricedModels = preview.unpricedModels
+        pricedModels = preview.pricedModels
         self.page = page
     }
 

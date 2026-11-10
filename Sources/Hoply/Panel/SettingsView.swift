@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var draft = AppSettings()
+    @State private var baseline = AppSettings()
     @State private var portText = ""
     @State private var patternsText = ""
     @State private var allowanceText = ""
@@ -45,12 +46,26 @@ struct SettingsView: View {
                 HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
                                 claudeConfigDir: $draft.claudeConfigDir, copilotHome: $draft.copilotHome)
 
+                PricingSettings(aliases: $draft.priceAliases)
+
                 CopilotPlanSettings(allowanceText: $allowanceText, usdText: $usdText)
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Behaviour")
                         SwitchRow("Show Claude plan limits", isOn: $draft.claudeLimitsEnabled)
+                        if !model.editors.isEmpty {
+                            LabeledRow("Editor") {
+                                Picker("Editor", selection: Binding(get: { model.defaultEditor?.id ?? "" },
+                                                                    set: { model.setDefaultEditor($0) })) {
+                                    ForEach(model.editors) { Text($0.name).tag($0.id) }
+                                }
+                                .labelsHidden()
+                                .fixedSize()
+                                Spacer(minLength: 0)
+                            }
+                            .help("Used by Open in editor on project cards and in the Dashboard. Applies at once.")
+                        }
                         if model.isBundledApp {
                             SwitchRow("Launch at login", isOn: Binding(
                                 get: { model.launchAtLogin },
@@ -85,17 +100,39 @@ struct SettingsView: View {
         }
         .onAppear {
             model.refreshLaunchAtLogin()
-            guard !loaded else { return }
+            model.refreshEditors()
+            model.history.loadPricing()
+            guard !loaded else { return rebase() }
             draft = model.settings
-            portText = String(model.settings.port)
-            patternsText = model.settings.localModelPatterns.joined(separator: ", ")
-            allowanceText = String(model.settings.copilotMonthlyAllowance)
-            usdText = String(model.settings.copilotUSDPerPremiumRequest)
+            baseline = model.settings
+            (portText, patternsText, allowanceText, usdText) = Self.texts(model.settings)
             loaded = true
         }
+        .onChange(of: model.settings) { rebase() }
+    }
+
+    private static func texts(_ settings: AppSettings) -> (port: String, patterns: String, allowance: String,
+                                                           usd: String) {
+        (String(settings.port), settings.localModelPatterns.joined(separator: ", "),
+         String(settings.copilotMonthlyAllowance), String(settings.copilotUSDPerPremiumRequest))
+    }
+
+    /// Settings also change outside this view while it holds a draft (the header bell, a card's mute tile,
+    /// "Connect" on the Limits page). Fields the user hasn't edited here follow those changes; edited ones stay.
+    private func rebase() {
+        let current = model.settings
+        guard current != baseline else { return }
+        let old = Self.texts(baseline), new = Self.texts(current)
+        if portText == old.port { portText = new.port }
+        if patternsText == old.patterns { patternsText = new.patterns }
+        if allowanceText == old.allowance { allowanceText = new.allowance }
+        if usdText == old.usd { usdText = new.usd }
+        draft = current.applying(draft, since: baseline)
+        baseline = current
     }
 
     private func save() {
+        rebase()
         var updated = draft
         let trimmed = portText.trimmingCharacters(in: .whitespaces)
         if let port = Int(trimmed), (1024...65535).contains(port) {
@@ -205,7 +242,7 @@ struct HistorySettings: View {
                     TextField("~/.copilot", text: $copilotHome)
                         .textFieldStyle(.roundedBorder)
                 }
-                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads the transcripts and the Copilot store without deleting history.")
+                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads the transcripts and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
             }
         }
     }
@@ -241,6 +278,67 @@ struct HistorySettings: View {
         case .unavailable: return .red
         case .ready: return history.progress.isBackfilling ? .orange : .green
         }
+    }
+}
+
+struct PricingSettings: View {
+    @Environment(AppModel.self) private var model
+    @Binding var aliases: [String: String]
+
+    var body: some View {
+        let history = model.history
+        let unpriced = history.unpricedModels.filter { !$0.model.isEmpty }
+        let listed = Set(unpriced.map { Self.key($0.model) })
+        let aliased = aliases.keys.filter { !listed.contains($0) }.sorted()
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionTitle("Pricing")
+                if unpriced.isEmpty, aliased.isEmpty {
+                    Hint("Every model in the ledger has a price. A model Hoply has no price for is listed here, so you can price it as a similar one.")
+                } else {
+                    ForEach(unpriced) { entry in
+                        row(entry.model, detail: "\(Format.count(entry.calls)) \(entry.calls == 1 ? "call" : "calls") · \(Format.tokens(entry.tokens.total)) tokens unpriced")
+                    }
+                    ForEach(aliased, id: \.self) { name in
+                        row(name, detail: nil)
+                    }
+                    Hint("Price as charges a model at another model's list price and re-prices its history when you save. Spend stays \"unpriced\" until then, never $0.")
+                }
+            }
+        }
+    }
+
+    private func row(_ name: String, detail: String?) -> some View {
+        let key = Self.key(name)
+        let target = aliases[key] ?? ""
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(detail ?? "Priced as \(Format.model(target))")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(detail != nil && target.isEmpty ? Color.orange : Color.secondary)
+                    .lineLimit(1)
+            }
+            .help(name)
+            Spacer(minLength: 8)
+            Picker("Price as", selection: Binding(get: { target }, set: { aliases[key] = $0.isEmpty ? nil : $0 })) {
+                Text("Price as…").tag("")
+                ForEach(choices(including: target), id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 170)
+        }
+    }
+
+    private func choices(including target: String) -> [String] {
+        let priced = model.history.pricedModels
+        return target.isEmpty || priced.contains(target) ? priced : priced + [target]
+    }
+
+    private static func key(_ model: String) -> String {
+        model.trimmingCharacters(in: .whitespaces).lowercased()
     }
 }
 
@@ -307,7 +405,6 @@ struct NotificationSettings: View {
     }
 }
 
-/// A time of day stored as minutes after midnight.
 struct TimeOfDayField: View {
     @Binding var minutes: Int
 

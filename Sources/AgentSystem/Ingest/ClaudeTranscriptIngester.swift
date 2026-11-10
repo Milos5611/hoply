@@ -1,7 +1,6 @@
 import AgentKit
 import Foundation
 
-/// Finds Claude Code transcripts and turns their new lines into ledger batches. Read-only on `~/.claude`.
 public struct ClaudeTranscriptIngester: Sendable {
     public struct TranscriptFile: Sendable, Equatable {
         public var path: String
@@ -20,7 +19,6 @@ public struct ClaudeTranscriptIngester: Sendable {
 
     public var projectsDirectory: String { configDirectory + "/projects" }
 
-    /// `projects/*/*.jsonl` plus subagent transcripts in `projects/*/*/subagents/*.jsonl`, newest first.
     public func discover() -> [TranscriptFile] {
         let fileManager = FileManager.default
         var files: [TranscriptFile] = []
@@ -44,7 +42,6 @@ public struct ClaudeTranscriptIngester: Sendable {
         return files.sorted { $0.stat.modified > $1.stat.modified }
     }
 
-    /// True for paths shaped like the files `discover()` returns, under this config directory.
     public func isTranscript(_ path: String) -> Bool {
         guard path.hasSuffix(".jsonl"), path.hasPrefix(projectsDirectory + "/") else { return false }
         let parts = path.dropFirst(projectsDirectory.count + 1).split(separator: "/")
@@ -55,8 +52,17 @@ public struct ClaudeTranscriptIngester: Sendable {
         ClaudeTranscriptParser.batch(from: lines).ledgerBatch(transcriptPath: path, startsAtFileStart: startOffset == 0)
     }
 
-    /// Hook payloads and FSEvents may spell the same file differently (symlinks, `..`); cursors need one key.
-    /// `realpath(3)`, not `URL.resolvingSymlinksInPath()`, which strips `/private` while FSEvents keeps it.
+    public static func subagentInfo(forTranscript path: String) -> SubagentInfo? {
+        let url = URL(fileURLWithPath: path)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let folder = url.deletingLastPathComponent()
+        guard stem.hasPrefix("agent-"), folder.lastPathComponent == "subagents",
+              let meta = try? Data(contentsOf: folder.appendingPathComponent(stem + ".meta.json")) else { return nil }
+        return SubagentInfo(meta: meta, session: SessionKey(source: .claudeCode,
+                                                            id: folder.deletingLastPathComponent().lastPathComponent),
+                            agentID: String(stem.dropFirst("agent-".count)))
+    }
+
     public static func canonical(_ path: String) -> String {
         LocalProjectFileSystem().realPath(path) ?? URL(fileURLWithPath: path).standardizedFileURL.path
     }

@@ -5,9 +5,6 @@ public enum OTLPError: Error, Equatable {
     case unknownSignal
 }
 
-/// Decodes OTLP/HTTP export requests (logs and traces) in both JSON and protobuf encodings
-/// into flat `TelemetryRecord`s. Metrics are accepted by the server but not decoded: they are
-/// periodic aggregates and say nothing about what an agent is doing right now.
 public enum OTLPDecoder {
     public enum Encoding: Sendable {
         case json
@@ -162,7 +159,6 @@ public enum OTLPDecoder {
         nanos.map { Date(timeIntervalSince1970: Double($0) / 1_000_000_000) }
     }
 
-    /// OTLP/JSON specifies hex trace and span IDs, but some exporters send the protobuf bytes as base64.
     private static func jsonID(_ dict: [String: Any], _ keys: [String]) -> String? {
         guard let text = nonEmpty(string(dict, keys)) else { return nil }
         if text.count.isMultiple(of: 2), text.allSatisfy(\.isHexDigit) {
@@ -339,7 +335,6 @@ public enum OTLPDecoder {
         return value
     }
 
-    /// ArrayValue: field 1 = repeated AnyValue.
     private static func pbRepeatedAnyValue(_ bytes: [UInt8]) throws -> [AttributeValue] {
         var reader = ProtoReader(bytes)
         var values: [AttributeValue] = []
@@ -353,7 +348,6 @@ public enum OTLPDecoder {
         return values
     }
 
-    /// KeyValueList: field 1 = repeated KeyValue.
     private static func pbKeyValueList(_ bytes: [UInt8]) throws -> [String: AttributeValue] {
         var reader = ProtoReader(bytes)
         var result: [String: AttributeValue] = [:]
@@ -368,7 +362,6 @@ public enum OTLPDecoder {
     }
 }
 
-/// Minimal protobuf wire-format reader: enough to walk OTLP messages without generated code.
 struct ProtoReader {
     struct Tag {
         let field: Int

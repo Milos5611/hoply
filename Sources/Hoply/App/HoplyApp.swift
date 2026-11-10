@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Menu bar only: no Dock icon, no app switcher entry (also when run with `swift run`).
         NSApp.setActivationPolicy(.accessory)
 
         let arguments = CommandLine.arguments

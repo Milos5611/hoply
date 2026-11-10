@@ -1,17 +1,10 @@
 import Foundation
 
-/// Maps an HTTP request to a response plus the agent events it carried.
-/// Routes:
-///   POST /v1/logs, /v1/traces, /v1/metrics   OTLP/HTTP (JSON or protobuf)
-///   POST /hooks/<source>[/<event>]          hook payloads (claude-code, copilot-cli, qwen-code)
-///   GET  /health
 public struct HubRouter: Sendable {
     public struct Outcome: Sendable {
         public var response: HTTPResponse
         public var events: [AgentEvent]
-        /// Ledger rows for sources whose usage history is their telemetry (`UsageAuthority`).
         public var usage: [UsageRecord]
-        /// Short description for the activity log, nil for routine requests.
         public var note: String?
 
         public init(response: HTTPResponse, events: [AgentEvent], usage: [UsageRecord] = [], note: String?) {
@@ -76,7 +69,6 @@ public struct HubRouter: Sendable {
 
     func handleHook(_ request: HTTPRequest, now: Date) -> Outcome {
         let parts = request.path.split(separator: "/").map(String.init)
-        // ["hooks", "<source>", "<event>"?]
         guard parts.count >= 2, let source = AgentSource(rawValue: parts[1]) else {
             return Outcome(response: .notFound, events: [], note: "Unknown hook source in \(request.path)")
         }

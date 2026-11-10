@@ -1,7 +1,6 @@
 import Foundation
 
 public enum Timestamps {
-    /// Accepts epoch seconds or milliseconds (as a number) or an ISO 8601 string.
     public static func date(_ raw: Any?) -> Date? {
         if let number = raw as? NSNumber {
             let value = number.doubleValue
@@ -20,8 +19,6 @@ public enum Timestamps {
     private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let plain = Date.ISO8601FormatStyle()
 
-    /// Fast path for `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH[:]MM)`, the shape every transcript line uses.
-    /// Any fraction length works, which ISO8601DateFormatter does not handle.
     static func epochSeconds(_ text: String) -> Double? {
         var bytes = Array(text.utf8)
         guard bytes.count >= 20 else { return nil }
@@ -73,7 +70,6 @@ public enum Timestamps {
         return Double(seconds) + fraction
     }
 
-    /// Howard Hinnant's days-from-civil: proleptic Gregorian date to days since 1970-01-01.
     static func daysFromCivil(year: Int, month: Int, day: Int) -> Int {
         let y = month <= 2 ? year - 1 : year
         let era = (y >= 0 ? y : y - 399) / 400

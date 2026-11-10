@@ -25,8 +25,6 @@ public struct LocalProjectFileSystem: ProjectFileSystem, Sendable {
     }
 }
 
-/// cwd → project, cached in memory and persisted in `path_map`. A `path_map` row (including manual
-/// `origin = 'user'` merges) always wins over resolving again. Lives inside the `Store` actor.
 final class ProjectRegistry {
     struct Entry: Equatable {
         var projectID: Int64

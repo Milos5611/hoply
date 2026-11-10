@@ -2,14 +2,10 @@ import AgentKit
 import Darwin
 import Foundation
 
-/// Where reading of a file stopped. `size` is the file size when a read reached the end (the coordinator
-/// stores `offset` instead while a file is only partly read), so a stat-only rescan can tell whether anything
-/// is unread without opening the file.
 public struct FileCursor: Sendable, Equatable {
     public var inode: UInt64
     public var size: Int64
     public var offset: Int64
-    /// FNV-1a of the first `min(512, offset)` bytes; a mismatch means the file was rewritten in place.
     public var headHash: UInt64
 
     public init(inode: UInt64, size: Int64, offset: Int64, headHash: UInt64) {
@@ -28,18 +24,13 @@ public struct FileStat: Sendable, Equatable {
 
 public struct TailChunk: Sendable {
     public var lines: [Data]
-    /// File offset of the first line; 0 after a reset.
     public var startOffset: Int64
     public var cursor: FileCursor
-    /// The file was replaced, truncated or rewritten, so reading restarted at 0.
     public var didReset: Bool
-    /// Everything up to the size seen at open was read (a trailing partial line may remain).
     public var atEnd: Bool
     public var bytesConsumed: Int64
 }
 
-/// Reads only complete lines past a cursor. Re-reads from 0 when the inode changes, the file shrinks below
-/// the cursor, or its first bytes changed; the ledger's upserts make re-reading harmless.
 public enum FileTailer {
     public static let headLength: Int64 = 512
 
@@ -51,7 +42,6 @@ public enum FileTailer {
                                        + TimeInterval(info.st_mtimespec.tv_nsec) / 1e9))
     }
 
-    /// Nil when the file does not exist. Reads at most about `maxBytes`, more only to finish one long line.
     public static func read(path: String, from cursor: FileCursor?, maxBytes: Int = 4 << 20) throws -> TailChunk? {
         let fd = open(path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else {

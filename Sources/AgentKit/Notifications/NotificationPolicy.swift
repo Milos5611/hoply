@@ -7,28 +7,53 @@ public enum NotificationKind: String, Sendable, Hashable {
     case localModelOffline = "local-model-offline"
 }
 
-/// Mirrors `UNNotificationInterruptionLevel`. There is no time-sensitive level: it needs an entitlement the
-/// ad-hoc signed app does not have.
+public enum NotificationCause: String, Sendable, Hashable, CaseIterable {
+    case permission
+    case input
+    case yourTurn = "your-turn"
+    case limit
+    case limitReset = "limit-reset"
+    case localModelOffline = "local-model-offline"
+
+    public var kind: NotificationKind {
+        switch self {
+        case .permission, .input: return .permission
+        case .yourTurn: return .yourTurn
+        case .limit, .limitReset: return .limit
+        case .localModelOffline: return .localModelOffline
+        }
+    }
+
+    public init(_ kind: NotificationKind) {
+        switch kind {
+        case .permission: self = .permission
+        case .yourTurn: self = .yourTurn
+        case .limit: self = .limit
+        case .localModelOffline: self = .localModelOffline
+        }
+    }
+}
+
 public enum NotificationInterruption: String, Sendable {
     case active
     case passive
 }
 
 public struct NotificationRequest: Sendable, Equatable, Identifiable {
-    /// Stable per subject, so a newer request replaces the older one in Notification Center.
     public var id: String
     public var kind: NotificationKind
+    public var cause: NotificationCause
     public var interruption: NotificationInterruption
     public var title: String
     public var body: String
     public var threadID: String
-    /// The session to open when the notification is clicked.
     public var session: SessionKey?
 
     public init(id: String, kind: NotificationKind, interruption: NotificationInterruption, title: String,
-                body: String, threadID: String, session: SessionKey? = nil) {
+                body: String, threadID: String, session: SessionKey? = nil, cause: NotificationCause? = nil) {
         self.id = id
         self.kind = kind
+        self.cause = cause ?? NotificationCause(kind)
         self.interruption = interruption
         self.title = title
         self.body = body
@@ -39,7 +64,6 @@ public struct NotificationRequest: Sendable, Equatable, Identifiable {
     public var playsSound: Bool { interruption == .active }
 }
 
-/// What the app should do in Notification Center: post these, remove those (delivered ids).
 public struct NotificationActions: Sendable, Equatable {
     public var post: [NotificationRequest]
     public var withdraw: [String]
@@ -52,7 +76,6 @@ public struct NotificationActions: Sendable, Equatable {
     public var isEmpty: Bool { post.isEmpty && withdraw.isEmpty }
 }
 
-/// Minutes after local midnight; `start > end` wraps midnight, `start == end` is never quiet.
 public struct QuietHours: Sendable, Equatable {
     public var start: Int
     public var end: Int
@@ -76,9 +99,7 @@ public struct QuietHours: Sendable, Equatable {
 
 public struct NotificationPreferences: Sendable, Equatable {
     public var enabled: Bool
-    /// Nil when quiet hours are off.
     public var quietHours: QuietHours?
-    /// Silences session notifications only; matched exactly against the project root, or the cwd if unresolved.
     public var mutedProjectRoots: Set<String>
     public var limitAlerts: Bool
     public var localModelAlerts: Bool
@@ -101,41 +122,43 @@ public struct NotificationPreferences: Sendable, Equatable {
     }
 }
 
-/// Decides which notifications to post and which to withdraw. A value type with its own memory (cooldowns,
-/// limit crossings, local-model outage), owned by the app on the main actor; it posts nothing itself.
 public struct NotificationPolicy: Sendable {
     public var preferences: NotificationPreferences
-    /// Quiet hours are read in this calendar's time zone.
     public var calendar: Calendar
 
-    /// At most one notification per session and kind in this interval.
     public static let cooldown: TimeInterval = 120
-    /// Your-turn only after this much work, so quick back-and-forth in a terminal you're watching stays quiet.
     public static let minimumWork: TimeInterval = 30
     public static let limitThresholds: [Double] = [80, 95]
     public static let offlineAlertAfter: TimeInterval = 120
+    public static let offlineCheckGap: TimeInterval = 90
     public static let localModelOfflineID = "local-model:offline"
     public static let limitsThreadID = "limits"
     public static let localModelThreadID = "local-model"
 
     private struct Cooldown: Hashable {
         var session: SessionKey
-        var kind: NotificationKind
+        var cause: NotificationCause
+    }
+
+    private struct LimitedWatch {
+        var kind: LimitKind
+        var resetsAt: Date
+        var sessions: Set<SessionKey>
     }
 
     private struct LocalModelWatch {
         var server: String?
         var seenOnline = false
         var offlineSince: Date?
+        var lastCheck: Date?
         var alerted = false
     }
 
     private var lastPosted: [Cooldown: Date] = [:]
     private var lastLimitSamples: [LimitKind: LimitSample] = [:]
-    /// Limit alerts posted this run (id → when its window resets), so a dip and re-rise inside one window
-    /// cannot post the same threshold twice.
     private var postedLimitAlerts: [String: Date] = [:]
     private var localModel = LocalModelWatch()
+    private var limitedWatch: LimitedWatch?
 
     public init(preferences: NotificationPreferences = NotificationPreferences(), calendar: Calendar = .current) {
         self.preferences = preferences
@@ -151,14 +174,20 @@ public struct NotificationPolicy: Sendable {
     }
 
     public func isMuted(_ session: AgentSession, project: ProjectRef?) -> Bool {
-        guard let place = Self.place(of: session, project: project) else { return false }
-        return preferences.mutedProjectRoots.contains { Self.normalized($0) == place }
+        if let root = Self.nonEmpty(project?.root).map(Self.normalized) {
+            return preferences.mutedProjectRoots.contains { Self.normalized($0) == root }
+        }
+        // Unresolved (e.g. right after launch): the cwd may be a worktree or subfolder of a muted repo.
+        guard let cwd = Self.nonEmpty(session.cwd).map(Self.normalized) else { return false }
+        return preferences.mutedProjectRoots.contains { muted in
+            let root = Self.normalized(muted)
+            guard !root.isEmpty else { return false }
+            return cwd == root || cwd.hasPrefix(root == "/" ? root : root + "/")
+        }
     }
 
     // MARK: - Sessions
 
-    /// Feed every `StateChange` from `SessionBoard.apply` and `tick`. `project` is the session cwd's ledger
-    /// project when resolved; it names the notification, threads it and decides muting.
     public mutating func sessionChanged(_ change: StateChange, project: ProjectRef? = nil,
                                         now: Date = Date()) -> NotificationActions {
         let session = change.session
@@ -169,32 +198,38 @@ public struct NotificationPolicy: Sendable {
         }
         lastPosted = lastPosted.filter { now.timeIntervalSince($0.value) < Self.cooldown }
 
-        guard change.from != change.to, let kind = Self.kind(of: change) else { return actions }
-        let cooldown = Cooldown(session: session.key, kind: kind)
+        guard change.from != change.to, let cause = Self.cause(of: change) else { return actions }
+        let cooldown = Cooldown(session: session.key, cause: cause)
         guard preferences.enabled, !isQuiet(at: now), !isMuted(session, project: project),
               lastPosted[cooldown] == nil else { return actions }
         lastPosted[cooldown] = now
 
         let source = session.key.source.displayName
         let projectTitle = project?.title ?? session.project
+        let title: String
+        switch cause {
+        case .permission: title = "\(source) needs permission"
+        case .input: title = "\(source) has a question"
+        default: title = "\(source) is waiting for you"
+        }
         actions.post.append(NotificationRequest(
-            id: id, kind: kind, interruption: kind == .permission ? .active : .passive,
-            title: kind == .permission ? "\(source) needs permission" : "\(source) is waiting for you",
+            id: id, kind: cause.kind, interruption: cause == .yourTurn ? .passive : .active, title: title,
             body: [session.title, projectTitle].compactMap { Self.nonEmpty($0) }.joined(separator: " · "),
             threadID: Self.place(of: session, project: project) ?? session.key.source.rawValue,
-            session: session.key))
+            session: session.key, cause: cause))
         return actions
     }
 
-    /// The user removed the session from the panel; its notification goes too.
     public mutating func sessionDismissed(_ key: SessionKey) -> NotificationActions {
         NotificationActions(withdraw: [Self.notificationID(for: key)])
     }
 
-    private static func kind(of change: StateChange) -> NotificationKind? {
+    private static func cause(of change: StateChange) -> NotificationCause? {
         switch change.to {
         case .needsPermission:
             return .permission
+        case .yourTurn where change.session.awaitsInput:
+            return .input
         case .yourTurn where change.from == .working && change.previousDuration >= minimumWork:
             return .yourTurn
         default:
@@ -204,12 +239,6 @@ public struct NotificationPolicy: Sendable {
 
     // MARK: - Claude limits
 
-    /// Feed each fetch's samples (`ClaudeLimits.samples(at:)`). `previous` is each kind's last stored sample from
-    /// before this fetch (`Ledger.recordLimits` returns it), so a restart neither repeats nor misses an alert;
-    /// pass nil when the ledger is unavailable and the policy relies on what it saw this run.
-    ///
-    /// A threshold alerts when crossed inside one window (previous < threshold ≤ current), or when a new window
-    /// already starts at or above it. Only the highest threshold crossed by one sample posts.
     public mutating func limitsUpdated(_ samples: [LimitSample], previous stored: [LimitKind: LimitSample]?,
                                        now: Date = Date()) -> NotificationActions {
         postedLimitAlerts = postedLimitAlerts.filter { now.timeIntervalSince($0.value) < 86_400 }
@@ -238,7 +267,6 @@ public struct NotificationPolicy: Sendable {
         return thresholds.filter { floor < $0 && $0 <= current.utilization }.max()
     }
 
-    /// `resetsAt` is rounded to 10 minutes so the API's jitter keeps the id stable for one window.
     public static func limitID(_ sample: LimitSample, threshold: Double) -> String {
         let window = sample.resetsAt.map { String(Int(($0.timeIntervalSince1970 / 600).rounded()) * 600) } ?? "none"
         return "limit:\(sample.kind.rawValue):\(window):\(Int(threshold))"
@@ -255,12 +283,58 @@ public struct NotificationPolicy: Sendable {
                                    threadID: limitsThreadID)
     }
 
+    // MARK: - Limited sessions
+
+    public static func limitResetID(_ kind: LimitKind, resetsAt: Date) -> String {
+        "limit-reset:\(kind.rawValue):\(Int((resetsAt.timeIntervalSince1970 / 600).rounded()) * 600)"
+    }
+
+    public mutating func limitedSessionsChecked(_ sessions: [AgentSession], limits: [LimitSample],
+                                                localModelPatterns: [String] = [],
+                                                now: Date = Date()) -> NotificationActions {
+        var blocked: [(session: SessionKey, window: LimitSample)] = []
+        for session in sessions {
+            if let window = LimitedSessions.blockingWindow(for: session, limits: limits,
+                                                           localModelPatterns: localModelPatterns, now: now) {
+                blocked.append((session.key, window))
+            }
+        }
+        if let last = blocked.max(by: { ($0.window.resetsAt ?? now) < ($1.window.resetsAt ?? now) }),
+           let resetsAt = last.window.resetsAt {
+            limitedWatch = LimitedWatch(kind: last.window.kind, resetsAt: resetsAt, sessions: Set(blocked.map(\.session)))
+            return NotificationActions()
+        }
+        guard let watch = limitedWatch else { return NotificationActions() }
+        let waiting = sessions.filter { watch.sessions.contains($0.key) && $0.state == .yourTurn && !$0.awaitsInput }
+        guard !waiting.isEmpty else {
+            limitedWatch = nil
+            return NotificationActions()
+        }
+        // Without a reading (limits switched off, a failed fetch) only the clock can tell.
+        let newest = limits.filter { $0.kind == watch.kind }.max { $0.ts < $1.ts }
+        guard now >= watch.resetsAt || newest != nil else { return NotificationActions() }
+        limitedWatch = nil
+
+        let id = Self.limitResetID(watch.kind, resetsAt: watch.resetsAt)
+        postedLimitAlerts = postedLimitAlerts.filter { now.timeIntervalSince($0.value) < 86_400 }
+        guard postedLimitAlerts[id] == nil, preferences.enabled, preferences.limitAlerts, !isQuiet(at: now) else {
+            return NotificationActions()
+        }
+        postedLimitAlerts[id] = now
+        let body: String
+        if waiting.count == 1, let session = waiting.first {
+            let name = Self.nonEmpty(session.title) ?? Self.nonEmpty(session.project) ?? "Your session"
+            body = "\(name) can continue."
+        } else {
+            body = "\(waiting.count) sessions can continue."
+        }
+        return NotificationActions(post: [NotificationRequest(
+            id: id, kind: .limit, interruption: .active, title: "Claude \(watch.kind.limitPhrase) reset", body: body,
+            threadID: Self.limitsThreadID, session: waiting.count == 1 ? waiting.first?.key : nil, cause: .limitReset)])
+    }
+
     // MARK: - Local model
 
-    /// Feed every model-server poll. `server` is the configured base URL (nil or blank = none configured).
-    /// Alerts once per outage of at least `offlineAlertAfter`, and only after the server was seen online this
-    /// run, so launching with the server off stays quiet. An alert held back by quiet hours or switched-off
-    /// preferences posts once they allow it, if the server is still offline.
     public mutating func localModelChecked(server raw: String?, name: String? = nil, online: Bool,
                                            now: Date = Date()) -> NotificationActions {
         let server = Self.nonEmpty(raw?.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -270,6 +344,8 @@ public struct NotificationPolicy: Sendable {
             localModel = LocalModelWatch(server: server)
         }
         guard let server else { return actions }
+        let gap = localModel.lastCheck.map { now.timeIntervalSince($0) } ?? 0
+        localModel.lastCheck = now
 
         if online {
             if localModel.alerted { actions.withdraw.append(Self.localModelOfflineID) }
@@ -279,7 +355,7 @@ public struct NotificationPolicy: Sendable {
             return actions
         }
         guard localModel.seenOnline, !localModel.alerted else { return actions }
-        let since = localModel.offlineSince ?? now
+        let since = gap > Self.offlineCheckGap ? now : localModel.offlineSince ?? now
         localModel.offlineSince = since
         let down = now.timeIntervalSince(since)
         guard down >= Self.offlineAlertAfter, preferences.enabled, preferences.localModelAlerts,
@@ -312,7 +388,6 @@ public struct NotificationPolicy: Sendable {
         return text
     }
 
-    /// "45 min", "2 h 10 min", "3 d 4 h"; rounded up to the minute.
     static func duration(_ seconds: TimeInterval) -> String {
         let minutes = max(Int((seconds / 60).rounded(.up)), 1)
         if minutes < 60 { return "\(minutes) min" }

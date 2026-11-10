@@ -77,8 +77,6 @@ enum HistoryRange: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// The Local model page's range: the speed and KV cache charts cover `duration` at `resolution`; the daily cards
-/// show at least a week, so the 24-hour view still has days to compare.
 enum LocalModelRange: String, CaseIterable, Identifiable, Hashable {
     case day
     case week
@@ -102,7 +100,6 @@ enum LocalModelRange: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Seconds per chart point: 288, 336 and 720 points.
     var resolution: Int {
         switch self {
         case .day: return 300

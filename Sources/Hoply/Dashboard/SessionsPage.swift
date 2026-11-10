@@ -172,6 +172,7 @@ struct Pager: View {
 }
 
 struct SessionDetail: View {
+    @Environment(AppModel.self) private var model
     let session: SessionSummary?
 
     var body: some View {
@@ -180,6 +181,7 @@ struct SessionDetail: View {
                 VStack(alignment: .leading, spacing: 12) {
                     header(session)
                     cost(session)
+                    insight(session)
                     if !session.models.isEmpty { models(session) }
                     changes(session)
                     actions(session)
@@ -253,6 +255,33 @@ struct SessionDetail: View {
         }
     }
 
+    @ViewBuilder
+    private func insight(_ session: SessionSummary) -> some View {
+        let insight = model.history.insights[session.key]
+        let live = model.sessions.first { $0.key == session.key }
+        if let context = insight?.context {
+            Card(prominent: true, padding: 14) {
+                ContextGauge(context: context)
+            }
+        }
+        let rows = SubagentRow.rows(ledger: insight?.subagents ?? [], live: live?.subagents ?? [])
+        if !rows.isEmpty {
+            Card(prominent: true, padding: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        SectionTitle("Subagents")
+                        Spacer()
+                        let working = rows.count { $0.isWorking }
+                        Text(working > 0 ? "\(rows.count) · \(working) working" : "\(rows.count)")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(working > 0 ? Color.blue : Color.secondary)
+                    }
+                    ForEach(rows) { SubagentRowView(row: $0) }
+                }
+            }
+        }
+    }
+
     private func costCaption(_ session: SessionSummary) -> String {
         var caption = "API-equivalent"
         if session.totals.costUSD == 0, session.totals.apiEquivUSD > 0 { caption += " · ran locally, $0 spent" }
@@ -319,6 +348,10 @@ struct SessionDetail: View {
 
     private func actions(_ session: SessionSummary) -> some View {
         HStack(spacing: 8) {
+            if let cwd = session.cwd, let editor = model.defaultEditor {
+                Button { model.openInEditor(cwd) } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
+                    .help("Open in \(editor.name)")
+            }
             if let path = session.transcriptPath {
                 Button { WorkspaceActions.revealInFinder(path) } label: { Image(systemName: "doc.text.magnifyingglass") }
                     .help("Reveal transcript in Finder")
@@ -334,8 +367,118 @@ struct SessionDetail: View {
     }
 }
 
+struct ContextGauge: View {
+    let context: ContextWindow
+
+    var body: some View {
+        let tint: Color = context.fraction >= 0.95 ? .red : context.isWarning ? .orange : .blue
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionTitle("Context window")
+                Spacer()
+                if context.isWarning {
+                    Label("Nearly full", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(Format.tokens(context.used))
+                    .font(.system(size: 20, weight: .semibold).monospacedDigit())
+                Text("of \(Format.tokens(context.limit))")
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(Format.percent(context.fraction))
+                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(context.isWarning ? tint : Color.primary)
+            }
+            ShareBar(fraction: context.fraction, tint: tint)
+                .overlay(alignment: .leading) {
+                    GeometryReader { geometry in
+                        Capsule()
+                            .fill(Color.primary.opacity(0.35))
+                            .frame(width: 1.5, height: 9)
+                            .offset(x: geometry.size.width * ContextWindow.warnFraction, y: -2)
+                    }
+                }
+            Text("\(Format.tokens(context.remaining)) left · the latest main call's prompt")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help("Input, cache reads and cache writes of the session's latest main-agent call against the model's window. The tick marks 80%, where the panel starts to warn.")
+    }
+}
+
+struct SubagentRow: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var note: String?
+    var model: String?
+    var duration: TimeInterval
+    var totals: LedgerTotals?
+    var isWorking: Bool
+
+    static func rows(ledger: [SubagentSummary], live: [LiveSubagent], now: Date = Date()) -> [SubagentRow] {
+        var rows = ledger.map { summary in
+            let running = live.first { $0.id == summary.agentID }
+            return SubagentRow(id: summary.agentID, name: summary.agentType ?? running?.type ?? summary.name,
+                               note: summary.agentType == nil ? nil : summary.description, model: summary.model,
+                               duration: running.map { ($0.endedAt ?? now).timeIntervalSince($0.startedAt) }
+                                   ?? summary.duration,
+                               totals: summary.totals, isWorking: running?.isWorking ?? false)
+        }
+        for subagent in live where !ledger.contains(where: { $0.agentID == subagent.id }) {
+            rows.append(SubagentRow(id: subagent.id, name: subagent.type ?? "Subagent", note: nil, model: nil,
+                                    duration: (subagent.endedAt ?? now).timeIntervalSince(subagent.startedAt),
+                                    totals: nil, isWorking: subagent.isWorking))
+        }
+        return rows
+    }
+}
+
+struct SubagentRowView: View {
+    let row: SubagentRow
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                if row.isWorking {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 5.5))
+                        .foregroundStyle(.blue)
+                        .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                        .help("Working now")
+                }
+                Text(row.name)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                Text(row.totals.map(Format.spend) ?? "–")
+                    .font(.system(size: 12.5).monospacedDigit())
+            }
+            Text(caption)
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(row.isWorking ? Color.blue : Color.secondary)
+                .lineLimit(1)
+        }
+        .help(row.note ?? row.name)
+    }
+
+    private var caption: String {
+        var parts: [String] = []
+        if row.isWorking { parts.append("working") }
+        if let model = row.model, !model.isEmpty { parts.append(Format.model(model)) }
+        parts.append(Format.span(max(row.duration, 0)))
+        if let totals = row.totals { parts.append("\(Format.tokens(totals.tokens.total)) tok") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 extension SessionSummary {
-    /// Telemetry sessions (Qwen Code, Copilot IDE) carry no prompt text, so they have no title.
     var displayTitle: String {
         title ?? "\(key.source.displayName) session"
     }

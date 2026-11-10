@@ -29,7 +29,7 @@ command -v jq >/dev/null || { echo "jq is required (macOS 15+ ships /usr/bin/jq,
 has_claude() { command -v claude >/dev/null || [ -d "$CLAUDE_DIR" ]; }
 has_copilot() { command -v copilot >/dev/null || [ -d "$COPILOT_DIR" ]; }
 
-CLAUDE_EVENTS='["SessionStart","UserPromptSubmit","PreToolUse","PostToolUse","PermissionRequest","Notification","Stop","SessionEnd"]'
+CLAUDE_EVENTS='["SessionStart","UserPromptSubmit","PreToolUse","PostToolUse","PermissionRequest","Notification","Elicitation","ElicitationResult","SubagentStart","SubagentStop","Stop","StopFailure","SessionEnd"]'
 CLAUDE_HOOK="curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' --data-binary @- ${ENDPOINT}/hooks/claude-code || true ${MARKER}"
 # Logs-only, signal-specific OTel variables, so any other OpenTelemetry export (metrics, traces) keeps working.
 CLAUDE_ENV=$(jq -n --arg logs "${ENDPOINT}/v1/logs" '{

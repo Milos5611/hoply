@@ -1,12 +1,9 @@
 import Foundation
 
-/// Chart-ready daily spend: series ranked by API-equivalent total, the smallest folded into "Other" so the
-/// legend stays short. Series are grouped by label, so model ids that share a label share a series.
 public struct SpendChartData: Sendable, Equatable {
     public struct Bar: Sendable, Equatable, Identifiable {
         public let day: Date
         public let label: String
-        /// Legend position; "Other" comes after every kept series.
         public let rank: Int
         public let value: Double
 
@@ -15,7 +12,6 @@ public struct SpendChartData: Sendable, Equatable {
 
     public struct Series: Sendable, Equatable {
         public let label: String
-        /// Only for the source split, where each series is one agent.
         public let source: AgentSource?
         public let isOther: Bool
     }
@@ -23,9 +19,7 @@ public struct SpendChartData: Sendable, Equatable {
     public static let otherLabel = "Other"
 
     public let days: [Date]
-    /// Ordered by day, then rank.
     public let bars: [Bar]
-    /// Legend order: kept series by total (ties by label), then "Other" if anything was folded.
     public let series: [Series]
     public let unpricedDays: Set<Date>
 
@@ -67,7 +61,6 @@ public struct SpendChartData: Sendable, Equatable {
 
     public var isEmpty: Bool { bars.allSatisfy { $0.value <= 0 } && unpricedDays.isEmpty }
 
-    /// From the first day to the end of the last one.
     public var domain: ClosedRange<Date> {
         guard let first = days.first, let last = days.last,
               let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else {
@@ -81,7 +74,6 @@ public struct SpendChartData: Sendable, Equatable {
         days.last { $0 <= date }
     }
 
-    /// The day's non-zero bars, largest first.
     public func entries(on day: Date) -> [Bar] {
         bars.filter { $0.day == day && $0.value > 0 }
             .sorted { ($0.value, $1.rank) > ($1.value, $0.rank) }
@@ -103,7 +95,6 @@ public struct DaySpend: Sendable, Equatable {
 }
 
 extension DailySpendSeries {
-    /// The day with the most API-equivalent spend (the latest one on a tie); nil when nothing was spent.
     public var busiestDay: DaySpend? {
         var byDay: [Date: Double] = [:]
         for point in points { byDay[point.day, default: 0] += point.totals.apiEquivUSD }

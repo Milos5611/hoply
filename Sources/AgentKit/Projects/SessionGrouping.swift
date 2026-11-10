@@ -1,10 +1,8 @@
 import Foundation
 
 public struct ProjectGroup: Identifiable, Equatable, Sendable {
-    /// `project:<id>` for a resolved project, else the session cwd, or "" for sessions that never reported one.
     public var id: String
     public var name: String
-    /// The project root, or the raw cwd while it is unresolved.
     public var path: String?
     public var project: ProjectRef?
     public var sessions: [AgentSession]
@@ -13,17 +11,29 @@ public struct ProjectGroup: Identifiable, Equatable, Sendable {
     public var isWorking: Bool { sessions.contains { $0.state == .working } }
 }
 
-/// Splits sessions for the panel: everything waiting on the user first, the rest grouped by project.
 public struct SessionGrouping: Equatable, Sendable {
     public var waiting: [AgentSession]
     public var projects: [ProjectGroup]
+    public var limitedUntil: [SessionKey: Date]
 
-    /// `sessions` must already be in `SessionBoard.ordered` order; that order is kept inside each group.
-    /// `projects` maps a session's cwd to its resolved project (`Ledger.resolveProjects`), so worktrees and
-    /// subfolders of one repo share a group. A cwd missing from it groups on its own until it resolves, so the
-    /// panel never waits for the ledger.
-    public init(sessions: [AgentSession], projects resolved: [String: ProjectRef] = [:]) {
-        waiting = sessions.filter { $0.state.needsAttention }
+    public init(sessions: [AgentSession], projects resolved: [String: ProjectRef] = [:], limits: [LimitSample] = [],
+                localModelPatterns: [String] = [], now: Date = Date()) {
+        var limited: [SessionKey: Date] = [:]
+        if !limits.isEmpty {
+            for session in sessions {
+                limited[session.key] = LimitedSessions.limitedUntil(session, limits: limits,
+                                                                    localModelPatterns: localModelPatterns, now: now)
+            }
+        }
+        limitedUntil = limited
+        waiting = sessions.enumerated()
+            .filter { $0.element.state.needsAttention }
+            .sorted { a, b in
+                let left = SessionStatus(a.element, limitedUntil: limited[a.element.key]).priority
+                let right = SessionStatus(b.element, limitedUntil: limited[b.element.key]).priority
+                return (left, a.offset) < (right, b.offset)
+            }
+            .map(\.element)
         var groups: [String: ProjectGroup] = [:]
         var order: [String] = []
         for session in sessions where !session.state.needsAttention {
@@ -48,4 +58,8 @@ public struct SessionGrouping: Equatable, Sendable {
     }
 
     public var oldestWaitSince: Date? { waiting.map(\.stateSince).min() }
+
+    public func status(of session: AgentSession) -> SessionStatus {
+        SessionStatus(session, limitedUntil: limitedUntil[session.key])
+    }
 }

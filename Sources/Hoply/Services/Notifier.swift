@@ -2,7 +2,6 @@ import AgentKit
 import Foundation
 import UserNotifications
 
-/// What a clicked notification should open; built from the notification's `userInfo`.
 nonisolated enum NotificationTarget: Sendable, Equatable {
     case session(SessionKey)
     case limits
@@ -32,8 +31,8 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
 /// UNUserNotificationCenter needs a bundle identifier and crashes in a bare `swift run` executable,
 /// so this is a no-op outside the bundled .app.
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
-    /// Called on the main actor when the user clicks a notification.
     var onOpen: ((NotificationTarget) -> Void)?
+    private var queue: Task<Void, Never>?
 
     private var isAvailable: Bool {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
@@ -67,17 +66,30 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         content.userInfo = userInfo
         let notification = UNNotificationRequest(identifier: request.id, content: content, trigger: nil)
-        Task { try? await UNUserNotificationCenter.current().add(notification) }
+        enqueue { try? await UNUserNotificationCenter.current().add(notification) }
     }
 
     func withdraw(_ ids: [String]) {
         guard isAvailable, !ids.isEmpty else { return }
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+        enqueue {
+            let center = UNUserNotificationCenter.current()
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+    }
+
+    /// Posts and withdrawals reach the notification center in call order: `add` is asynchronous, so a
+    /// withdrawal issued right after a post would otherwise run first and leave the notification up.
+    private func enqueue(_ operation: @escaping () async -> Void) {
+        let previous = queue
+        queue = Task {
+            await previous?.value
+            await operation()
+        }
     }
 
     // MARK: - UNUserNotificationCenterDelegate
 
-    /// Banners also show while the Dashboard is in front.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {

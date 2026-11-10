@@ -6,7 +6,6 @@ public struct PromSample: Sendable, Equatable {
     public var value: Double
 }
 
-/// Parser for the Prometheus text exposition format (what vLLM serves at /metrics).
 public enum PrometheusParser {
     public static func parse(_ text: String) -> [PromSample] {
         var samples: [PromSample] = []
@@ -66,20 +65,14 @@ public enum PrometheusParser {
     }
 }
 
-/// One scrape of a vLLM server's /metrics.
 public struct VLLMSnapshot: Sendable, Equatable {
-    /// "vllm" or "tensorfold": both publish vLLM's metric names, each under its own prefix.
     public var engine: String
     public var model: String?
     public var running: Int
     public var waiting: Int
-    /// Fraction 0…1 of KV cache in use.
     public var kvCacheUsage: Double?
     public var promptTokensTotal: Double
-    /// The engine's counter plus tokens held by live streams; moves while decoding, so rates use it. It can dip
-    /// when a stream is cancelled, so it is not a counter.
     public var generationTokensTotal: Double
-    /// The engine's own monotonic counter (tensorfold: finished requests only); a drop means a restart.
     public var generationTokensCounter: Double
     public var takenAt: Date
 
@@ -128,7 +121,6 @@ public struct VLLMSnapshot: Sendable, Equatable {
     }
 }
 
-/// What the panel shows for the local model server: the latest snapshot plus rates.
 public struct VLLMStatus: Sendable, Equatable {
     public var snapshot: VLLMSnapshot
     public var generationTokensPerSecond: Double?

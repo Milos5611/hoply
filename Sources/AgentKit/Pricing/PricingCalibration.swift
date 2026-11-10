@@ -1,12 +1,9 @@
 import Foundation
 
-/// Checks the price table against Claude Code's own `cost-state` figures by pricing its per-model token
-/// totals. This isolates price errors from transcript gaps (calls Claude Code bills but never logs).
 public enum PricingCalibration {
     public struct Row: Sendable, Equatable {
         public var model: String
         public var reportedUSD: Double
-        /// Nil when the model is unknown to the table. Local models are skipped entirely.
         public var computedUSD: Double?
         public var relativeError: Double?
         public var isOff: Bool

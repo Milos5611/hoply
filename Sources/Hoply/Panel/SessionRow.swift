@@ -1,14 +1,11 @@
 import AgentKit
 import SwiftUI
 
-/// Where a session runs, shown before its source: the project in "Waiting on you", or inside a project
-/// card the worktree or subfolder when it isn't the project root.
 enum SessionPlace: Equatable {
     case project(String)
     case worktree(String)
     case subfolder(String)
 
-    /// nil when `cwd` is the root itself.
     init?(cwd: String?, root: String?) {
         guard let cwd, let root, cwd != root else { return nil }
         if cwd.hasPrefix(root.hasSuffix("/") ? root : root + "/") {
@@ -29,6 +26,7 @@ enum SessionPlace: Equatable {
 struct SessionRow: View {
     @Environment(AppModel.self) private var model
     let session: AgentSession
+    let status: SessionStatus
     var place: SessionPlace?
 
     var body: some View {
@@ -39,24 +37,32 @@ struct SessionRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(placeText)\(prefix)\(Text(stateText).foregroundStyle(stateColor))\(suffix)")
+                Text("\(placeText)\(prefix)\(Text(age).foregroundStyle(ageColor))\(suffix)")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help(stateHelp)
                 if let detail {
                     Text(detail)
                         .font(.system(size: 12))
-                        .foregroundStyle(session.state == .needsPermission ? Color.red : Color.primary.opacity(0.75))
+                        .foregroundStyle(detailColor)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 2)
                 }
+                if let subagents {
+                    Label(subagents, systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(session.workingSubagentCount > 0 ? Color.blue : Color.secondary)
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                        .help(subagentHelp)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
-                if session.state.needsAttention {
-                    StatePill(state: session.state)
-                }
+                StatePill(status: status, failed: failed)
+                    .help(stateHelp)
                 if let usage {
                     Text(usage)
                         .font(.system(size: 11).monospacedDigit())
@@ -69,11 +75,18 @@ struct SessionRow: View {
                         .foregroundStyle(.tertiary)
                         .help(Format.copilot(totals) ?? "")
                 }
+                SessionFacts(diff: model.diffStat(for: session), context: model.contextWindow(for: session.key),
+                             path: session.cwd)
             }
+            .fixedSize()
         }
+        .opacity(status.recedes ? 0.6 : 1)
         .contentShape(Rectangle())
         .contextMenu {
             if let cwd = session.cwd {
+                if let editor = model.defaultEditor {
+                    Button("Open in \(editor.name)") { model.openInEditor(cwd) }
+                }
                 Button("Reveal in Finder") { WorkspaceActions.revealInFinder(cwd) }
                 Button("Open in Terminal") { WorkspaceActions.openInTerminal(cwd) }
                 Button("Copy Path") { WorkspaceActions.copy(cwd) }
@@ -83,6 +96,8 @@ struct SessionRow: View {
         }
     }
 
+    private var failed: Bool { status == .yourTurn && session.failure != nil }
+
     private var title: String {
         session.title ?? session.project ?? session.key.source.displayName
     }
@@ -91,49 +106,70 @@ struct SessionRow: View {
         place.map { Text("\($0.text) · ") } ?? Text(verbatim: "")
     }
 
-    /// Inside a project card a worktree or subfolder takes the source's place (the badge shows the source),
-    /// so the state never truncates.
     private var prefix: String {
-        switch place {
-        case .worktree, .subfolder: return ""
-        case .project, nil: return session.key.source.displayName + " · "
-        }
+        place == nil ? session.key.source.displayName + " · " : ""
     }
 
     private var suffix: String {
-        session.model.map { " · \($0)" } ?? ""
+        session.model.map { " · \(Format.model($0))" } ?? ""
     }
 
-    private var stateText: String {
-        let age = Format.age(since: session.stateSince)
-        switch session.state {
-        case .needsPermission, .yourTurn: return "waiting \(age)"
-        case .working: return "working \(age)"
-        case .idle: return "idle \(age)"
-        case .ended: return "ended \(age)"
-        }
+    private var age: String { Format.age(since: session.stateSince) }
+
+    private var ageColor: Color {
+        status.recedes ? .secondary : StatePill.color(for: status, failed: failed)
     }
 
-    private var stateColor: Color {
-        switch session.state {
-        case .needsPermission: return .red
-        case .yourTurn: return .orange
-        case .working: return .blue
-        case .idle, .ended: return .secondary
+    private var stateHelp: String {
+        let since = Format.clock(session.stateSince)
+        var text: String
+        switch status {
+        case .permission: text = "Waiting for your approval since \(since)"
+        case .input: text = "Asked you a question at \(since)"
+        case .limited(let until):
+            text = "Waiting since \(since). The Claude plan limit is reached; it resets at \(Format.clock(until))"
+        case .yourTurn: text = failed ? "The turn failed at \(since)" : "Finished its turn at \(since)"
+        case .working: text = "Working since \(since)"
+        case .idle: text = "Idle since \(since)"
+        case .ended: text = "Ended at \(since)"
         }
+        if let model = session.model { text += " · \(model)" }
+        return text
     }
 
     private var detail: String? {
-        switch session.state {
-        case .needsPermission: return session.lastMessage ?? "Waiting for your approval"
-        case .yourTurn: return session.lastMessage
+        switch status {
+        case .permission: return session.lastMessage ?? "Waiting for your approval"
+        case .input: return session.lastMessage ?? "Asked you a question"
+        case .yourTurn where failed: return session.lastMessage ?? "The turn ended with an error"
+        case .yourTurn, .limited: return session.lastMessage
         case .working: return session.lastTool.map { "Last tool: \($0)" }
         case .idle, .ended: return nil
         }
     }
 
-    /// Ledger totals when the session has any (the same numbers as the Dashboard); otherwise the live
-    /// telemetry counts, for sources whose usage isn't in the ledger yet.
+    private var detailColor: Color {
+        switch status {
+        case .permission: return .orange
+        case .input: return .indigo
+        case .yourTurn where failed: return .red
+        default: return Color.primary.opacity(0.75)
+        }
+    }
+
+    private var subagents: String? {
+        let count = model.subagentCount(for: session)
+        guard count > 0 else { return nil }
+        let text = count == 1 ? "1 subagent" : "\(count) subagents"
+        let working = session.workingSubagentCount
+        return working > 0 ? "\(text) · \(working) working" : text
+    }
+
+    private var subagentHelp: String {
+        let working = session.subagents.filter(\.isWorking).map { $0.type ?? "subagent" }
+        return working.isEmpty ? "Subagents this session started" : "Working: " + working.joined(separator: ", ")
+    }
+
     private var usage: String? {
         if let totals = model.ledgerTotals(for: session.key) {
             return "\(Format.tokens(totals.tokens.total)) tok · \(Format.spend(totals))"
@@ -147,5 +183,40 @@ struct SessionRow: View {
     private var usageHelp: String {
         model.ledgerTotals(for: session.key) == nil ? "Live telemetry for this session"
                                                     : "API-equivalent cost from the usage ledger"
+    }
+}
+
+struct SessionFacts: View {
+    let diff: GitDiffStat?
+    let context: ContextWindow?
+    var path: String?
+
+    var body: some View {
+        let diff = diff.flatMap { $0.isClean ? nil : $0 }
+        let context = context.flatMap { $0.isWarning ? $0 : nil }
+        if diff != nil || context != nil {
+            HStack(spacing: 6) {
+                if let diff {
+                    HStack(spacing: 4) {
+                        if diff.added > 0 || diff.removed > 0 {
+                            Text("+\(diff.added)")
+                                .foregroundStyle(.green)
+                            Text("−\(diff.removed)")
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("\(diff.untracked) new")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .help(Format.diffSummary(diff, path: path))
+                }
+                if let context {
+                    Text("ctx \(Format.percent(context.fraction))")
+                        .foregroundStyle(context.fraction >= 0.95 ? Color.red : Color.orange)
+                        .help(Format.contextSummary(context))
+                }
+            }
+            .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+        }
     }
 }

@@ -1,10 +1,7 @@
 import Foundation
 
-/// Prices in USD per million tokens. Cache prices default to 0.1× input (read), 1.25× (5 minute write)
-/// and 2× (1 hour write).
 public struct ModelPrice: Codable, Sendable, Equatable {
     public struct LongContext: Codable, Sendable, Equatable {
-        /// The tier applies when a request's prompt (input + cache read + cache write) exceeds this.
         public var above: Int
         public var input: Double
         public var output: Double
@@ -76,7 +73,6 @@ public struct ModelPrice: Codable, Sendable, Equatable {
               cacheWrite5m: cacheWrite5m ?? input * 1.25, cacheWrite1h: cacheWrite1h ?? input * 2)
     }
 
-    /// Nil when fast mode was used but the model has no known fast price.
     public func rates(promptTokens: Int, fast isFast: Bool) -> Rates? {
         let standard = standardRates
         if isFast {
@@ -92,7 +88,6 @@ public struct ModelPrice: Codable, Sendable, Equatable {
 }
 
 public struct PricedUsage: Sendable, Equatable {
-    /// Nil means unpriced (unknown model), which is not the same as free.
     public var costUSD: Double?
     public var apiEquivUSD: Double?
     public var isLocal: Bool
@@ -105,10 +100,8 @@ public struct PricedUsage: Sendable, Equatable {
 }
 
 public struct PricingTable: Sendable, Equatable {
-    /// The JSON shape of `BundledPricing` and of the user's `pricing.json` overrides.
     public struct Document: Codable, Sendable, Equatable {
         public var models: [String: ModelPrice]
-        /// Server-side web search, USD per 1,000 searches.
         public var webSearchPerThousand: Double?
 
         public init(models: [String: ModelPrice], webSearchPerThousand: Double? = nil) {
@@ -116,7 +109,6 @@ public struct PricingTable: Sendable, Equatable {
             self.webSearchPerThousand = webSearchPerThousand
         }
 
-        /// A malformed entry drops only that model, never the whole file.
         public init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: AnyKey.self)
             webSearchPerThousand = AnyKey(stringValue: "webSearchPerThousand")
@@ -147,12 +139,12 @@ public struct PricingTable: Sendable, Equatable {
     public let webSearchPerThousand: Double
     public let localModelPatterns: [String]
     public let referenceModel: String
-    /// Content hash of everything that affects a price. Stored on each usage row as `pricing_rev`.
+    public let aliases: [String: String]
     public let revision: String
 
     public init(models: [String: ModelPrice], webSearchPerThousand: Double = 10,
                 localModelPatterns: [String] = PricingTable.defaultLocalModelPatterns,
-                referenceModel: String = PricingTable.defaultReferenceModel) {
+                referenceModel: String = PricingTable.defaultReferenceModel, aliases: [String: String] = [:]) {
         var lowered: [String: ModelPrice] = [:]
         for (key, value) in models { lowered[key.lowercased()] = value }
         self.models = lowered
@@ -161,20 +153,29 @@ public struct PricingTable: Sendable, Equatable {
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty }
         self.referenceModel = referenceModel.trimmingCharacters(in: .whitespaces).lowercased()
+        var cleaned: [String: String] = [:]
+        for (model, target) in aliases {
+            let from = model.trimmingCharacters(in: .whitespaces).lowercased()
+            let to = target.trimmingCharacters(in: .whitespaces).lowercased()
+            if !from.isEmpty, !to.isEmpty, from != to { cleaned[from] = to }
+        }
+        self.aliases = cleaned
         revision = Self.hash(Document(models: lowered, webSearchPerThousand: webSearchPerThousand),
-                             patterns: self.localModelPatterns, reference: self.referenceModel)
+                             patterns: self.localModelPatterns, reference: self.referenceModel, aliases: cleaned)
     }
 
-    /// The bundled table with the user's overrides merged on top (whole entries replace bundled ones).
+    public var pricedModelIDs: [String] { models.keys.sorted() }
+
     public static func bundled(overrides: Document? = nil,
                                localModelPatterns: [String] = defaultLocalModelPatterns,
-                               referenceModel: String = defaultReferenceModel) -> PricingTable {
+                               referenceModel: String = defaultReferenceModel,
+                               aliases: [String: String] = [:]) -> PricingTable {
         let bundled = BundledPricing.document
         var models = bundled.models
         for (key, value) in overrides?.models ?? [:] { models[key] = value }
         return PricingTable(models: models,
                             webSearchPerThousand: overrides?.webSearchPerThousand ?? bundled.webSearchPerThousand ?? 10,
-                            localModelPatterns: localModelPatterns, referenceModel: referenceModel)
+                            localModelPatterns: localModelPatterns, referenceModel: referenceModel, aliases: aliases)
     }
 
     public func isLocal(_ model: String?) -> Bool {
@@ -182,11 +183,13 @@ public struct PricingTable: Sendable, Equatable {
         return localModelPatterns.contains { model.contains($0) }
     }
 
-    /// Exact id first, then with provider prefixes, date and `[1m]` suffixes removed, then the longest
-    /// table id that prefixes it at a `-` boundary. A digit right after the boundary means a different
-    /// version (`claude-opus-5-6` must not price as `claude-opus-5`), so that never matches.
     public func match(_ model: String) -> (id: String, price: ModelPrice)? {
         let lowered = model.lowercased()
+        if let target = aliases[lowered] ?? aliases[Self.normalize(lowered)], let hit = direct(target) { return hit }
+        return direct(lowered)
+    }
+
+    private func direct(_ lowered: String) -> (id: String, price: ModelPrice)? {
         if let price = models[lowered] { return (lowered, price) }
         let normalized = Self.normalize(lowered)
         if let price = models[normalized] { return (normalized, price) }
@@ -224,16 +227,20 @@ public struct PricingTable: Sendable, Equatable {
         return id
     }
 
-    private static func hash(_ document: Document, patterns: [String], reference: String) -> String {
+    private static func hash(_ document: Document, patterns: [String], reference: String,
+                             aliases: [String: String]) -> String {
         struct Canonical: Encodable {
             var document: Document
             var localModelPatterns: [String]
             var referenceModel: String
+            // Nil (left out of the JSON) without aliases, so adding the field re-priced nobody's ledger.
+            var aliases: [String: String]?
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = (try? encoder.encode(Canonical(document: document, localModelPatterns: patterns.sorted(),
-                                                  referenceModel: reference))) ?? Data()
+                                                  referenceModel: reference,
+                                                  aliases: aliases.isEmpty ? nil : aliases))) ?? Data()
         return FNV1a.hex64(data)
     }
 }

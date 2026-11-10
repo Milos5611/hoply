@@ -1,16 +1,12 @@
 import AgentKit
 import Foundation
 
-/// Fetches JSON from a remote endpoint (sparkDash) with its Bearer token from the Keychain. Redirects are
-/// refused rather than followed, so a login page in front of the service surfaces as a clear error and the
-/// Authorization header never travels to another host. Returns the raw body; decoding happens elsewhere.
 public struct MetricsClient: Sendable {
     public let endpoint: RemoteEndpoint
     private let secrets: any SecretStore
     private let service: String
     private let session: URLSession
 
-    /// Ephemeral: no cookies, cache or credentials are kept between launches.
     public init(endpoint: RemoteEndpoint, secrets: any SecretStore = Keychain(),
                 service: String = KeychainService.sparkDash, configuration: URLSessionConfiguration = .ephemeral) {
         self.endpoint = endpoint
@@ -19,7 +15,6 @@ public struct MetricsClient: Sendable {
         self.session = URLSession(configuration: configuration)
     }
 
-    /// `path` is relative to the endpoint, e.g. `SparkDash.sparkPath("zgx-ff24", "metrics")`. Throws `RemoteError`.
     public func fetch(_ path: String, timeout: TimeInterval = 10) async throws -> Data {
         let token: String?
         do {
@@ -41,7 +36,6 @@ public struct MetricsClient: Sendable {
     }
 }
 
-/// Answering a redirect with nil completes the task with the 3xx response itself.
 final class RedirectRefusal: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest) async -> URLRequest? {

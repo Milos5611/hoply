@@ -1,7 +1,5 @@
 import Foundation
 
-/// Human names for model ids: `claude-opus-5-5` → "Opus 5.5", `anthropic.claude-haiku-4-5-20251001` → "Haiku 4.5".
-/// Non-Claude ids (local models) are returned as they are, minus any provider path.
 public enum ModelName {
     public enum Family: String, Sendable, CaseIterable {
         case fable, mythos, opus, sonnet, haiku, local, other
@@ -21,7 +19,6 @@ public enum ModelName {
         return Family(rawValue: parts.family) ?? .other
     }
 
-    /// `claude-<family>-<major>[-<minor>][-<yyyymmdd>][[1m]]`, with optional `anthropic.` / `us.anthropic.` prefixes.
     private static func claudeParts(_ id: String) -> (family: String, version: String)? {
         var name = lastPathComponent(id).lowercased()
         if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
@@ -32,6 +29,11 @@ public enum ModelName {
         guard let family = tokens.first, family.allSatisfy(\.isLetter) else { return nil }
         let version = tokens.dropFirst().filter { $0.allSatisfy(\.isNumber) }.joined(separator: ".")
         return (family, version)
+    }
+
+    static func claudeVersion(_ id: String) -> (family: String, version: [Int])? {
+        guard let parts = claudeParts(id.trimmingCharacters(in: .whitespaces)) else { return nil }
+        return (parts.family, parts.version.split(separator: ".").compactMap { Int($0) })
     }
 
     private static func lastPathComponent(_ id: String) -> String {

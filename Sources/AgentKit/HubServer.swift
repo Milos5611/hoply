@@ -2,8 +2,6 @@
 import Foundation
 import Network
 
-/// Tiny HTTP listener on 127.0.0.1 that receives OTLP exports and hook calls.
-/// Callbacks fire on a private queue; hop to the main actor before touching UI state.
 public final class HubServer: @unchecked Sendable {
     public enum Status: Equatable, Sendable {
         case stopped
@@ -12,7 +10,6 @@ public final class HubServer: @unchecked Sendable {
     }
 
     public var onEvents: (@Sendable ([AgentEvent]) -> Void)?
-    /// Telemetry usage to persist (Copilot IDE, Qwen Code), on the same queue as `onEvents` and right after it.
     public var onUsage: (@Sendable ([UsageRecord]) -> Void)?
     public var onStatus: (@Sendable (Status) -> Void)?
     public var onNote: (@Sendable (String) -> Void)?

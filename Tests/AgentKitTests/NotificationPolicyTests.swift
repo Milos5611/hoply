@@ -147,10 +147,40 @@ final class NotificationPolicyTests: XCTestCase {
         send("b", .promptSubmitted("x"), at: 0, cwd: "/r/api")
         XCTAssertTrue(send("b", .needsPermission(nil), at: 5, cwd: "/r/api").post.isEmpty, "unresolved: muted cwd")
         send("c", .promptSubmitted("x"), at: 0)
-        XCTAssertEqual(send("c", .needsPermission(nil), at: 5).post.count, 1,
-                       "an unresolved subfolder is not its root")
+        XCTAssertTrue(send("c", .needsPermission(nil), at: 5).post.isEmpty,
+                      "unresolved: a cwd under a muted root is muted until the project resolves")
+        send("d", .promptSubmitted("x"), at: 0, cwd: "/r/fibabar/src")
+        XCTAssertEqual(send("d", .needsPermission(nil), at: 5, cwd: "/r/fibabar/src").post.count, 1,
+                       "path components, not a string prefix")
         let limit = policy.limitsUpdated([sample(85, at: 0)], previous: [:], now: at(0))
         XCTAssertEqual(limit.post.count, 1, "mute leaves limit alerts alone")
+    }
+
+    func testAResolvedProjectIsMutedByItsExactRootOnly() {
+        policy.preferences.mutedProjectRoots = ["/r", "/r/fiba/src"]
+        send("a", .promptSubmitted("x"), at: 0, project: fiba)
+        XCTAssertEqual(send("a", .needsPermission(nil), at: 5, project: fiba).post.count, 1,
+                       "neither a muted parent nor the muted cwd mutes a resolved repo")
+        policy.preferences.mutedProjectRoots = ["/"]
+        send("b", .promptSubmitted("x"), at: 200, cwd: "/tmp/x")
+        XCTAssertTrue(send("b", .needsPermission(nil), at: 205, cwd: "/tmp/x").post.isEmpty)
+    }
+
+    func testSessionsDroppedByTheBoardAreReported() {
+        send("a", .promptSubmitted("x"), at: 0)
+        XCTAssertEqual(send("a", .needsPermission(nil), at: 5).post.count, 1)
+        send("b", .sessionEnded(nil), at: 5)
+        XCTAssertEqual(board.sweep(now: at(600)), SessionBoard.Sweep())
+        let ended = board.sweep(now: at(606))
+        XCTAssertEqual(ended.dropped.map(\.key.id), ["b"], "ended over 10 minutes ago")
+        XCTAssertTrue(ended.changes.isEmpty)
+        let stale = board.sweep(now: at(4 * 3600 + 6))
+        XCTAssertEqual(stale.dropped.map(\.key.id), ["a"])
+        XCTAssertEqual(stale.dropped.first?.state, .needsPermission)
+        XCTAssertEqual(stale.dropped.map { policy.sessionDismissed($0.key) },
+                       [NotificationActions(withdraw: [id("a")])])
+        XCTAssertTrue(board.sessions.isEmpty)
+        XCTAssertEqual(board.sweep(now: at(5 * 3600)), SessionBoard.Sweep())
     }
 
     // MARK: - Limits
@@ -243,6 +273,24 @@ final class NotificationPolicyTests: XCTestCase {
         policy.localModelChecked(server: server ?? self.server, name: "ZGX", online: online, now: at(seconds))
     }
 
+    /// Polls every 5 s over `seconds`, as the app does, and returns every action in order.
+    private func poll(_ online: Bool, _ seconds: ClosedRange<Int>) -> [NotificationActions] {
+        stride(from: seconds.lowerBound, through: seconds.upperBound, by: 5)
+            .map { check(online, at: TimeInterval($0)) }.filter { !$0.isEmpty }
+    }
+
+    func testAGapBetweenChecksRestartsTheOutageClock() {
+        XCTAssertTrue(check(true, at: 0).isEmpty)
+        XCTAssertTrue(check(false, at: 5).isEmpty)
+        let wake: TimeInterval = 8 * 3600
+        XCTAssertTrue(check(false, at: wake).isEmpty, "asleep for 8 h: not an 8 h outage")
+        XCTAssertTrue(check(false, at: wake + 30).isEmpty)
+        XCTAssertTrue(check(false, at: wake + 60).isEmpty)
+        XCTAssertTrue(check(false, at: wake + 90).isEmpty)
+        XCTAssertEqual(check(false, at: wake + 120).post.map(\.body),
+                       ["No response from 192.168.40.141:8888 for 2 min."])
+    }
+
     func testLaunchingWithTheServerOffNeverAlerts() {
         for second in stride(from: 0.0, through: 900, by: 5) {
             XCTAssertTrue(check(false, at: second).isEmpty)
@@ -251,7 +299,7 @@ final class NotificationPolicyTests: XCTestCase {
 
     func testOfflineAlertsOnceAfterTwoMinutesAndRearmsWhenBack() throws {
         XCTAssertTrue(check(true, at: 0).isEmpty)
-        XCTAssertTrue(check(false, at: 5).isEmpty)
+        XCTAssertTrue(poll(false, 5...120).isEmpty)
         XCTAssertTrue(check(false, at: 124).isEmpty)
         let actions = check(false, at: 125)
         let request = try XCTUnwrap(actions.post.first)
@@ -264,7 +312,7 @@ final class NotificationPolicyTests: XCTestCase {
         XCTAssertTrue(check(false, at: 130).isEmpty)
         XCTAssertTrue(check(false, at: 3600).isEmpty, "once per outage")
         XCTAssertEqual(check(true, at: 3605), NotificationActions(withdraw: [NotificationPolicy.localModelOfflineID]))
-        XCTAssertTrue(check(false, at: 3610).isEmpty)
+        XCTAssertTrue(poll(false, 3610...3725).isEmpty)
         XCTAssertEqual(check(false, at: 3730).post.count, 1, "re-armed")
     }
 
@@ -277,8 +325,7 @@ final class NotificationPolicyTests: XCTestCase {
         XCTAssertTrue(check(false, at: 900, server: "http://10.0.0.9:8000").isEmpty, "the new server was never online")
 
         _ = check(true, at: 1000)
-        _ = check(false, at: 1005)
-        XCTAssertEqual(check(false, at: 1200).post.count, 1)
+        XCTAssertEqual(poll(false, 1005...1200).map(\.post.count), [1])
         XCTAssertEqual(policy.localModelChecked(server: "", online: false, now: at(1205)).withdraw,
                        [NotificationPolicy.localModelOfflineID], "clearing the URL removes the alert")
     }
@@ -289,11 +336,12 @@ final class NotificationPolicyTests: XCTestCase {
             policy.localModelChecked(server: server, online: online, now: date)
         }
         XCTAssertTrue(poll(true, local(hour: 21, minute: 50)).isEmpty)
-        XCTAssertTrue(poll(false, local(hour: 21, minute: 55)).isEmpty)
-        XCTAssertTrue(poll(false, local(hour: 22, minute: 30)).isEmpty)
+        let down = local(hour: 21, minute: 59)
+        let night = stride(from: 0.0, to: 10 * 3600 + 60, by: 30).map { poll(false, down.addingTimeInterval($0)) }
+        XCTAssertTrue(night.allSatisfy(\.isEmpty))
         let morning = poll(false, local(hour: 8, day: 10))
         XCTAssertEqual(morning.post.map(\.title), ["Local model is offline"])
-        XCTAssertEqual(morning.post.map(\.body), ["No response from 192.168.40.141:8888 for 10 h 5 min."])
+        XCTAssertEqual(morning.post.map(\.body), ["No response from 192.168.40.141:8888 for 10 h 1 min."])
         XCTAssertTrue(poll(false, local(hour: 8, minute: 5, day: 10)).isEmpty)
     }
 
@@ -311,5 +359,95 @@ final class NotificationPolicyTests: XCTestCase {
                        NotificationPreferences(enabled: false, quietHours: QuietHours(start: 23 * 60, end: 7 * 60),
                                                mutedProjectRoots: ["/r/fiba"], limitAlerts: false,
                                                localModelAlerts: false))
+    }
+
+    // MARK: - Input and limited sessions
+
+    func testAQuestionPostsItsOwnActiveNotificationAtOnce() throws {
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        let asked = send("s1", .questionAsked("Which framework?"), at: 3, project: fiba)
+        let request = try XCTUnwrap(asked.post.first)
+        XCTAssertEqual(request.cause, .input)
+        XCTAssertEqual(request.kind, .permission, "routed like a session notification")
+        XCTAssertEqual(request.interruption, .active)
+        XCTAssertEqual(request.title, "Claude Code has a question")
+        XCTAssertEqual(request.body, "Fix it · FIBA")
+        XCTAssertEqual(request.session, SessionKey(source: .claudeCode, id: "s1"))
+
+        XCTAssertEqual(send("s1", .toolFinished("AskUserQuestion"), at: 20).withdraw, [id("s1")])
+        XCTAssertTrue(send("s1", .questionAsked("Again?"), at: 30).post.isEmpty, "cooldown per session and cause")
+        send("s1", .toolFinished("AskUserQuestion"), at: 35)
+        XCTAssertEqual(send("s1", .needsPermission("Allow Bash?"), at: 40).post.first?.cause, .permission)
+        send("s1", .toolFinished("Bash"), at: 45)
+        XCTAssertEqual(send("s1", .turnFinished("Done"), at: 100).post.first?.cause, .yourTurn)
+    }
+
+    private func full(_ kind: LimitKind = .fiveHour, at seconds: TimeInterval = 0, resetsAt: TimeInterval = 3600,
+                      utilization: Double = 100) -> LimitSample {
+        LimitSample(kind: kind, ts: at(seconds), utilization: utilization, resetsAt: at(resetsAt))
+    }
+
+    private var live: [AgentSession] { board.ordered }
+
+    func testOneNotificationWhenTheWindowHoldingSessionsUpResets() throws {
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        send("s1", .turnFailed(error: "rate_limit", message: "API Error: Rate limit reached"), at: 10)
+        send("s2", .promptSubmitted("Other"), at: 0)
+        send("s2", .turnFinished(nil), at: 12)
+        for seconds in stride(from: 15.0, to: 3600, by: 300) {
+            XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(seconds)).isEmpty)
+        }
+        let reset = policy.limitedSessionsChecked(live, limits: [full()], now: at(3601))
+        let request = try XCTUnwrap(reset.post.first)
+        XCTAssertEqual(reset.post.count, 1)
+        XCTAssertEqual(request.cause, .limitReset)
+        XCTAssertEqual(request.kind, .limit)
+        XCTAssertEqual(request.title, "Claude 5-hour limit reset")
+        XCTAssertEqual(request.body, "2 sessions can continue.")
+        XCTAssertEqual(request.threadID, NotificationPolicy.limitsThreadID)
+        XCTAssertEqual(request.id, NotificationPolicy.limitResetID(.fiveHour, resetsAt: at(3600)))
+
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(3606)).isEmpty)
+        let next = full(at: 3700, resetsAt: 21_600, utilization: 2)
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [next], now: at(3700)).isEmpty)
+    }
+
+    func testNoResetNotificationForSessionsThatMovedOn() {
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        send("s1", .turnFinished(nil), at: 10)
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(20)).isEmpty)
+        send("s1", .sessionEnded(nil), at: 30)
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(35)).isEmpty)
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(3601)).isEmpty)
+
+        send("s3", .promptSubmitted("Work"), at: 3700)
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full(at: 3700, resetsAt: 7200)], now: at(3700)).isEmpty,
+                      "a working session is not limited")
+    }
+
+    func testAnEarlierReadingWithRoomAlsoCountsAsReset() throws {
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        send("s1", .turnFinished(nil), at: 10)
+        _ = policy.limitedSessionsChecked(live, limits: [full()], now: at(20))
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [], now: at(100)).isEmpty,
+                      "no reading is not a reset")
+        let lifted = policy.limitedSessionsChecked(live, limits: [full(at: 200, utilization: 60)], now: at(200))
+        XCTAssertEqual(lifted.post.first?.body, "Fix it can continue.")
+        XCTAssertEqual(lifted.post.first?.session, SessionKey(source: .claudeCode, id: "s1"))
+    }
+
+    func testResetNotificationRespectsPreferencesAndQuietHours() {
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        send("s1", .turnFinished(nil), at: 10)
+        policy.preferences.limitAlerts = false
+        _ = policy.limitedSessionsChecked(live, limits: [full()], now: at(20))
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [full()], now: at(3601)).isEmpty)
+
+        policy.preferences.limitAlerts = true
+        policy.preferences.quietHours = QuietHours(start: 12 * 60, end: 20 * 60)
+        _ = policy.limitedSessionsChecked(live, limits: [full(at: 3700, resetsAt: 7200)], now: at(3700))
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [], now: at(7201)).isEmpty)
+        policy.preferences.quietHours = nil
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: [], now: at(7300)).isEmpty, "not posted late")
     }
 }

@@ -1,7 +1,6 @@
 import AgentKit
 import Foundation
 
-/// Sample state for `Hoply --snapshot`, shaped like a busy afternoon.
 enum PreviewData {
     static var settings: AppSettings {
         var settings = AppSettings()
@@ -10,6 +9,7 @@ enum PreviewData {
         settings.claudeLimitsEnabled = true
         settings.quietHoursEnabled = true
         settings.mutedProjectRoots = ["\(NSHomeDirectory())/Project/hoply"]
+        settings.priceAliases = ["claude-sonnet-4-5": "claude-sonnet-5"]
         return settings
     }
 
@@ -23,6 +23,9 @@ enum PreviewData {
         let docs = key(.claudeCode, "docs")
         let hero = key(.claudeCode, "hero")
         let store = key(.copilotCLI, "store")
+        let schema = key(.claudeCode, "schema")
+        let notes = key(.claudeCode, "notes")
+        let lint = key(.claudeCode, "lint")
         let home = NSHomeDirectory()
         return [
             AgentEvent(key: auth, kind: .promptSubmitted("Refactor the auth middleware to use refresh tokens"),
@@ -35,17 +38,32 @@ enum PreviewData {
                        time: at(12), cwd: "\(home)/Project/yasm-backend", fromHook: true),
             AgentEvent(key: orders, kind: .needsPermission("Run `dotnet test` in yasm-backend?"),
                        time: at(1), fromHook: true),
+            AgentEvent(key: schema, kind: .promptSubmitted("Add the invoices table and its migration"),
+                       time: at(9), cwd: "\(home)/Project/yasm-backend", model: "claude-opus-5", fromHook: true),
+            AgentEvent(key: schema, kind: .questionAsked("Which migration tool should this use: EF Core or DbUp?"),
+                       time: at(2), fromHook: true),
+            AgentEvent(key: notes, kind: .promptSubmitted("Summarise this week's meeting notes"),
+                       time: at(35), cwd: "\(home)/Documents/notes", model: "claude-haiku-4-5", fromHook: true),
+            AgentEvent(key: notes, kind: .turnFinished("Stopped at the Thursday notes: usage limit reached."),
+                       time: at(21), fromHook: true),
+            AgentEvent(key: lint, kind: .promptSubmitted("Fix the analyzer warnings in the rule engine"),
+                       time: at(14), cwd: "\(home)/Project/FIBA3x3.RuleEngine", model: "claude-sonnet-5", fromHook: true),
+            AgentEvent(key: lint, kind: .turnFailed(error: "overloaded_error", message: "API Error: 529 Overloaded"),
+                       time: at(6), fromHook: true),
             AgentEvent(key: pricing, kind: .promptSubmitted("Build the pricing section"),
                        time: at(42), cwd: "\(home)/Project/fiba", model: "claude-sonnet-5", fromHook: true),
+            AgentEvent(key: pricing, kind: .subagentStarted(id: "a1", type: "Explore"), time: at(30), fromHook: true),
+            AgentEvent(key: pricing, kind: .subagentStopped(id: "a1", type: "Explore"), time: at(24), fromHook: true),
+            AgentEvent(key: pricing, kind: .subagentStarted(id: "a2", type: "code-reviewer"), time: at(3), fromHook: true),
+            AgentEvent(key: pricing, kind: .subagentStarted(id: "a3", type: "test-runner"), time: at(1), fromHook: true),
             AgentEvent(key: pricing, kind: .toolStarted("Edit"), time: at(0.2), fromHook: true),
             AgentEvent(key: pricing, kind: .usage(.init(inputTokens: 80_000, outputTokens: 30_000, cacheTokens: 300_000, costUSD: 0.64)),
                        time: at(0.5), fromHook: false),
             AgentEvent(key: tests, kind: .promptSubmitted("Write unit tests for the Prometheus parser"),
                        time: at(6), cwd: "\(home)/Project/hoply", model: "qwen3-coder", fromHook: false),
             AgentEvent(key: tests, kind: .usage(.init(inputTokens: 2_100, outputTokens: 900)), time: at(0.3), fromHook: false),
-            AgentEvent(key: docs, kind: .promptSubmitted("Update the README for v2"),
-                       time: at(30), cwd: "\(home)/Project/hoply", model: "claude-opus-5", fromHook: true),
-            AgentEvent(key: docs, kind: .sessionEnded(nil), time: at(8), fromHook: true),
+            AgentEvent(key: docs, kind: .sessionStarted, time: at(8), cwd: "\(home)/Project/hoply",
+                       model: "claude-opus-5", fromHook: true),
             AgentEvent(key: hero, kind: .promptSubmitted("Polish the landing page hero animation"),
                        time: at(18), cwd: "\(home)/Project/fiba.worktrees/landing-hero", model: "claude-sonnet-5",
                        fromHook: true),
@@ -80,14 +98,13 @@ enum PreviewData {
                                   current: snapshot(generated: 2_845_215, prompt: 61_406_100, at: now))
     }
 
-    /// Besides the two fixed windows: a model-scoped weekly window, extra usage, a spend budget and two keys
-    /// Hoply doesn't read, so every part of the Limits page renders.
     static func claudeLimits(now: Date) -> ClaudeLimits? {
         let fiveHour = Int(now.addingTimeInterval(2.6 * 3_600).timeIntervalSince1970)
         let week = Int(now.addingTimeInterval(3.7 * 86_400).timeIntervalSince1970)
         let json = #"""
         {"five_hour":{"utilization":62,"resets_at":\#(fiveHour)},"seven_day":{"utilization":25,"resets_at":\#(week)},
-         "model_scoped":[{"display_name":"Sonnet 4.5","utilization":\#(scopedShare * 25),"resets_at":\#(week)}],
+         "model_scoped":[{"display_name":"Sonnet 4.5","utilization":\#(scopedShare * 25),"resets_at":\#(week)},
+                         {"display_name":"Haiku 4.5","utilization":100,"resets_at":\#(fiveHour)}],
          "extra_usage":{"is_enabled":true,"used_credits":1240,"monthly_limit":5000,"utilization":24.8},
          "spend":{"enabled":true,"used":{"amount_minor":1240,"currency":"USD","exponent":2},
                   "limit":{"amount_minor":10000,"currency":"USD","exponent":2}},
@@ -96,7 +113,6 @@ enum PreviewData {
         return try? ClaudeLimits.decode(Data(json.utf8))
     }
 
-    /// The Sonnet 4.5 weekly window runs at this share of the overall week.
     private static let scopedShare = 0.48
     static let scopedKind = LimitKind.scoped(displayName: "Sonnet 4.5") ?? .sevenDaySonnet
 
@@ -127,14 +143,39 @@ enum PreviewData {
         ]
     }
 
-    /// What `Ledger.resolveProjects` returns for the panel's sessions: a linked worktree and a subfolder land
-    /// in their repo's card.
     static var projectsByCwd: [String: ProjectRef] {
         let home = NSHomeDirectory()
         let refs = projectRefs
         return ["\(home)/Project/fiba": refs[0], "\(home)/Project/fiba.worktrees/landing-hero": refs[0],
                 "\(home)/Project/yasm-backend": refs[1], "\(home)/Project/hoply": refs[2],
-                "\(home)/Project/hoply/Sources/AgentSystem": refs[2]]
+                "\(home)/Project/hoply/Sources/AgentSystem": refs[2],
+                "\(home)/Project/FIBA3x3.RuleEngine": refs[3], "\(home)/Documents/notes": refs[4]]
+    }
+
+    static var gitStats: [String: GitDiffStat] {
+        let home = NSHomeDirectory()
+        return ["\(home)/Project/fiba": GitDiffStat(filesChanged: 5, added: 120, removed: 34, untracked: 3),
+                "\(home)/Project/fiba.worktrees/landing-hero": GitDiffStat(filesChanged: 2, added: 48, removed: 6),
+                "\(home)/Project/hoply": GitDiffStat(untracked: 2)]
+    }
+
+    static var editors: [Editor] {
+        [Editor(id: "com.todesktop.230313mzl4w4u92", name: "Cursor", url: URL(fileURLWithPath: "/Applications/Cursor.app")),
+         Editor(id: "com.apple.dt.Xcode", name: "Xcode", url: URL(fileURLWithPath: "/Applications/Xcode.app"))]
+    }
+
+    private static let liveKey = SessionKey(source: .claudeCode, id: "pricing")
+
+    private static func insights(now: Date) -> [SessionKey: SessionInsight] {
+        func at(_ minutesAgo: Double) -> Date { now.addingTimeInterval(-minutesAgo * 60) }
+        return [liveKey: SessionInsight(context: ContextWindow(used: 172_400, limit: ContextWindow.standard), subagents: [
+            SubagentSummary(agentID: "a1", agentType: "Explore", description: "Find where plan prices are defined",
+                            model: "claude-haiku-4-5", firstAt: at(30), lastAt: at(24), totals: totals(usd: 0.31, local: false)),
+            SubagentSummary(agentID: "a2", agentType: "code-reviewer", description: "Review the pricing table markup",
+                            model: "claude-sonnet-5", firstAt: at(3), lastAt: at(0.5), totals: totals(usd: 0.84, local: false)),
+            SubagentSummary(agentID: "a3", agentType: "test-runner", description: "Run the pricing component tests",
+                            model: "claude-sonnet-5", firstAt: at(1), lastAt: at(0.3), totals: totals(usd: 0.12, local: false)),
+        ])]
     }
 
     private struct Stream {
@@ -143,7 +184,6 @@ enum PreviewData {
         let scale: Double
         var local = false
         var every = 1
-        /// Index into `projectRefs` (nil = Unassigned) and the stream's share there.
         let projects: [(project: Int?, share: Double)]
     }
 
@@ -160,7 +200,6 @@ enum PreviewData {
                projects: [(0, 0.6), (3, 0.35), (5, 0.05)]),
         Stream(model: "claude-sonnet-5", source: .copilotIDE, scale: 0.8, every: 2,
                projects: [(1, 0.5), (nil, 0.5)]),
-        // Claude Code pointed at the local server, as on the real ZGX.
         Stream(model: "Qwen3.8-Flash-Next", source: .claudeCode, scale: 0.7, local: true, every: 2,
                projects: [(2, 0.7), (0, 0.3)]),
     ]
@@ -173,8 +212,6 @@ enum PreviewData {
         let totals: LedgerTotals
     }
 
-    /// Ninety days of ledger rows shaped like a heavy Claude Code subscriber who also runs Qwen locally and
-    /// uses Copilot now and then.
     static func history(now: Date) -> HistoryPreview {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
@@ -236,8 +273,14 @@ enum PreviewData {
             daily: series(bySource, lastDays: 30),
             projects: Array(projectSlices.prefix(5)),
             models: Array(modelSlices.prefix(5)))
+        let efficiency = modelSlices.map { slice in
+            let fast = slice.id == "claude-opus-5" && !slice.totals.hasUnpriced
+            return ModelEfficiency(model: slice.id, totals: slice.totals, fastCalls: fast ? 38 : 0,
+                                   fastUSD: fast ? slice.totals.apiEquivUSD * 0.11 : 0,
+                                   fastPremiumUSD: fast ? slice.totals.apiEquivUSD * 0.055 : 0)
+        }
         let spending = SpendingData(range: .month, split: .model, daily: series(byModel, lastDays: 30),
-                                    projects: projectSlices, models: modelSlices)
+                                    projects: projectSlices, models: modelSlices, efficiency: efficiency)
 
         let sessions = sessionSummaries(now: now, projects: projectRefs)
         let fiba = summaries[0]
@@ -256,6 +299,9 @@ enum PreviewData {
                 SessionKey(source: .copilotCLI, id: "orders"): totals(usd: 1.83, local: false, source: .copilotCLI),
                 SessionKey(source: .copilotCLI, id: "store"): totals(usd: 4.07, local: false, source: .copilotCLI),
                 SessionKey(source: .qwenCode, id: "tests"): totals(usd: 1.94, local: true, source: .qwenCode),
+                SessionKey(source: .claudeCode, id: "schema"): totals(usd: 1.26, local: false),
+                SessionKey(source: .claudeCode, id: "notes"): totals(usd: 0.38, local: false),
+                SessionKey(source: .claudeCode, id: "lint"): totals(usd: 0.92, local: false),
             ],
             today: todayBySource, overview: overview, spending: spending,
             sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first,
@@ -263,16 +309,21 @@ enum PreviewData {
             projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
                                              sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)),
             limits: limits(now: now, entries: entries),
-            localModel: localModel(now: now, entries: entries, days: days))
+            localModel: localModel(now: now, entries: entries, days: days),
+            contextWindows: [liveKey: ContextWindow(used: 172_400, limit: ContextWindow.standard),
+                             SessionKey(source: .claudeCode, id: "auth"): ContextWindow(used: 61_000,
+                                                                                         limit: ContextWindow.standard)],
+            subagentCounts: [liveKey: 3, SessionKey(source: .claudeCode, id: "auth"): 2],
+            insights: insights(now: now),
+            unpricedModels: [UnpricedModel(model: "claude-nova-preview", calls: unpricedTotals.calls,
+                                           tokens: unpricedTotals.tokens)],
+            pricedModels: ["claude-fable-5", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"])
     }
 
     // MARK: - Local model
 
-    /// The model server was off on this day, so it has no readings and no local usage.
     private static let serverOffDaysAgo = 4
 
-    /// A day of the server, ending in `vllm(now:)`: busy afternoons, an idle evening, three hours off overnight.
-    /// Tokens per day and saved vs API come from the same local-model streams as Spending's "Ran locally".
     private static func localModel(now: Date, entries: [Entry], days: [Date],
                                    range: LocalModelRange = .day) -> LocalModelData {
         let calendar = Calendar.current
@@ -305,7 +356,6 @@ enum PreviewData {
         let offDay = days[days.count - 1 - serverOffDaysAgo]
         let tokenDays = window.map { day in
             let tokens = local.filter { $0.day == day }.reduce(TokenCounts()) { $0 + $1.totals.tokens }
-            // Other clients (a chat UI) use the server too, so its counters run above the agents' ledger rows.
             return ModelTokenDay(day: day,
                                  generated: Double(tokens.output + tokens.reasoning) * 3.2,
                                  prompt: Double(tokens.input + tokens.cacheRead + tokens.cacheWrite5m + tokens.cacheWrite1h) * 1.1,
@@ -321,9 +371,6 @@ enum PreviewData {
 
     // MARK: - Limits
 
-    /// A week of plan readings that ends in `claudeLimits(now:)`: the current 5-hour window is on pace to hit its
-    /// limit before the reset, the week is on track. Readings every 15 minutes; 5-hour windows run on workdays,
-    /// and the week climbs while they do.
     static func limitSamples(now: Date, days: Int = 7) -> [LimitSample] {
         let calendar = Calendar.current
         let five: TimeInterval = 5 * 3_600, week: TimeInterval = 7 * 86_400
@@ -358,7 +405,6 @@ enum PreviewData {
             let inWeek = times.indices.filter { times[$0] >= weekStart && times[$0] < weekEnd }
             guard let first = inWeek.first, let last = inWeek.last else { continue }
             let peak = weeksBack == 0 ? 25 : [81.0, 64][Int(weeksBack - 1) % 2]
-            // The previous week started before the chart, so its climb starts part way up.
             let floor = weeksBack == 0 ? 0 : peak * max(0, times[first].timeIntervalSince(weekStart) / week)
             let progress = (activity[index] - activity[first]) / max(activity[last] - activity[first], 1)
             let used = floor + (peak - floor) * progress
@@ -368,8 +414,6 @@ enum PreviewData {
         return samples.sorted { $0.ts < $1.ts }
     }
 
-    /// The Limits page from the same usage streams as the other pages: Claude Code spend inside each window,
-    /// Copilot CLI's premium requests this month.
     private static func limits(now: Date, entries: [Entry]) -> LimitsData {
         let calendar = Calendar.current
         let samples = limitSamples(now: now)
@@ -438,6 +482,7 @@ enum PreviewData {
         let usd: Double
         let mix: [(String, Double)]
         var native = false
+        var id: String?
     }
 
     private static func sessionSummaries(now: Date, projects: [ProjectRef]) -> [SessionSummary] {
@@ -445,7 +490,7 @@ enum PreviewData {
         let rows: [SessionRowSeed] = [
             SessionRowSeed(title: "Build the pricing section", project: 0, branch: "feature/pricing", minutesAgo: 0.5,
                            hours: 0.7, turns: 14, usd: 11.80, mix: [("claude-sonnet-5", 0.82), ("claude-haiku-4-5", 0.18)],
-                           native: true),
+                           native: true, id: liveKey.id),
             SessionRowSeed(title: "Add pagination to the orders endpoint", source: .copilotCLI, project: 1,
                            branch: "orders-paging", minutesAgo: 1, hours: 0.2, turns: 3, usd: 1.83,
                            mix: [("claude-opus-5", 1)]),
@@ -500,7 +545,7 @@ enum PreviewData {
                                                                         source: row.source))
             }
             let total = models.reduce(LedgerTotals.zero) { $0 + $1.totals }
-            let id = String(format: "%08x-preview-%02d", 0x5e55_1000 + index * 7_919, index)
+            let id = row.id ?? String(format: "%08x-preview-%02d", 0x5e55_1000 + index * 7_919, index)
             let cwd = row.branch == "landing-hero" && row.minutesAgo < 60
                 ? "\(home)/Project/fiba.worktrees/landing-hero" : project?.root
             return SessionSummary(
@@ -518,8 +563,6 @@ enum PreviewData {
     private static let unpricedTotals = LedgerTotals(tokens: TokenCounts(input: 4_100, output: 2_300, cacheRead: 61_000),
                                                      calls: 9, hasUnpriced: true)
 
-    /// Copilot CLI rows carry Copilot's own units: 1 AIU = $0.01, and about 6.4 premium requests per dollar
-    /// (the ratio in the real store).
     private static func totals(usd: Double, local: Bool, source: AgentSource = .claudeCode) -> LedgerTotals {
         let tokens = Int(usd * 420_000)
         let copilot = source == .copilotCLI

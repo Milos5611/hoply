@@ -1,8 +1,6 @@
 import Foundation
 
 public enum JSONLines {
-    /// Complete newline-terminated lines in `data` (without the terminator, empty lines dropped) and
-    /// the number of bytes they span. A trailing partial line is left for the next read.
     public static func complete(in data: Data) -> (lines: [Data], consumed: Int) {
         guard let lastNewline = data.lastIndex(of: UInt8(ascii: "\n")) else { return ([], 0) }
         var lines: [Data] = []

@@ -84,6 +84,50 @@ final class SamplesStoreTests: XCTestCase {
         XCTAssertEqual(sums, [0, 0, 50], "neither the stored nor the old in-memory baseline counts against the new server")
     }
 
+    func testAFailedRollupKeepsTheWrittenBaselineAndIsRetried() async throws {
+        let (store, reader, path) = try open(try TempDirectory())
+        let raw = try SQLiteConnection(path: path)
+        let start = Date(timeIntervalSince1970: TimeInterval(Int(Date().timeIntervalSince1970) / 60 * 60))
+        func reading(_ value: Double, at seconds: TimeInterval) -> SampleObservation {
+            SampleObservation(series: "c", ts: start.addingTimeInterval(seconds), value: value, kind: .counter)
+        }
+        let old = Int(start.timeIntervalSince1970) / 900 * 900 - 8 * 86_400
+        try insert(raw, "g", res: 60, at: old, sum: 1)
+        try raw.execute("CREATE TRIGGER no_delete BEFORE DELETE ON samples BEGIN SELECT RAISE(ABORT, 'no'); END")
+
+        let nextDay = start.addingTimeInterval(Store.sampleRollupInterval + 600)
+        try await store.recordSamples([reading(100, at: 0)], now: start)
+        let written = try await store.recordSamples([reading(150, at: 60)], now: nextDay)
+        XCTAssertEqual(written.map(\.sum), [50], "the write stands although the rollup failed")
+        XCTAssertEqual(try rows(raw, "g").map(\.res), [60])
+
+        try raw.execute("DROP TRIGGER no_delete")
+        try await store.recordSamples([reading(180, at: 120)], now: nextDay)
+        let sums = try await reader.samples("c", in: allTime).map(\.sum)
+        XCTAssertEqual(sums, [0, 50, 30], "the committed increase is not counted again")
+        XCTAssertEqual(try rows(raw, "g").map(\.res), [900], "the failed rollup ran again on the next write")
+    }
+
+    func testAFailedWriteKeepsTheStoredSeedAndBaseline() async throws {
+        let directory = try TempDirectory()
+        do {
+            let (store, _, _) = try open(directory)
+            try await store.recordSamples([counter(100, at: 0)], now: t0)
+            try await store.recordSamples([counter(150, at: 30)], now: t0)
+        }
+        let (store, reader, path) = try open(directory)
+        let raw = try SQLiteConnection(path: path)
+        try raw.execute("CREATE TRIGGER no_insert BEFORE INSERT ON samples BEGIN SELECT RAISE(ABORT, 'no'); END")
+        do {
+            try await store.recordSamples([counter(180, at: 90)], now: t0)
+            XCTFail("the write should fail")
+        } catch {}
+        try raw.execute("DROP TRIGGER no_insert")
+        try await store.recordSamples([counter(190, at: 150)], now: t0)
+        let sums = try await reader.samples("c", in: allTime).map(\.sum)
+        XCTAssertEqual(sums, [50, 40], "counted from the stored 150, not from the reading whose write failed")
+    }
+
     func testRollupAtOpenMovesOldBucketsAndIsIdempotent() async throws {
         let directory = try TempDirectory()
         let path = directory.path("hoply.sqlite")

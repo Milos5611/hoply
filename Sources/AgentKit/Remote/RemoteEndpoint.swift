@@ -1,23 +1,15 @@
 import Foundation
 
-/// A remote HTTP service Hoply reads with a secret (sparkDash's Bearer token now; M1 adds Cloudflare Access
-/// headers through `RemoteCredentials.headers`). Builds requests and classifies responses; the transport is
-/// AgentSystem's `MetricsClient`. Secrets only ever travel in headers, never in a URL.
 public struct RemoteEndpoint: Sendable, Equatable {
-    /// Scheme, host, port and an optional path prefix; no query, fragment or user info.
     public let baseURL: URL
-    /// Names the service in messages, e.g. "sparkDash".
     public var name: String
 
-    /// Nil unless `raw` is an http(s) URL with a host. A query, fragment or user info is dropped, so a pasted
-    /// `?token=…` never ends up in a request.
     public init?(baseURL raw: String, name: String) {
         guard let sanitized = Self.sanitizedBaseURL(raw), let url = URL(string: sanitized) else { return nil }
         baseURL = url
         self.name = name
     }
 
-    /// What to store as the endpoint's URL setting: `raw` without query, fragment, user info or trailing slash.
     public static func sanitizedBaseURL(_ raw: String) -> String? {
         guard var components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
@@ -31,10 +23,8 @@ public struct RemoteEndpoint: Sendable, Equatable {
         return components.string
     }
 
-    /// The Keychain account for this endpoint's secrets.
     public var host: String { baseURL.host()?.lowercased() ?? "" }
 
-    /// `path` (with an optional query) under the base URL. Query items that look like credentials are dropped.
     public func url(path: String) -> URL? {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
@@ -69,7 +59,6 @@ public struct RemoteEndpoint: Sendable, Equatable {
         return request
     }
 
-    /// Printable ASCII only, so a pasted secret can't smuggle in another header line.
     static func isHeaderSafe(_ value: String) -> Bool {
         value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value < 0x7F }
     }
@@ -80,8 +69,6 @@ public struct RemoteEndpoint: Sendable, Equatable {
                         location: http.value(forHTTPHeaderField: "Location"), body: body)
     }
 
-    /// Redirects are never followed (a login page in front of the service answers with one), so a 3xx arrives
-    /// here. An HTML body means a web page (the dashboard's own UI, or a login page), not the JSON API.
     public func classify(status: Int, contentType: String?, location: String?, body: Data) -> Result<Data, RemoteError> {
         if (300..<400).contains(status) {
             let target = location.flatMap { URL(string: $0, relativeTo: baseURL)?.host() }
@@ -103,7 +90,6 @@ public struct RemoteEndpoint: Sendable, Equatable {
         return head.lowercased().hasPrefix("<!doctype") || head.lowercased().hasPrefix("<html")
     }
 
-    /// The server's own `error` or `message` string, e.g. sparkDash's "Authentication required".
     static func errorMessage(_ body: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
         let message = (object["error"] as? String) ?? (object["message"] as? String)
@@ -111,10 +97,8 @@ public struct RemoteEndpoint: Sendable, Equatable {
     }
 }
 
-/// What a request carries besides the URL. Never printed: `description` hides the values.
 public struct RemoteCredentials: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public var bearerToken: String?
-    /// Extra header fields (M1: `CF-Access-Client-Id` / `CF-Access-Client-Secret`).
     public var headers: [String: String]
 
     public init(bearerToken: String? = nil, headers: [String: String] = [:]) {
@@ -134,18 +118,14 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
         case invalidURL
         case missingToken
         case invalidToken
-        /// 401/403 with a JSON (or empty) body: the service saw the token and refused it.
         case tokenRejected(status: Int, message: String?)
-        /// A web page instead of JSON: a wrong URL or path, or a login page in front of the service.
         case htmlPage(status: Int)
-        /// `host` is where it pointed (only the host, since a login URL can carry our address in its query).
         case redirected(status: Int, host: String?)
         case http(status: Int)
         case transport(String)
     }
 
     public var kind: Kind
-    /// The endpoint's name, for the message.
     public var endpoint: String
 
     public init(_ kind: Kind, endpoint: String) {
@@ -168,17 +148,14 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
     }
 }
 
-/// sparkDash (on the ZGX) routes and settings. Its JSON shapes are decoded once a capture exists.
 public enum SparkDash {
     public static let name = "sparkDash"
     public static let fleetEnergy = "/api/fleet-energy"
 
-    /// From `sparkDashURL`; nil while it is blank or not an http(s) URL.
     public static func endpoint(settings: AppSettings) -> RemoteEndpoint? {
         RemoteEndpoint(baseURL: settings.sparkDashURL, name: name)
     }
 
-    /// `/api/sparks/<spark>/<route>`, e.g. `sparkPath("zgx-ff24", "metrics")`; nil for a blank spark id.
     public static func sparkPath(_ spark: String, _ route: String) -> String? {
         let id = spark.trimmingCharacters(in: .whitespacesAndNewlines)
         var allowed = CharacterSet.urlPathAllowed

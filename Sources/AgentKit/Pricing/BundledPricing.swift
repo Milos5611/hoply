@@ -1,9 +1,5 @@
 import Foundation
 
-/// Kept in source rather than a resource bundle because `install.sh` copies only the binary.
-/// Prices are USD per million tokens, from the claude-api skill's model reference (models.md,
-/// prompt-caching.md, platform-availability.md, model-migration.md; web search from managed-agents-core.md).
-/// Models missing here are unpriced.
 enum BundledPricing {
     static let json = #"""
     {

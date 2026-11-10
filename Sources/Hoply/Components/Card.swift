@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The white rounded surface everything in the panel sits on. `prominent` marks the active tile.
 struct Card<Content: View>: View {
     var prominent = false
     var tint: Color?

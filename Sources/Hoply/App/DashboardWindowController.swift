@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// One reusable Dashboard window. Hoply is an accessory app; while the window is open it becomes a regular
-/// app (Dock icon, app switcher, menu bar) so the window behaves like any other, and goes back on close.
 final class DashboardWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private var window: NSWindow?
@@ -29,10 +27,23 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
-    /// Minimized or fully covered, the window no longer needs the model server's fast polling.
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard let window, window.isVisible else { return }
-        model.setDashboardOnScreen(window.occlusionState.contains(.visible))
+        updateOnScreen()
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        updateOnScreen()
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        updateOnScreen()
+    }
+
+    /// A miniaturized window reports `isVisible == false`, so that can't be a reason to skip the update.
+    private func updateOnScreen() {
+        guard let window else { return }
+        model.setDashboardOnScreen(window.isVisible && !window.isMiniaturized
+            && window.occlusionState.contains(.visible))
     }
 
     private func makeWindow() -> NSWindow {

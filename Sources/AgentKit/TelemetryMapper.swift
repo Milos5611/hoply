@@ -1,6 +1,5 @@
 import Foundation
 
-/// Turns OTLP log records and spans from Claude Code, Qwen Code and Copilot into `AgentEvent`s.
 public enum TelemetryMapper {
     static let sessionKeys = [
         "session.id", "session_id", "gen_ai.conversation.id",
@@ -45,7 +44,6 @@ public enum TelemetryMapper {
         return AgentEvent(key: key, kind: kind, time: time, model: model, fromHook: false)
     }
 
-    /// Claude Code log events: claude_code.user_prompt, api_request, tool_result, api_error, …
     static func claudeKind(_ record: TelemetryRecord) -> AgentEvent.Kind {
         let name = record.name.lowercased()
         if name.hasSuffix("api_request") {
@@ -67,7 +65,6 @@ public enum TelemetryMapper {
         return .activity
     }
 
-    /// Qwen Code log events: qwen-code.api_request, api_response, user_prompt, tool_call, api_error.
     static func qwenKind(_ record: TelemetryRecord) -> AgentEvent.Kind {
         let name = record.name.lowercased()
         if name.hasSuffix("api_response") {
@@ -87,7 +84,6 @@ public enum TelemetryMapper {
         return .activity
     }
 
-    /// Copilot (CLI, VS Code, JetBrains) emits OpenTelemetry GenAI semantic conventions.
     static func genAIKind(_ record: TelemetryRecord) -> AgentEvent.Kind {
         if isGenAIModelCall(record) {
             let cache = record.first(genAICacheReadKeys)?.int ?? 0
@@ -106,7 +102,6 @@ public enum TelemetryMapper {
 
     static let genAICacheReadKeys = ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"]
 
-    /// Only model calls carry usage worth counting; agent and turn spans can repeat the same totals.
     static func isGenAIModelCall(_ record: TelemetryRecord) -> Bool {
         let operation = record["gen_ai.operation.name"]?.string?.lowercased()
         guard record["gen_ai.usage.input_tokens"] != nil || record["gen_ai.usage.output_tokens"] != nil else { return false }

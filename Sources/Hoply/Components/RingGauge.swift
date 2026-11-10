@@ -4,7 +4,6 @@ struct RingGauge<Center: View>: View {
     let fraction: Double
     let tint: Color
     var lineWidth: CGFloat = 7
-    /// A tick across the ring at this share (0…1), e.g. how much of a limit window has gone by.
     var marker: Double?
     @ViewBuilder var center: Center
 

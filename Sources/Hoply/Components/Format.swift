@@ -11,6 +11,16 @@ enum Format {
         }
     }
 
+    static func tokens(_ count: Double) -> String {
+        tokens(whole(count))
+    }
+
+    /// Rounded to an Int. Model-server readings can be NaN or infinite, which `Int(_:)` traps on.
+    static func whole(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value.rounded(), -1e15), 1e15))
+    }
+
     static func rate(_ perSecond: Double?) -> String {
         guard let perSecond else { return "–" }
         return perSecond >= 100 ? String(format: "%.0f", perSecond) : String(format: "%.1f", perSecond)
@@ -25,8 +35,6 @@ enum Format {
         }
     }
 
-    /// Grouped like the rest of the app's figures ("1,234"), whatever the system locale, so it never reads
-    /// as a decimal next to "$7.59" or "3.1M".
     static func count(_ value: Int) -> String {
         value.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
     }
@@ -37,31 +45,25 @@ enum Format {
         return totals.apiEquivUSD > 0 ? cost(totals.apiEquivUSD) + "+" : "unpriced"
     }
 
-    /// Copilot's own units, as secondary text next to a total: "182.7 premium req · 2,859 AIU". nil when the
-    /// total has no Copilot usage.
     static func copilot(_ totals: LedgerTotals, compact: Bool = false) -> String? {
         guard totals.aiu > 0 || totals.premiumRequests > 0 else { return nil }
         return "\(premiumRequests(totals.premiumRequests)) \(compact ? "req" : "premium req") · \(aiu(totals.aiu)) AIU"
     }
 
-    /// An amount in the currency the API named, with as many decimals as its minor unit has.
     static func money(_ money: ClaudeLimits.Spend.Money) -> String {
         money.amount.formatted(.currency(code: money.currency)
             .precision(.fractionLength(min(money.exponent, 4)))
             .locale(Locale(identifier: "en_US")))
     }
 
-    /// "vLLM" or "tensorfold", as the engines name themselves.
     static func engine(_ engine: String) -> String {
         engine == "vllm" ? "vLLM" : engine
     }
 
-    /// The served model without its organization prefix ("Qwen/Qwen3-Coder" → "Qwen3-Coder").
     static func servedModel(_ name: String) -> String {
         name.split(separator: "/").last.map(String.init) ?? name
     }
 
-    /// Thousands as "k", like token counts, for figures that aren't tokens (tok/s).
     static func compact(_ value: Double) -> String {
         switch value {
         case ..<100: return String(format: "%.1f", value)
@@ -80,6 +82,26 @@ enum Format {
         value >= 10 ? count(Int(value.rounded())) : String(format: "%.1f", value)
     }
 
+    static func diffSummary(_ diff: GitDiffStat, path: String? = nil) -> String {
+        var parts: [String] = []
+        if diff.filesChanged > 0 {
+            parts.append("\(diff.filesChanged) \(diff.filesChanged == 1 ? "file" : "files") changed, +\(diff.added) −\(diff.removed)")
+        }
+        if diff.untracked > 0 {
+            parts.append("\(diff.untracked) untracked \(diff.untracked == 1 ? "file" : "files")")
+        }
+        let place = path.map { " in \(Self.path($0))" } ?? ""
+        return "Uncommitted\(place): " + parts.joined(separator: ", ")
+    }
+
+    static func contextSummary(_ context: ContextWindow) -> String {
+        "Context window: \(tokens(context.used)) of \(tokens(context.limit)) tokens used, \(tokens(context.remaining)) left"
+    }
+
+    static func usdPerMillion(_ usd: Double) -> String {
+        usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
+    }
+
     static func path(_ path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
     }
@@ -93,10 +115,9 @@ enum Format {
     }
 
     static func percent(_ fraction: Double) -> String {
-        "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
+        "\(whole(min(max(fraction, 0), 1) * 100))%"
     }
 
-    /// "now", "42s", "12m", "3h", "2d"
     static func age(since date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         switch seconds {
@@ -149,13 +170,11 @@ enum Format {
         dayFormatter.string(from: date)
     }
 
-    /// Time only within the next 20 hours, else weekday and time.
     static func clock(_ date: Date, now: Date = Date()) -> String {
         let formatter = abs(date.timeIntervalSince(now)) < 20 * 3_600 ? timeFormatter : dayTimeFormatter
         return formatter.string(from: date)
     }
 
-    /// A time of day given in minutes after midnight, in the user's clock style ("22:00", "10:00 PM").
     static func timeOfDay(minutes: Int) -> String {
         timeFormatter.string(from: date(minutesAfterMidnight: minutes))
     }
@@ -166,7 +185,6 @@ enum Format {
         return Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: day) ?? day
     }
 
-    /// "40 min", "1 h 14 min", "3 d 4 h"; rounded up to the minute.
     static func span(_ seconds: TimeInterval) -> String {
         let minutes = max(Int((seconds / 60).rounded(.up)), 1)
         if minutes < 60 { return "\(minutes) min" }
@@ -204,13 +222,11 @@ enum Format {
         return formatter
     }()
 
-    /// Time only for today, otherwise the date.
     static func shortWhen(_ date: Date, now: Date = Date()) -> String {
         Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
                                                         : shortDayFormatter.string(from: date)
     }
 
-    /// "just now", "12m ago", "3h ago", then the date.
     static func lastActive(_ date: Date, now: Date = Date()) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "just now" }
@@ -218,7 +234,6 @@ enum Format {
         return shortWhen(date, now: now)
     }
 
-    /// Time only for today, otherwise date and time.
     static func when(_ date: Date, now: Date = Date()) -> String {
         Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
                                                         : dateTimeFormatter.string(from: date)

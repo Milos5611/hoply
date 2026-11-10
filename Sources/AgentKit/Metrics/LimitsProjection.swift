@@ -1,8 +1,5 @@
 import Foundation
 
-/// A Claude plan-usage window, stored as `limit_samples.kind`. The fixed windows use the API's keys; a
-/// model-scoped weekly window is `seven_day_<slug of its display name>`, so it keeps one kind across fetches and
-/// a scoped "Opus" window is the same kind as `seven_day_opus`.
 public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendable, CaseIterable,
                          CustomStringConvertible {
     public let rawValue: String
@@ -12,10 +9,8 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
     public static let sevenDayOpus = LimitKind(checked: "seven_day_opus")
     public static let sevenDaySonnet = LimitKind(checked: "seven_day_sonnet")
 
-    /// The fixed windows, in display order. Scoped windows come and go with the API's response.
     public static var allCases: [LimitKind] { [.fiveHour, .sevenDay, .sevenDayOpus, .sevenDaySonnet] }
 
-    /// `five_hour`, `seven_day` or `seven_day_<slug>`; anything else is not a window this build understands.
     public init?(rawValue: String) {
         if rawValue == "five_hour" || rawValue == "seven_day" {
             self.rawValue = rawValue
@@ -32,13 +27,11 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
         self.rawValue = rawValue
     }
 
-    /// The weekly window of one model (the API's `model_scoped` entries); nil for a name without letters or digits.
     public static func scoped(displayName: String) -> LimitKind? {
         let slug = slug(displayName)
         return slug.isEmpty ? nil : LimitKind(checked: "seven_day_" + slug)
     }
 
-    /// Lowercase ASCII letters and digits, every other run of characters collapsed to one `_`.
     static func slug(_ text: String) -> String {
         var result = ""
         var pendingSeparator = false
@@ -60,8 +53,6 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
         self == .fiveHour ? 5 * 3600 : 7 * 86_400
     }
 
-    /// "5-hour", "Weekly", "Weekly Opus"; a scoped window's name is rebuilt from its slug ("Weekly Sonnet 4.5"),
-    /// so prefer `ClaudeLimits.ScopedWindow.displayName` while a live fetch has it.
     public var displayName: String {
         switch self {
         case .fiveHour: return "5-hour"
@@ -70,7 +61,6 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
         }
     }
 
-    /// The model part of a weekly window's name ("Opus", "Sonnet 4.5"); empty for the 5-hour and weekly windows.
     public var scopeName: String {
         guard rawValue.hasPrefix("seven_day_") else { return "" }
         var name = ""
@@ -86,7 +76,6 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
 
     public var description: String { rawValue }
 
-    /// Fixed windows first, in `allCases` order, then scoped windows by name.
     public static func < (lhs: LimitKind, rhs: LimitKind) -> Bool {
         let order = allCases
         switch (order.firstIndex(of: lhs), order.firstIndex(of: rhs)) {
@@ -111,18 +100,14 @@ public struct LimitKind: RawRepresentable, Hashable, Comparable, Codable, Sendab
         try container.encode(rawValue)
     }
 
-    /// How far back the burn rate looks, and the shortest span of samples it accepts.
     var burnRateLookback: TimeInterval { self == .fiveHour ? 3600 : 86_400 }
     var burnRateMinimumSpan: TimeInterval { self == .fiveHour ? 600 : 3600 }
 }
 
-/// One reading of a plan-usage window (a `limit_samples` row).
 public struct LimitSample: Sendable, Equatable, Hashable {
     public var kind: LimitKind
     public var ts: Date
-    /// Percent used, 0…100.
     public var utilization: Double
-    /// Nil before the window has started.
     public var resetsAt: Date?
 
     public init(kind: LimitKind, ts: Date, utilization: Double, resetsAt: Date?) {
@@ -132,8 +117,6 @@ public struct LimitSample: Sendable, Equatable, Hashable {
         self.resetsAt = resetsAt
     }
 
-    /// The API's `resets_at` jitters between calls, while two different windows of a kind reset hours or days
-    /// apart, so a few minutes of slack tells them apart safely.
     public static let windowTolerance: TimeInterval = 300
 
     public func isSameWindow(as other: LimitSample) -> Bool {
@@ -145,13 +128,10 @@ public struct LimitSample: Sendable, Equatable, Hashable {
         }
     }
 
-    /// `resetsAt − windowLength`.
     public var windowStart: Date? { resetsAt.map { $0.addingTimeInterval(-kind.windowLength) } }
 }
 
 extension ClaudeLimits {
-    /// Every window present: the fixed ones, then model-scoped weekly windows whose kind isn't already among
-    /// them (a scoped "Opus" next to `seven_day_opus` is the same window).
     public func samples(at time: Date) -> [LimitSample] {
         windows.map { LimitSample(kind: $0.kind, ts: time, utilization: $0.window.utilization,
                                   resetsAt: $0.window.resetsAt) }
@@ -172,26 +152,19 @@ extension ClaudeLimits {
     }
 }
 
-/// How a window's use compares with the time gone by: `utilization − elapsed%`. Needs only one reading and the
-/// reset time, so it works before a burn rate has history.
 public struct LimitPace: Sendable, Equatable {
     public enum Band: String, Sendable {
-        /// Burning faster than linear.
         case ahead
         case onTrack
         case under
     }
 
-    /// Percent of the window gone by at the reading, 0…100.
     public var elapsedPercent: Double
-    /// Percentage points: utilization − elapsed%.
     public var delta: Double
     public var band: Band
 
-    /// A delta beyond ± this many points leaves "on track".
     public static let tolerance = 5.0
 
-    /// Nil without a reset time, or once the window has reset (the reading is stale).
     public init?(utilization: Double, resetsAt: Date?, windowLength: TimeInterval, at time: Date) {
         guard let resetsAt, windowLength > 0, time < resetsAt else { return nil }
         let start = resetsAt.addingTimeInterval(-windowLength)
@@ -202,42 +175,32 @@ public struct LimitPace: Sendable, Equatable {
 }
 
 extension LimitSample {
-    /// Pass the time the utilization was read (or now, for a live reading).
     public func pace(at time: Date) -> LimitPace? {
         LimitPace(utilization: utilization, resetsAt: resetsAt, windowLength: kind.windowLength, at: time)
     }
 }
 
 extension ClaudeLimits.Window {
-    /// For the panel ring, which has one live reading and no history.
     public func pace(_ kind: LimitKind, at time: Date) -> LimitPace? {
         LimitPace(utilization: utilization, resetsAt: resetsAt, windowLength: kind.windowLength, at: time)
     }
 }
 
-/// Where one window is heading: its current-window samples, a burn rate and what that rate means at reset.
 public struct LimitsProjection: Sendable, Equatable {
     public var kind: LimitKind
-    /// The latest sample.
     public var current: LimitSample
-    /// The current window's samples, oldest first: same `resetsAt` as the latest, after its last utilization drop.
     public var windowSamples: [LimitSample]
-    /// Percent per hour (least squares, ≥ 0); nil with fewer than 2 samples or too short a span in the lookback.
     public var burnRatePerHour: Double?
-    /// Utilization at reset at the current rate, capped at 100.
     public var projectedUtilization: Double?
-    /// When the rate reaches 100%, if that is before the reset. Nil when it won't, or when already at 100%.
     public var limitReachedAt: Date?
 
     public var utilization: Double { current.utilization }
     public var resetsAt: Date? { current.resetsAt }
-    /// Sum ledger spend from here to see what the window has cost so far.
     public var windowStart: Date? { current.windowStart }
     public var isAtLimit: Bool { current.utilization >= 100 }
 
     public func pace(at time: Date) -> LimitPace? { current.pace(at: time) }
 
-    /// Samples of one kind in any order; nil when there are none. With mixed kinds, the latest sample's kind wins.
     public init?(samples: [LimitSample]) {
         let sorted = samples.sorted { $0.ts < $1.ts }
         guard let latest = sorted.last else { return nil }
@@ -264,7 +227,6 @@ public struct LimitsProjection: Sendable, Equatable {
         }
     }
 
-    /// One projection per kind present in `samples`.
     public static func projections(_ samples: [LimitSample]) -> [LimitKind: LimitsProjection] {
         Dictionary(grouping: samples, by: \.kind).compactMapValues { LimitsProjection(samples: $0) }
     }

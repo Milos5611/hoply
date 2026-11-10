@@ -5,7 +5,6 @@ import SQLite3
 public enum CopilotStoreError: Error, Equatable, CustomStringConvertible {
     case notFound
     case unsupported(String)
-    /// The database changed while a snapshot was being taken; the next poll reads it again.
     case changedWhileReading
 
     public var description: String {
@@ -17,16 +16,8 @@ public enum CopilotStoreError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Finds Copilot CLI's `session-store.db` and opens it for reading. `~/.copilot` is read-only to Hoply:
-/// - With a `-wal` file present (Copilot running, or its SQLite kept the WAL), the database is opened in place
-///   with `mode=ro` (never `immutable`, which would hide WAL content) and `query_only`. SQLite may create a
-///   missing `-shm`, the shared wal-index every WAL reader needs; it never writes the database or the WAL.
-/// - Without one, Copilot's SQLite has checkpointed and removed the WAL on its last close, so the main file is
-///   complete. macOS's SQLite refuses a `mode=ro` open in that state, so the file is read into an in-memory
-///   snapshot instead and nothing is created next to it.
 public struct CopilotStoreIngester: Sendable {
     public static let databaseName = "session-store.db"
-    /// The version the column checks were written against; others are read when the columns are there.
     public static let knownSchemaVersion = 7
 
     static let requiredEventColumns: Set<String> = ["id", "session_id", "model", "input_tokens", "output_tokens",
@@ -35,7 +26,6 @@ public struct CopilotStoreIngester: Sendable {
                                        "request_multiplier", "token_details_json"]
     static let optionalSessionColumns = ["cwd", "branch", "summary", "created_at", "updated_at"]
 
-    /// mtime, size and inode of the database and its WAL: if neither moved there is nothing new to read.
     public struct Signature: Sendable, Equatable {
         public var database: FileStat?
         public var wal: FileStat?
@@ -43,7 +33,6 @@ public struct CopilotStoreIngester: Sendable {
 
     public let home: String
 
-    /// `$COPILOT_HOME` when set, else `~/.copilot`.
     public static var defaultHome: String {
         if let configured = ProcessInfo.processInfo.environment["COPILOT_HOME"], !configured.isEmpty {
             return (configured as NSString).expandingTildeInPath
@@ -61,8 +50,6 @@ public struct CopilotStoreIngester: Sendable {
         Signature(database: FileTailer.status(of: databasePath), wal: FileTailer.status(of: databasePath + "-wal"))
     }
 
-    /// Opens one read pass. Drop the connection when done, so Copilot's own last connection can still
-    /// checkpoint and remove its WAL.
     public func open() throws -> CopilotStoreConnection {
         var before = signature()
         guard before.database != nil else { throw CopilotStoreError.notFound }
@@ -83,7 +70,6 @@ public struct CopilotStoreIngester: Sendable {
         return try CopilotStoreConnection(db: SQLiteConnection(snapshot: data))
     }
 
-    /// SQLite URI filenames treat `?` and `#` as delimiters and decode `%XX`.
     static func uriPath(_ path: String) -> String {
         path.replacingOccurrences(of: "%", with: "%25")
             .replacingOccurrences(of: "?", with: "%3F")
@@ -91,7 +77,6 @@ public struct CopilotStoreIngester: Sendable {
     }
 }
 
-/// One open read pass over the session store, with its columns checked. Not thread-safe.
 public final class CopilotStoreConnection {
     public let schemaVersion: Int?
     private let db: SQLiteConnection
@@ -146,7 +131,6 @@ public final class CopilotStoreConnection {
         }
     }
 
-    /// The given sessions, or with `ids == nil` every session that has at least one usage event.
     public func sessions(ids: [String]? = nil) throws -> [String: CopilotSession] {
         let rows: [CopilotSession]
         let map = { (row: SQLiteRow) in

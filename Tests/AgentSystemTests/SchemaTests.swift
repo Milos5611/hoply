@@ -15,7 +15,7 @@ final class SchemaTests: XCTestCase {
         try Schema.migrate(db, databasePath: path)
         XCTAssertEqual(try db.userVersion(), Schema.migrations.count)
         XCTAssertEqual(try tables(db), ["projects", "path_map", "sessions", "usage", "ingest_cursors", "samples",
-                                        "limit_samples", "state_spans", "cleanup_log"])
+                                        "limit_samples", "state_spans", "cleanup_log", "subagents"])
         XCTAssertEqual(try db.queryOne("PRAGMA journal_mode") { $0.text(0) }, "wal")
         XCTAssertEqual(try db.queryOne("PRAGMA synchronous") { $0.int(0) }, 1, "NORMAL")
         XCTAssertEqual(try db.queryOne("PRAGMA busy_timeout") { $0.int(0) }, 2000)
@@ -62,7 +62,7 @@ final class SchemaTests: XCTestCase {
             INSERT INTO usage (dedupe_key, source, session_id, ts, model, output, cost_usd, api_equiv_usd, pricing_rev)
             VALUES ('cc:a:1', 'claude-code', 's1', 1, 'claude-opus-5-5', 10, 0.5, 0.5, 'rev')
             """)
-        try Schema.migrate(db, databasePath: path)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(2)))
         XCTAssertEqual(try db.userVersion(), 2)
         let row = try XCTUnwrap(db.queryOne("SELECT native_usd, premium_requests, cost_usd FROM usage") {
             ($0.optionalDouble(0), $0.double(1), $0.double(2))
@@ -72,6 +72,26 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(row.2, 0.5)
         let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
         XCTAssertEqual(try backup.userVersion(), 1, "the v1 ledger was backed up before migrating")
+    }
+
+    func testV3AddsSubagentNamesToAFilledV2Ledger() throws {
+        let directory = try TempDirectory()
+        let path = directory.path("hoply.sqlite")
+        let db = try SQLiteConnection(path: path)
+        try Schema.configure(db)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(2)))
+        try db.run("""
+            INSERT INTO usage (dedupe_key, source, session_id, ts, model, sidechain, agent_id, output, native_usd)
+            VALUES ('cc:a:1', 'claude-code', 's1', 1, 'claude-opus-5-5', 1, 'a1', 10, NULL)
+            """)
+        try Schema.migrate(db, databasePath: path)
+        XCTAssertEqual(try db.userVersion(), 3)
+        XCTAssertTrue(try tables(db).contains("subagents"))
+        XCTAssertEqual(try db.queryOne("SELECT COUNT(*) FROM subagents") { $0.int(0) }, 0)
+        XCTAssertEqual(try db.queryOne("SELECT agent_id FROM usage") { $0.text(0) }, "a1", "usage rows are untouched")
+        let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
+        XCTAssertEqual(try backup.userVersion(), 2, "the v2 ledger was backed up before migrating")
+        XCTAssertFalse(try tables(backup).contains("subagents"))
     }
 
     func testFailedMigrationRollsBack() throws {

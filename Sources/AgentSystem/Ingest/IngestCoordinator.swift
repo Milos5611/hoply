@@ -3,17 +3,10 @@ import Foundation
 
 public struct IngestUpdate: Sendable, Equatable {
     public var progress: IngestProgress
-    /// Sessions whose ledger rows or metadata changed since the previous update.
     public var changedSessions: Set<SessionKey>
 }
 
-/// Owns ledger ingestion. Claude transcripts: backfill (newest files first), FSEvents tailing, a periodic
-/// stat-only rescan, and immediate tails requested by hooks; files are processed one at a time, so a file's
-/// cursor and turn count are never updated by two readers at once. Copilot CLI's session store: polled, and
-/// read only when the database or its WAL changed. Telemetry usage (Copilot IDE, Qwen Code): recorded as it
-/// arrives. All three report through `updates`.
 public actor IngestCoordinator {
-    /// Single consumer. Progress during backfill is throttled to about four updates a second.
     public nonisolated let updates: AsyncStream<IngestUpdate>
     public private(set) var progress = IngestProgress()
 
@@ -41,7 +34,6 @@ public actor IngestCoordinator {
     private var lastEmit: ContinuousClock.Instant?
     private var copilotCursor: FileCursor?
     private var copilotSignature: CopilotStoreIngester.Signature?
-    /// The session rows last written, so a poll only rewrites sessions whose metadata moved.
     private var copilotSessions: [String: CopilotSession] = [:]
     private var copilotPolling = false
     private var copilotTask: Task<Void, Never>?
@@ -69,8 +61,6 @@ public actor IngestCoordinator {
         continuation.finish()
     }
 
-    /// Loads cursors, starts watching and polling, reads Copilot's store once, then backfills transcripts.
-    /// Returns when the backfill queue is empty.
     public func start() async {
         guard !started else { return }
         started = true
@@ -110,9 +100,6 @@ public actor IngestCoordinator {
         await initialPoll.value
     }
 
-    /// Stops watching and rescanning, drops queued files and ends in-flight reads after their current batch,
-    /// so a half-read file keeps the cursor of its last committed batch. Returns once nothing is writing; later
-    /// calls are ignored until the next `start()`.
     public func stop() async {
         stopped = true
         started = false
@@ -134,8 +121,6 @@ public actor IngestCoordinator {
         }
     }
 
-    /// A hook reported this transcript (`transcript_path`): read its new lines ahead of everything else.
-    /// Paths outside the configured Claude directory are ignored, since backfill and rescans never see them.
     public func tailTranscript(atPath path: String) async {
         let canonical = ClaudeTranscriptIngester.canonical(path)
         guard !stopped, claude.isTranscript(canonical) else { return }
@@ -144,7 +129,6 @@ public actor IngestCoordinator {
         await drain()
     }
 
-    /// Stat-only pass over all transcripts; anything whose size or inode moved is read.
     public func rescan() async {
         guard !stopped else { return }
         if watch, watcher?.isRunning != true { startWatcher() }
@@ -152,7 +136,6 @@ public actor IngestCoordinator {
         await drain()
     }
 
-    /// Re-reads every transcript and Copilot's whole store. Only cursors are reset; ledger rows are never deleted.
     public func reindex() async {
         guard !stopped else { return }
         cursorResets += 1
@@ -181,7 +164,6 @@ public actor IngestCoordinator {
         }
     }
 
-    /// For tests and shutdown: waits until queued files, a Copilot poll and telemetry writes are done.
     public func waitUntilIdle() async {
         while isBusy || !pending.isEmpty {
             try? await Task.sleep(for: .milliseconds(10))
@@ -190,8 +172,6 @@ public actor IngestCoordinator {
 
     // MARK: - Copilot CLI
 
-    /// Reads new rows from Copilot CLI's session store, if its database or WAL changed since the last read.
-    /// Runs every 10 s while started; call it when a Copilot CLI hook arrives to pick up a turn sooner.
     public func pollCopilot() async {
         guard let copilot, started, !stopped, !copilotPolling, cursorResets == 0 else { return }
         let signature = copilot.signature()
@@ -224,9 +204,6 @@ public actor IngestCoordinator {
         if previous != status || !pendingChanges.isEmpty { emit(force: true) }
     }
 
-    /// Returns the store's schema version. Each batch is written with its cursor (the last event id) in one
-    /// transaction. A lower maximum id than the cursor, or a new inode, means the database was recreated, so
-    /// reading restarts at 0; the upserts make that safe.
     private func readCopilot(_ copilot: CopilotStoreIngester, signature: CopilotStoreIngester.Signature,
                              generation: Int) async throws -> Int? {
         let connection = try copilot.open()
@@ -261,8 +238,6 @@ public actor IngestCoordinator {
 
     // MARK: - Telemetry
 
-    /// Persists telemetry usage for sources whose ledger is their OTel (others are dropped). A record without
-    /// a cwd gets its session's known cwd, else its process's (`process.pid`), else stays "Unassigned".
     public func record(_ usage: [UsageRecord]) async {
         var records = usage.filter { UsageAuthority.persistsTelemetry(from: $0.source) }
         guard !records.isEmpty, !stopped else { return }
@@ -336,7 +311,10 @@ public actor IngestCoordinator {
             while true {
                 guard let chunk = try FileTailer.read(path: path, from: cursor, maxBytes: chunkBytes) else { break }
                 if chunk.lines.isEmpty, chunk.cursor == cursor { break }
-                let batch = ClaudeTranscriptIngester.batch(lines: chunk.lines, path: path, startOffset: chunk.startOffset)
+                var batch = ClaudeTranscriptIngester.batch(lines: chunk.lines, path: path, startOffset: chunk.startOffset)
+                if chunk.startOffset == 0, let info = ClaudeTranscriptIngester.subagentInfo(forTranscript: path) {
+                    batch.subagents = [info]
+                }
                 // If work stops before the end, `needsWork` must still see the rest of the file as unread.
                 var committed = chunk.cursor
                 if !chunk.atEnd { committed.size = committed.offset }

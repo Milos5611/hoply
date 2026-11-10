@@ -47,7 +47,6 @@ extension Optional: SQLiteBindable where Wrapped: SQLiteBindable {
     public var sqliteValue: SQLiteValue { self?.sqliteValue ?? .null }
 }
 
-/// A result row; valid only inside the closure it is passed to.
 public struct SQLiteRow {
     fileprivate let statement: OpaquePointer
 
@@ -68,7 +67,6 @@ public struct SQLiteRow {
     public func optionalInt64(_ column: Int32) -> Int64? { isNull(column) ? nil : int64(column) }
 }
 
-/// One SQLite handle. Not thread-safe: an owning actor serializes access.
 public final class SQLiteConnection {
     private var handle: OpaquePointer?
     private var statements: [String: OpaquePointer] = [:]
@@ -88,8 +86,6 @@ public final class SQLiteConnection {
         }
     }
 
-    /// A read-only in-memory copy of a database file's bytes; nothing touches the file system. A WAL-mode image
-    /// is switched to rollback mode in the copy, since an in-memory database has no WAL to read.
     public convenience init(snapshot data: Data) throws {
         try self.init(path: ":memory:")
         var bytes = [UInt8](data)
@@ -124,7 +120,6 @@ public final class SQLiteConnection {
         }
     }
 
-    /// Runs one statement with bound parameters, ignoring any rows.
     public func run(_ sql: String, _ values: [any SQLiteBindable] = []) throws {
         try withStatement(sql, values) { statement in
             while try step(statement) {}
@@ -145,7 +140,6 @@ public final class SQLiteConnection {
         }
     }
 
-    /// `BEGIN IMMEDIATE` … `COMMIT`, rolled back if `body` throws.
     public func transaction<T>(_ body: () throws -> T) throws -> T {
         try execute("BEGIN IMMEDIATE")
         do {

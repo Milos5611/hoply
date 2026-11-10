@@ -85,7 +85,6 @@ struct SpendChart: View {
         .accessibilityLabel("Daily API-equivalent spend")
     }
 
-    /// Beside the hovered bar, towards the middle, so the tooltip never covers the bar or leaves the chart.
     private func tooltipSide(for day: Date) -> AnnotationPosition {
         let index = data.days.firstIndex(of: day) ?? 0
         return index < data.days.count / 2 ? .trailing : .leading

@@ -79,7 +79,6 @@ struct ClaudeLimitsWidget: View {
         return .blue
     }
 
-    /// "Ahead of pace by 14 points." and the like; the band uses ±5 points.
     static func paceSentence(_ pace: LimitPace) -> String {
         let points = Int(abs(pace.delta).rounded())
         switch pace.band {

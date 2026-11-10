@@ -1,6 +1,5 @@
 import Foundation
 
-/// Where an agent session comes from.
 public enum AgentSource: String, Codable, CaseIterable, Sendable {
     case claudeCode = "claude-code"
     case copilotCLI = "copilot-cli"
@@ -24,7 +23,6 @@ public enum SessionState: String, Codable, Sendable {
     case idle
     case ended
 
-    /// Lower values sort first in the panel.
     public var priority: Int {
         switch self {
         case .needsPermission: return 0
@@ -65,9 +63,15 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var outputTokens: Int
     public var cacheTokens: Int
     public var costUSD: Double
-    /// True once a hook has reported on this session. Hooks own the state from then on;
-    /// telemetry (which arrives in delayed batches) only adds usage numbers.
     public var hasLiveState: Bool
+    public var awaitsInput: Bool
+    public var failure: String?
+    public var turnEnded: Bool
+    public var subagents: [LiveSubagent]
+
+    public static let maxSubagents = 50
+
+    public var workingSubagentCount: Int { subagents.count { $0.isWorking } }
 
     public var id: String { "\(key.source.rawValue):\(key.id)" }
 
@@ -94,10 +98,31 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.cacheTokens = 0
         self.costUSD = 0
         self.hasLiveState = false
+        self.awaitsInput = false
+        self.failure = nil
+        self.turnEnded = false
+        self.subagents = []
     }
 }
 
-/// A normalized thing that happened in some agent, from a hook or from telemetry.
+public struct LiveSubagent: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var type: String?
+    public var startedAt: Date
+    public var lastEventAt: Date
+    public var endedAt: Date?
+
+    public var isWorking: Bool { endedAt == nil }
+
+    public init(id: String, type: String? = nil, startedAt: Date, lastEventAt: Date? = nil, endedAt: Date? = nil) {
+        self.id = id
+        self.type = type
+        self.startedAt = startedAt
+        self.lastEventAt = lastEventAt ?? startedAt
+        self.endedAt = endedAt
+    }
+}
+
 public struct AgentEvent: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
         case sessionStarted
@@ -106,7 +131,11 @@ public struct AgentEvent: Sendable, Equatable {
         case toolFinished(String?)
         case needsPermission(String?)
         case waitingForInput(String?)
+        case questionAsked(String?)
         case turnFinished(String?)
+        case turnFailed(error: String?, message: String?)
+        case subagentStarted(id: String, type: String?)
+        case subagentStopped(id: String, type: String?)
         case sessionEnded(String?)
         case error(String?)
         case usage(Usage)
@@ -133,11 +162,12 @@ public struct AgentEvent: Sendable, Equatable {
     public var cwd: String?
     public var model: String?
     public var fromHook: Bool
-    /// The agent's transcript file (Claude Code hooks send `transcript_path`), so the ledger can tail it at once.
     public var transcriptPath: String?
+    public var agentID: String?
+    public var agentType: String?
 
     public init(key: SessionKey, kind: Kind, time: Date, cwd: String? = nil, model: String? = nil, fromHook: Bool,
-                transcriptPath: String? = nil) {
+                transcriptPath: String? = nil, agentID: String? = nil, agentType: String? = nil) {
         self.key = key
         self.kind = kind
         self.time = time
@@ -145,5 +175,7 @@ public struct AgentEvent: Sendable, Equatable {
         self.model = model
         self.fromHook = fromHook
         self.transcriptPath = transcriptPath
+        self.agentID = agentID
+        self.agentType = agentType
     }
 }

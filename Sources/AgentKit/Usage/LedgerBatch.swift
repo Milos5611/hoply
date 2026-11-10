@@ -6,10 +6,8 @@ public struct SessionUpdate: Sendable, Equatable {
     public var lastAt: Date?
     public var cwd: String?
     public var branch: String?
-    /// False when cwd/branch come only from subagent lines: they then fill gaps but never replace.
     public var placeIsAuthoritative: Bool
     public var title: String?
-    /// A title only replaces one of equal or lower rank (custom > AI title > agent name).
     public var titleRank: Int
     public var prURL: String?
     public var nativeCostUSD: Double?
@@ -17,8 +15,6 @@ public struct SessionUpdate: Sendable, Equatable {
     public var linesRemoved: Int?
     public var transcriptPath: String?
     public var prompts: Int
-    /// The batch starts at the beginning of the file holding this session's prompts, so `prompts` replaces the
-    /// stored turn count instead of adding to it. That keeps re-reading a file from zero idempotent.
     public var resetsTurns: Bool
 
     public init(key: SessionKey, firstAt: Date? = nil, lastAt: Date? = nil, cwd: String? = nil, branch: String? = nil,
@@ -43,22 +39,21 @@ public struct SessionUpdate: Sendable, Equatable {
     }
 }
 
-/// One unit of ledger writes, applied in a single transaction.
 public struct LedgerBatch: Sendable, Equatable {
     public var usage: [UsageRecord]
     public var sessions: [SessionUpdate]
+    public var subagents: [SubagentInfo]
 
-    public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = []) {
+    public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = [], subagents: [SubagentInfo] = []) {
         self.usage = usage
         self.sessions = sessions
+        self.subagents = subagents
     }
 
-    public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty }
+    public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty && subagents.isEmpty }
 }
 
 extension ClaudeTranscriptBatch {
-    /// `transcriptPath` is the file the lines came from. Subagent files (`…/subagents/agent-*.jsonl`) carry the
-    /// parent's session id but no typed prompts, and must not reset the parent's turn count.
     public func ledgerBatch(transcriptPath: String, startsAtFileStart: Bool) -> LedgerBatch {
         let isSubagentFile = transcriptPath.contains("/subagents/")
         let stem = URL(fileURLWithPath: transcriptPath).deletingPathExtension().lastPathComponent

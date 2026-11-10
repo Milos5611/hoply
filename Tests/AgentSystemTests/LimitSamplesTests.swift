@@ -62,6 +62,24 @@ final class LimitSamplesTests: XCTestCase {
         XCTAssertEqual(latest, [.fiveHour: sample(35, at: 3700), .sevenDay: sample(31, .sevenDay, at: 1200, resets: 86_400)])
     }
 
+    func testABucketWithAResetKeepsBothWindows() async throws {
+        let (store, reader, _) = try open(try TempDirectory())
+        let hour = t0.timeIntervalSince1970.truncatingRemainder(dividingBy: 3600)
+        XCTAssertEqual(hour, 0, "t0 starts an hourly bucket")
+        let next: TimeInterval = 1800 + 5 * 3600
+        try await store.recordLimitSamples([sample(88, at: 300, resets: 1800)])
+        try await store.recordLimitSamples([sample(92, at: 900, resets: 1830)])
+        try await store.recordLimitSamples([sample(91, at: 1500, resets: 1800)])
+        try await store.recordLimitSamples([sample(2, at: 1900, resets: next), sample(40, .sevenDay, at: 1900, resets: 86_400)])
+        try await store.recordLimitSamples([sample(6, at: 2500, resets: next + 40)])
+        try await store.recordLimitSamples([sample(9, at: 3700, resets: next)])
+
+        let hourly = try await reader.limitSamples(in: allTime, bucket: 3600)
+        XCTAssertEqual(hourly, [sample(92, at: 900, resets: 1830), sample(40, .sevenDay, at: 1900, resets: 86_400),
+                                sample(6, at: 2500, resets: next + 40), sample(9, at: 3700, resets: next)],
+                       "each window's peak, oldest first; jittered resets are one window")
+    }
+
     func testScopedKindsDecodeAndUnknownKindsAreSkipped() async throws {
         let (store, reader, path) = try open(try TempDirectory())
         try await store.recordLimitSamples([sample(10, at: 0)])

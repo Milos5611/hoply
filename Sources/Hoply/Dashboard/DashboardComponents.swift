@@ -120,8 +120,6 @@ struct ShareBar: View {
     }
 }
 
-/// One ranked line: icon, title and figure, a share bar, then a caption and optional secondary text
-/// (Copilot's premium requests and AIU).
 struct BreakdownRow<Icon: View>: View {
     let title: String
     let value: String
@@ -169,7 +167,6 @@ struct BreakdownRow<Icon: View>: View {
     }
 }
 
-/// A plain row that highlights under the pointer, for lists whose rows open a detail.
 struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Highlight(configuration: configuration)
@@ -203,7 +200,6 @@ struct BreakdownList: View {
     let slices: [SpendSlice]
     let kind: Kind
     var limit: Int?
-    /// Makes project rows open that project's detail.
     var open: ((SpendSlice) -> Void)?
 
     var body: some View {
@@ -239,7 +235,7 @@ struct BreakdownList: View {
     private func icon(_ slice: SpendSlice, index: Int) -> some View {
         switch kind {
         case .project:
-            IconTile(projectKind: slice.project?.kind, size: 30)
+            ProjectIcon(project: slice.project, size: 30)
         case .model:
             IconTile(symbol: "cube.fill", tint: color(index: index), size: 30)
         }

@@ -11,7 +11,6 @@ public struct ProjectResolution: Sendable, Equatable, Hashable {
     public var root: String
     public var name: String
     public var kind: ProjectKind
-    /// The linked worktree's root when the cwd is inside one; the project is then its main repo.
     public var worktree: String?
 
     public init(root: String, name: String, kind: ProjectKind, worktree: String? = nil) {
@@ -22,19 +21,15 @@ public struct ProjectResolution: Sendable, Equatable, Hashable {
     }
 }
 
-/// The filesystem reads the resolver needs. AgentSystem provides the real one; tests use a fake.
 public protocol ProjectFileSystem {
-    /// The absolute path with symlinks resolved, or nil if it does not exist.
     func realPath(_ path: String) -> String?
     func isDirectory(_ path: String) -> Bool
     func isFile(_ path: String) -> Bool
     func readText(_ path: String) -> String?
 }
 
-/// Maps a working directory to the project it belongs to, without running git.
 public struct ProjectResolver: Sendable {
     public var home: String
-    /// Directories whose descendants are Claude scratch workspaces; each of them groups into one project.
     public var scratchRoots: [String]
 
     public init(home: String, scratchRoots: [String]? = nil) {
@@ -70,8 +65,6 @@ public struct ProjectResolver: Sendable {
         return ProjectResolution(root: path, name: Self.lastComponent(path), kind: .folder)
     }
 
-    /// A `.git` file points at the real git dir. A linked worktree's git dir has a `commondir` file leading to
-    /// the main repo's `.git`; a submodule's does not, so the submodule stays its own project.
     private func linked(directory: String, gitFile: String, fs: some ProjectFileSystem) -> ProjectResolution {
         let own = ProjectResolution(root: directory, name: Self.lastComponent(directory), kind: .repo)
         guard let text = fs.readText(gitFile),
@@ -94,7 +87,6 @@ public struct ProjectResolver: Sendable {
         standardize(path.hasPrefix("/") ? path : base + "/" + path)
     }
 
-    /// Collapses `.`/`..` and duplicate or trailing slashes without touching the filesystem.
     static func standardize(_ path: String) -> String {
         var parts: [Substring] = []
         for part in path.split(separator: "/") {

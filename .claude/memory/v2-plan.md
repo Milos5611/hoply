@@ -10,7 +10,7 @@ metadata:
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan approved by the user. **M0**, **M0.5 panel look** and **M2** are done and committed (user live check of M2 passed on real data; glass look deferred, see "Known issues"). **M3** is done and committed. **M4** is built, including its limits polish: pace, model-scoped windows, extra usage/spend. **M5** is built without GPU/energy/memory, which the user skipped until a sparkDash capture exists: model-server samples + rollups, Local model page, saved vs API, 5 s/30 s cadence, Keychain/`RemoteEndpoint` plumbing. Both are uncommitted until the user reviews them; notifications, click-through, the Limits and Local model pages on real data, and the cadence switch are unverified live. **Next:** the user's live check of M4 + M5 in the bundled app, the deferred glass polish pass (live, see "Known issues"), then M5.5. GPU joins M5 when a capture arrives (routes listed in "M5 core outcome"). **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M5.5 → M6 → M7 → M8 → M1.** M5.5 holds the T3 Code ideas. Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0**, **M0.5 panel look** and **M2** are done and committed (user live check of M2 passed on real data; glass look deferred, see "Known issues"). **M3** is done and committed. **M4** is built, including its limits polish: pace, model-scoped windows, extra usage/spend. **M5** is built without GPU/energy/memory, which the user skipped until a sparkDash capture exists: model-server samples + rollups, Local model page, saved vs API, 5 s/30 s cadence, Keychain/`RemoteEndpoint` plumbing. Both are committed (2026-11-10, `6c36b3b` and `bb3d25d`); notifications, click-through, the Limits and Local model pages on real data, and the cadence switch are still unverified live. **2026-11-10 (uncommitted):** M4 + M5 review fixes and the **M5.5** core half are done; **M5.5** is built, core and UI. **Next:** the user's live check (re-run `scripts/install.sh` for the new hooks), then M6. The deferred glass polish pass (live, see "Known issues") is still open. GPU joins M5 when a capture arrives (routes listed in "M5 core outcome"). **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M5.5 → M6 → M7 → M8 → M1.** M5.5 holds the T3 Code ideas. Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -374,6 +374,75 @@ Rules for the data:
   - sample recording and sparkline seeding against the real tensorfold (no `model_name` label, so the identity line reads "tensorfold · 192.168.40.141:8888"); the Local model page on real `samples`, its 30-day hover;
   - scoped windows, extra usage, spend and the footnote against the real `/api/oauth/usage` (the scoped shapes are still unverified in the core); the pace tooltip and ring tick live;
   - light, dark and Reduce Transparency in the live popover and window. A notification click on local-model-offline now opens the Local model page (fixed afterwards, unverified live).
+
+**M4 + M5 review fixes (2026-11-10, uncommitted):** two read-only reviews (core, app target), then fixes. AgentKitTests 182, AgentSystemTests 75 (2 opt-in skips), all green.
+- **Core:**
+  - Offline alert: a gap over 90 s between consecutive checks (`NotificationPolicy.offlineCheckGap`, e.g. sleep) restarts the offline clock, so one miss before sleep and one after wake no longer alert at once.
+  - `Store` sample writes: the aggregator and `seededCounters` are restored only when the seed query or bucket transaction fails. A rollup failure is swallowed and retried on the next write (`lastRollup` is set on success only).
+  - `StoreReader.limitSamples(bucket:)` keeps one peak per bucket **and window**, so a reset inside a bucket no longer hides the new window's first readings.
+  - `SessionBoard.sweep(now:)` returns `Sweep(changes, dropped)`; `AppModel.tick` withdraws the dropped sessions' notifications. `tick(now:)` still returns the changes.
+  - Mutes: a resolved project still matches its root exactly. An **unresolved** cwd is now muted when it equals or lies under a muted root (by path component), which replaces "or cwd while unresolved" in the M4 decisions.
+- **App:**
+  - Coming on screen under 4 s after a poll restarts the loop's wait at `5 s − elapsed`.
+  - A poll that returns after a URL change is dropped (`modelServerEpoch`). `History` repeats an unsettled counter reset when a ledger attaches.
+  - Settings Save writes only the fields edited in the draft (`AppSettings.applying(_:since:)`, a JSON diff, so new Codable fields need nothing; a new text-backed field needs a line in `SettingsView.texts`/`rebase`).
+  - A minimized Dashboard counts as off screen.
+  - "Saved vs API" reads "unpriced" when the reference model has no price.
+  - Double→Int on poll values is guarded (`Format.whole`).
+  - `Notifier` posts and withdrawals run in call order.
+  - One limits fetch at a time; a result that arrives after limits were disabled is dropped (`limitsEpoch`).
+- **Left as is:**
+  - The per-session 2-minute cooldown survives a withdraw, so a second permission prompt inside it posts nothing (plan rule; user decision).
+  - Counters are summed over label sets, so one model unloading on a multi-model server would read as a restart.
+  - Quitting after a URL change but before the new server's first reading still re-seeds from the old server's bucket.
+- **Unverified live:** all of the app fixes (cadence, mid-poll URL change, miniaturize, notification ordering).
+
+**M5.5 core outcome (2026-11-10, uncommitted):** AgentKit, AgentSystem, tests and scripts. AgentKitTests 213, AgentSystemTests 88 (2 opt-in skips), all green. Nothing ran live.
+- **Decisions:**
+  - **Input** is `state == .yourTurn` plus `AgentSession.awaitsInput`. **Limited** is never stored: the pure `SessionStatus` / `LimitedSessions` (`AgentKit/SessionStatus.swift`) derive it from the session and the limit samples, so `SessionBoard` still knows nothing about limits. `SessionState` and `NotificationKind` are unchanged.
+  - Notifications: `NotificationRequest.cause` (`permission, input, yourTurn, limit, limitReset, localModelOffline`); `kind` stays the click-routing family (input → `.permission`, limitReset → `.limit`). Limit reset is `.active`, and is dropped (not deferred) in quiet hours or with limit alerts off.
+  - Recede = limited, idle, ended.
+  - Context window: 1M for Fable, Sonnet ≥ 5, Haiku ≥ 5.5, Opus ≥ 4.7 and any `[1m]` name; a prompt over 200k also proves 1M; other Claude models 200k; local and non-Claude models nil.
+  - A scoped weekly window limits a session only when its model id contains the family name.
+- **API for the UI:**
+  - `AgentSession`: `awaitsInput`, `failure` (StopFailure error type), `turnEnded`, `subagents: [LiveSubagent]`, `workingSubagentCount`.
+  - `SessionStatus` (`.permission, .input, .limited(until:), .yourTurn, .working, .idle, .ended`; `priority`, `needsAction`, `recedes`, `label`). `SessionGrouping(sessions:projects:limits:localModelPatterns:now:)` sorts waiting by priority and has `.limitedUntil` and `.status(of:)`.
+  - `NotificationPolicy.limitedSessionsChecked(_:limits:localModelPatterns:now:)`, called on every tick and after each limits fetch.
+  - `Monogram.letters(for:)` / `.paletteIndex(for:count:)`.
+  - `GitClient.diffStat(worktree:)` (blocking) and `actor GitStatCache`; they stand alone, so they work with History off.
+  - `Ledger`: `lastMainCalls(for:)`, `contextWindows(for:)`, `subagents(of:)`, `subagentCounts(for:)`, `modelEfficiency(in:project:)` (`cacheHitRate`, `usdPerMillionTokens`, `fastCalls`, `fastUSD`, `fastPremiumUSD`), `unpricedModels()`, `pricedModels()`, `updatePricing(…priceAliases:)`.
+- **Settings:** `priceAliases: [String: String]`; with none, the `pricing_rev` hash is unchanged.
+- **Schema v3:** table `subagents(source, session_id, agent_id, agent_type, description)`. The real data has no `agent-name` lines; names come from `subagents/agent-<id>.meta.json`, read when a subagent file is ingested from offset 0, so already-ingested subagents stay unnamed until Reindex.
+- **Hooks:** `install.sh` also installs `Elicitation`, `ElicitationResult`, `SubagentStart`, `SubagentStop`, `StopFailure` (users re-run it); `simulate.sh` plays two subagents and a question.
+- **Behaviour changes:**
+  - `StopFailure` ends the turn (Your turn). Before, a rate-limited session stayed "working".
+  - Hooks fired inside a subagent (`agent_id` present) no longer change the session's cwd or model, or reopen a finished turn.
+  - Notifications `elicitation_response`, `elicitation_complete` and `quota_auto_resume_fired` mean working.
+  - Advisor iterations become rows keyed `cc:<id>:<req>:advisor:<n>`, left out of the last-main-call query.
+- **Unverified:**
+  - Hook payload shapes come from the public hooks docs, not captures.
+  - Whether `PermissionRequest` fires for `AskUserQuestion` (both paths map to Input).
+  - Whether the limits API reports exactly 100 for a full window.
+  - `ask_user` as Copilot's question tool name is a guess.
+  - Older Claude Code versions may warn about unknown hook names.
+
+**M5.5 UI outcome (2026-11-10, uncommitted):** the Hoply target only. `swift build` warning-free, snapshots render; nothing ran live.
+- **Wiring:** `AppModel.limitSamples` feeds `SessionGrouping(…limits:)`; `limitedSessionsChecked` runs on every tick and after each limits fetch; `History.track` takes `[AgentSession]` and refreshes context windows and subagent counts with the session totals; `GitStatCache` refreshes a cwd when a session appears, changes cwd or settles, and forgets it when no live session uses it (`AppModel.gitStats`); a `priceAliases` change calls `Ledger.updatePricing`.
+- **Panel rows:** `StatePill` takes a `SessionStatus` and sits in a fixed right column. Permission orange, Input indigo, Limited grey ("Limited · resets 12:36"), Your turn green, Failed red, Working blue with a pulsing dot (off under Reduce Motion), Idle/Ended grey. Receding rows are dimmed to 0.6. Line 2 is "place · age · model". Inline extras: "3 subagents · 2 working", "+120 −34" (or "2 new"), "ctx 86%" from 80%.
+- **Counts:** "Need you", the menu bar count and the Waiting chip count only `needsAction` sessions. Limited sessions stay in the Waiting card, dimmed and uncounted.
+- **Monograms:** `ProjectIcon` / `MonogramTile` (9 hashed colours keyed on the project root) on panel cards, Projects tiles, project detail and "By project" rows. Home, scratch and Unassigned keep their icons.
+- **Open in editor:** `Services/Editor.swift`; a tile on panel cards, a button on project and session detail, a row context-menu entry; right-click lists the other installed editors. Settings → Behaviour "Editor" picker, stored in UserDefaults `HoplyDefaultEditor` (not an `AppSettings` key). Hidden when no editor is installed.
+- **Dashboard:** the session detail has a "Context window" card and a "Subagents" card; Spending has "Model efficiency" (cache hit rate, $/Mtok, fast-mode line). Settings → Pricing lists unpriced models with a "Price as" picker.
+- **Snapshots:** `panel-full-*`, `panel-settings-full-*`, `panel-settings-pricing-empty-*` (new), `dashboard-sessions-*`, `dashboard-spending-*`, `dashboard-projects-*`, `dashboard-project-detail-*`.
+- **Unverified live:**
+  - Git stat refresh on real Stop hooks.
+  - The Limited status and the limit-reset notification (its click opens Limits, since `kind == .limit`).
+  - The pulse and Reduce Motion.
+  - Editor bundle ids, which are from memory (e.g. Cursor `com.todesktop.230313mzl4w4u92`).
+  - "Price as" inside the popover and the re-price after Save.
+  - Insight loading on real ledger data.
+
+**Comments (2026-11-10, user):** about 700 comment lines removed from `Sources/` (every `///` doc comment in the core targets, 140 lines in the app target). See the `comments-only-complex` memory; the agent definitions carry the stricter rule.
 
 **T3 Code review (2026-11-09, user asked):** `pingdotgg/t3code` (MIT; read-only clone at `~/Project/t3code`, commit `dc727058`) is an "agent harness control surface": Electron/web/mobile, Tailwind + Base UI. It runs the agents itself through `@anthropic-ai/claude-agent-sdk` and answers permission prompts in the SDK's `canUseTool`. Hoply watches agents passively, so its chat, composer, per-turn diffs, remote/mobile relay, MCP "outside agents" and context handoffs don't transfer. What does transfer:
 - **M5.5 Session insight** (new, after M5; the user chose to plan rather than build now):

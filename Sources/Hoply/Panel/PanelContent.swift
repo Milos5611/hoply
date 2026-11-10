@@ -21,12 +21,13 @@ struct PanelSections: View {
     var body: some View {
         let grouping = model.grouping
         VStack(spacing: 10) {
-                StatStrip(oldestWait: grouping.oldestWaitSince)
+                StatStrip(oldestWait: grouping.waiting.filter { grouping.status(of: $0).needsAction }
+                    .map(\.stateSince).min())
                 if !grouping.waiting.isEmpty {
-                    WaitingCard(sessions: grouping.waiting)
+                    WaitingCard(grouping: grouping)
                 }
                 ForEach(grouping.projects) { group in
-                    ProjectCard(group: group)
+                    ProjectCard(group: group, grouping: grouping)
                 }
                 if model.sessions.isEmpty {
                     EmptySessionsCard()
@@ -56,7 +57,7 @@ struct StatStrip: View {
                     .foregroundStyle(model.attentionCount > 0 ? Color.orange : Color.primary.opacity(0.18))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            StatTile(label: localModelName, value: model.vllm?.generationTokensPerSecond.map { "\(Int($0.rounded()))" } ?? "–",
+            StatTile(label: localModelName, value: model.vllm?.generationTokensPerSecond.map { "\(Format.whole($0))" } ?? "–",
                      unit: "tok/s", tag: localModelTag.text, tagColor: localModelTag.color,
                      prominent: model.vllmOnline) {
                 MiniBars(values: model.throughput.values, highlightLast: 1, tint: .blue)
@@ -76,9 +77,11 @@ struct StatStrip: View {
 
 struct WaitingCard: View {
     @Environment(AppModel.self) private var model
-    let sessions: [AgentSession]
+    let grouping: SessionGrouping
 
     var body: some View {
+        let sessions = grouping.waiting
+        let acting = sessions.count { grouping.status(of: $0).needsAction }
         Card(prominent: true, tint: .orange) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
@@ -87,10 +90,11 @@ struct WaitingCard: View {
                     Text("Waiting on you")
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    CountChip(value: sessions.count, label: sessions.count == 1 ? "session" : "sessions", tint: .orange)
+                    CountChip(value: acting, label: acting == 1 ? "session" : "sessions", tint: .orange)
                 }
                 ForEach(sessions) { session in
-                    SessionRow(session: session, place: model.projectTitle(for: session).map(SessionPlace.project))
+                    SessionRow(session: session, status: grouping.status(of: session),
+                               place: model.projectTitle(for: session).map(SessionPlace.project))
                 }
             }
         }
@@ -100,6 +104,7 @@ struct WaitingCard: View {
 struct ProjectCard: View {
     @Environment(AppModel.self) private var model
     let group: ProjectGroup
+    let grouping: SessionGrouping
 
     var body: some View {
         let muted = group.path.map(model.isMuted) ?? false
@@ -132,10 +137,22 @@ struct ProjectCard: View {
                     }
                 }
                 ForEach(group.sessions) { session in
-                    SessionRow(session: session, place: SessionPlace(cwd: session.cwd, root: group.path))
+                    SessionRow(session: session, status: grouping.status(of: session),
+                               place: SessionPlace(cwd: session.cwd, root: group.path))
                 }
                 if let path = group.path {
                     HStack(spacing: 8) {
+                        if let editor = model.defaultEditor {
+                            Button { model.openInEditor(path) } label: {
+                                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            }
+                            .help("Open in \(editor.name)")
+                            .contextMenu {
+                                ForEach(model.editors) { other in
+                                    Button("Open in \(other.name)") { model.openInEditor(path, editor: other) }
+                                }
+                            }
+                        }
                         Button { WorkspaceActions.openInTerminal(path) } label: { Image(systemName: "apple.terminal") }
                             .help("Open in Terminal")
                         Button { WorkspaceActions.revealInFinder(path) } label: { Image(systemName: "folder") }
@@ -151,14 +168,9 @@ struct ProjectCard: View {
         }
     }
 
-    /// A resolved project shows its kind; an unresolved cwd (History off or not resolved yet) a plain folder.
-    @ViewBuilder
     private var icon: some View {
-        if let project = group.project {
-            IconTile(projectKind: project.kind, size: 34)
-        } else {
-            IconTile(symbol: group.path == nil ? "questionmark.folder" : "folder.fill", tint: .blue, size: 34)
-        }
+        ProjectIcon(kind: group.project?.kind, title: group.name, key: group.project?.root ?? group.path,
+                    hasFolder: group.path != nil, size: 34)
     }
 
     private var subtitle: String {

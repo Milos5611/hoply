@@ -1,7 +1,6 @@
 import AgentKit
 import SwiftUI
 
-/// Today's ledger totals: API-equivalent dollars (what the same tokens would cost on the API), split by source.
 struct TodayWidget: View {
     @Environment(AppModel.self) private var model
 

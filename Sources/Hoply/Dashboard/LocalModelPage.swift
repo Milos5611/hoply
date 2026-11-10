@@ -52,10 +52,8 @@ struct LocalModelPage: View {
 
 enum LocalModelStyle {
     static let tint = SourceBadge.color(for: .qwenCode)
-    /// Lighter rather than translucent, so prompt bars stay visible on a dark card.
     static let promptTint = tint.mix(with: .white, by: 0.5)
 
-    /// "zgx.local:8000" from the configured base URL.
     static func host(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let host = url.host() else { return trimmed }
@@ -122,7 +120,7 @@ private struct LiveModelCard: View {
                 MiniBars(values: model.throughput.values, highlightLast: 1, tint: .blue, maxBars: 20)
             }
             LiveFigure(label: "Prompt", value: status.promptTokensPerSecond.map(Format.compact) ?? "–", unit: "tok/s",
-                       detail: "\(Format.tokens(Int(snapshot.promptTokensTotal))) since the server started") {
+                       detail: "\(Format.tokens(snapshot.promptTokensTotal)) since the server started") {
                 EmptyView()
             }
             LiveFigure(label: "KV cache", value: snapshot.kvCacheUsage.map { Format.percent($0) } ?? "–", unit: nil,
@@ -276,8 +274,6 @@ private struct KVCacheCard: View {
     }
 }
 
-/// A gauge series over time: the average as a line, for rates the band up to each bucket's peak. Gaps without
-/// readings (server off, Hoply not running) break the line instead of being drawn as zero.
 struct SampleChart: View {
     enum Kind { case rate, percent }
 
@@ -376,7 +372,7 @@ struct SampleChart: View {
                 AxisGridLine()
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
-                        Text(kind == .percent ? "\(Int(number))%" : Format.compact(number).replacingOccurrences(of: ".0", with: ""))
+                        Text(kind == .percent ? "\(Format.whole(number))%" : Format.compact(number).replacingOccurrences(of: ".0", with: ""))
                     }
                 }
             }
@@ -448,7 +444,6 @@ struct SampleChart: View {
         domain.lowerBound.addingTimeInterval(domain.upperBound.timeIntervalSince(domain.lowerBound) / 2)
     }
 
-    /// The bucket under the pointer; none in a gap.
     private var selected: Point? {
         guard let selection else { return nil }
         return points.last { $0.start <= selection && selection < $0.end }
@@ -493,7 +488,7 @@ private struct SampleTooltip: View {
     }
 
     private func value(_ number: Double) -> String {
-        kind == .percent ? "\(Int(number.rounded()))%" : "\(Format.rate(number)) tok/s"
+        kind == .percent ? "\(Format.whole(number))%" : "\(Format.rate(number)) tok/s"
     }
 }
 
@@ -513,9 +508,9 @@ private struct TokensPerDayCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
-                        Text(Format.tokens(Int(observed.reduce(0) { $0 + $1.prompt + $1.generated })))
+                        Text(Format.tokens(observed.reduce(0) { $0 + $1.prompt + $1.generated }))
                             .font(.system(size: 24, weight: .semibold).monospacedDigit())
-                        Text("tokens · \(Format.tokens(Int(observed.reduce(0) { $0 + $1.generated }))) generated")
+                        Text("tokens · \(Format.tokens(observed.reduce(0) { $0 + $1.generated })) generated")
                             .font(.system(size: 12.5))
                             .foregroundStyle(.secondary)
                     }
@@ -592,7 +587,7 @@ private struct TokenDaysChart: View {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                     AxisGridLine()
                     AxisValueLabel {
-                        if let tokens = value.as(Double.self) { Text(Format.tokens(Int(tokens))) }
+                        if let tokens = value.as(Double.self) { Text(Format.tokens(tokens)) }
                     }
                 }
             }
@@ -664,7 +659,7 @@ private struct TokenDayTooltip: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(label)
             Spacer(minLength: 12)
-            Text(Format.tokens(Int(tokens)))
+            Text(Format.tokens(tokens))
                 .monospacedDigit()
                 .fontWeight(.medium)
         }
@@ -679,13 +674,16 @@ private struct SavedVsAPICard: View {
     var body: some View {
         let reference = Format.model(model.settings.referenceModel)
         let total = data?.savedTotal ?? .zero
+        // Local rows have no API-equivalent while the reference model has no price; that must not read as $0.
+        let unpriced = total.calls > 0 && total.apiEquivUSD <= 0
+        let usage = "\(Format.tokens(total.tokens.total)) tokens · \(Format.count(total.calls)) calls"
         DashboardCard(title: "Saved vs API", subtitle: "Last \(data?.range.dailyDays ?? 7) days · priced at \(reference)") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(Format.cost(total.apiEquivUSD))
+                    Text(unpriced ? "unpriced" : Format.spend(total))
                         .font(.system(size: 24, weight: .semibold).monospacedDigit())
-                    Text(total.calls > 0 ? "saved · \(Format.tokens(total.tokens.total)) tokens · \(Format.count(total.calls)) calls"
-                                         : "no local model usage in these days")
+                    Text(total.calls == 0 ? "no local model usage in these days"
+                         : unpriced ? "no price for \(reference) · \(usage)" : "saved · \(usage)")
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -694,6 +692,8 @@ private struct SavedVsAPICard: View {
                     .frame(height: 214)
             }
         }
-        .help("Your agents' calls to local models cost $0. This is what the same tokens would cost at \(reference)'s API prices; change the reference model in Settings → History.")
+        .help(unpriced
+              ? "Hoply has no price for \(reference), so it can't say what these calls would cost at the API. Set a priced reference model in Settings → History (\"Priced as\")."
+              : "Your agents' calls to local models cost $0. This is what the same tokens would cost at \(reference)'s API prices; change the reference model in Settings → History.")
     }
 }

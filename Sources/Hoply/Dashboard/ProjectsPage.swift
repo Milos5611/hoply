@@ -122,7 +122,7 @@ struct ProjectTile: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            IconTile(projectKind: summary.kind, size: 38)
+            ProjectIcon(project: summary.project, size: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.title)
                     .font(.system(size: 15, weight: .semibold))
@@ -156,8 +156,6 @@ struct ProjectTile: View {
     }
 }
 
-/// Usage no project claimed: telemetry without `hoply.cwd` whose process cwd couldn't be found, and
-/// sessions that never reported a cwd. Kept apart and last, since it isn't a place you can open.
 struct UnassignedTile: View {
     @Environment(AppModel.self) private var model
     let summary: ProjectSummary
@@ -212,7 +210,6 @@ struct UnassignedTile: View {
     }
 }
 
-/// A project's spend split by agent: a stacked bar and, optionally, a legend with each source's figure.
 struct SourceSplit: View {
     let bySource: [AgentSource: LedgerTotals]
     var showsLegend = true
@@ -255,7 +252,6 @@ struct SourceSplit: View {
     }
 }
 
-/// The project's top models as small dots and names, plus Copilot's units when it has any.
 struct ModelLine: View {
     let models: [ModelShare]
     var copilot: String?
@@ -342,7 +338,7 @@ struct ProjectDetailView: View {
                 ProjectRangePicker()
             }
             HStack(alignment: .center, spacing: 14) {
-                IconTile(projectKind: summary.kind, size: 46)
+                ProjectIcon(project: summary.project, size: 46)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(summary.title)
                         .font(.system(size: 22, weight: .bold))
@@ -356,6 +352,7 @@ struct ProjectDetailView: View {
                 Spacer(minLength: 12)
                 if let root = summary.root {
                     HStack(spacing: 8) {
+                        EditorButton(path: root)
                         Button { WorkspaceActions.revealInFinder(root) } label: {
                             Label("Reveal in Finder", systemImage: "folder")
                         }
@@ -466,6 +463,26 @@ struct ProjectDetailView: View {
             .frame(height: 440)
             SessionDetail(session: history.selectedProjectSession)
                 .frame(width: 290, height: 440, alignment: .top)
+        }
+    }
+}
+
+struct EditorButton: View {
+    @Environment(AppModel.self) private var model
+    let path: String
+
+    var body: some View {
+        if let editor = model.defaultEditor {
+            Button { model.openInEditor(path) } label: {
+                Label("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+            .contextMenu {
+                ForEach(model.editors) { other in
+                    Button("Open in \(other.name)") { model.openInEditor(path, editor: other) }
+                }
+            }
+            .help(model.editors.count > 1 ? "Right-click for other editors. The default is in Settings."
+                                          : "Open this project in \(editor.name)")
         }
     }
 }

@@ -11,6 +11,11 @@ enum WorkspaceActions {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 
+    static func open(_ path: String, in editor: Editor) {
+        NSWorkspace.shared.open([URL(fileURLWithPath: path, isDirectory: true)], withApplicationAt: editor.url,
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
+
     static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

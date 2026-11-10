@@ -1,6 +1,5 @@
 import Foundation
 
-/// An OpenTelemetry attribute value.
 public enum AttributeValue: Equatable, Sendable {
     case string(String)
     case int(Int64)
@@ -45,7 +44,6 @@ public enum AttributeValue: Equatable, Sendable {
     }
 }
 
-/// One log record or span, flattened from an OTLP export request.
 public struct TelemetryRecord: Equatable, Sendable {
     public enum Signal: String, Sendable {
         case log
@@ -57,10 +55,8 @@ public struct TelemetryRecord: Equatable, Sendable {
     public var attributes: [String: AttributeValue]
     public var resource: [String: AttributeValue]
     public var time: Date?
-    /// Lowercase hex, whichever encoding the exporter used; nil when absent or all zeros.
     public var traceID: String?
     public var spanID: String?
-    /// The exact OTLP timestamp behind `time` (log time, else observed time; span end, else start).
     public var timeUnixNano: UInt64?
 
     public init(signal: Signal, name: String, attributes: [String: AttributeValue],
@@ -78,7 +74,6 @@ public struct TelemetryRecord: Equatable, Sendable {
 
     public subscript(_ key: String) -> AttributeValue? { attributes[key] }
 
-    /// First attribute among `keys` that is present, looking at record attributes then resource.
     public func first(_ keys: [String]) -> AttributeValue? {
         for key in keys {
             if let value = attributes[key] { return value }

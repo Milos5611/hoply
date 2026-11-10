@@ -8,14 +8,11 @@ public enum ClaudeTitleKind: Int, Sendable, Comparable {
     public static func < (lhs: ClaudeTitleKind, rhs: ClaudeTitleKind) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// Claude Code's own running cost for a session (`cost-state` lines). Used as calibration ground truth.
 public struct ClaudeCostState: Sendable, Equatable {
     public struct Model: Sendable, Equatable {
         public var tokens: TokenCounts
         public var costUSD: Double
         public var webSearchRequests: Int
-        /// False when part of the cache write total has no 5m/1h split (older versions, or calls Claude Code
-        /// never split); `tokens` then books that part at 5 minutes.
         public var cacheSplitKnown: Bool
     }
 
@@ -29,32 +26,31 @@ public struct ClaudeCostState: Sendable, Equatable {
 
 public enum ClaudeTranscriptItem: Sendable, Equatable {
     case usage(UsageRecord)
-    /// A typed user prompt. The text is never kept, only that it happened.
     case userPrompt(sessionID: String, at: Date, cwd: String?, gitBranch: String?)
     case title(sessionID: String, title: String, kind: ClaudeTitleKind)
     case prLink(sessionID: String, url: String)
     case costState(ClaudeCostState)
 }
 
-/// Parses Claude Code transcript lines (`~/.claude/projects/<dashed-cwd>/<session>.jsonl`), one line at a time.
-/// Unknown or malformed lines are skipped, never fatal.
 public enum ClaudeTranscriptParser {
     public static func item(from line: Data) -> ClaudeTranscriptItem? {
-        if let type = leadingType(line), isSkipped(type) { return nil }
-        guard let decoded = try? decoder.decode(Line.self, from: line) else { return nil }
-        return decoded.item
+        items(from: line).first
+    }
+
+    public static func items(from line: Data) -> [ClaudeTranscriptItem] {
+        if let type = leadingType(line), isSkipped(type) { return [] }
+        guard let decoded = try? decoder.decode(Line.self, from: line), let item = decoded.item else { return [] }
+        return [item] + decoded.advisorItems
     }
 
     public static func batch<Lines: Sequence>(from lines: Lines) -> ClaudeTranscriptBatch where Lines.Element == Data {
         var batch = ClaudeTranscriptBatch()
         for line in lines {
-            if let item = item(from: line) { batch.add(item) }
+            for item in items(from: line) { batch.add(item) }
         }
         return batch
     }
 
-    /// Known line types that carry nothing for the ledger. Unknown types are decoded and ignored, so a new
-    /// Claude Code version that reorders keys can never hide usage lines.
     static func isSkipped(_ type: String) -> Bool {
         skippedTypes.contains(type) || skippedTypePrefixes.contains { type.hasPrefix($0) }
     }
@@ -67,9 +63,6 @@ public enum ClaudeTranscriptParser {
     private static let decoder = JSONDecoder()
     private static let typePrefix = Array(#"{"type":""#.utf8)
 
-    /// Metadata lines start with `{"type":"…"`, so their kind is known without decoding. That skips the bulky
-    /// `api-request-blob`, `api-request` and `file-history-*` lines, and `last-prompt` (which holds prompt text).
-    /// Message lines start with `{"parentUuid"` and return nil here.
     static func leadingType(_ line: Data) -> String? {
         guard line.starts(with: typePrefix) else { return nil }
         let start = line.startIndex + typePrefix.count
@@ -79,7 +72,6 @@ public enum ClaudeTranscriptParser {
     }
 }
 
-/// Everything learned from a run of transcript lines: usage deduped by call, plus per-session facts.
 public struct ClaudeTranscriptBatch: Sendable, Equatable {
     public struct Session: Sendable, Equatable {
         public var firstAt: Date?
@@ -229,23 +221,28 @@ private struct Line: Decodable {
         guard let message, let usage = message.usage, let id = message.id, !id.isEmpty,
               let model = message.model, model != "<synthetic>",
               let timestamp, let time = Timestamps.parse(timestamp) else { return nil }
-        let created = usage.cacheCreationInputTokens ?? 0
-        var write5m = usage.cacheCreation?.ephemeral5m ?? 0
-        let write1h = usage.cacheCreation?.ephemeral1h ?? 0
-        // Older transcripts have no 5m/1h split; anything unaccounted for was written at the default 5 minute TTL.
-        if created > write5m + write1h { write5m = created - write1h }
-        let tokens = TokenCounts(input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0,
-                                 reasoning: usage.thinkingTokens ?? 0, cacheRead: usage.cacheReadInputTokens ?? 0,
-                                 cacheWrite5m: write5m, cacheWrite1h: write1h)
+        let tokens = usage.tokens
         return .usage(UsageRecord(dedupeKey: "cc:\(id):\(requestId ?? "")", source: .claudeCode, sessionID: sessionID,
                                   timestamp: time, model: model, isSidechain: isSidechain, agentID: agentId,
                                   tokens: tokens, speed: usage.speed, cwd: cwd.flatMap(nonEmpty),
                                   gitBranch: gitBranch.flatMap(nonEmpty)))
     }
 
-    /// Only prompts a person typed: no tool results, meta lines, compaction summaries, subagent prompts
-    /// or system-originated turns (task notifications, peers). Older versions have no `origin`, where
-    /// command echoes and local command output start with `<`.
+    // The iteration index keeps each advisor row's key stable across the line's repeated content blocks.
+    var advisorItems: [ClaudeTranscriptItem] {
+        guard type == "assistant", let sessionId, !sessionId.isEmpty, let message, let id = message.id, !id.isEmpty,
+              let iterations = message.usage?.iterations, let timestamp, let time = Timestamps.parse(timestamp) else {
+            return []
+        }
+        return iterations.enumerated().compactMap { index, iteration in
+            guard iteration.type == "advisor_message", let model = iteration.model, !model.isEmpty else { return nil }
+            return .usage(UsageRecord(dedupeKey: "cc:\(id):\(requestId ?? ""):advisor:\(index)", source: .claudeCode,
+                                      sessionID: sessionId, timestamp: time, model: model, isSidechain: isSidechain,
+                                      agentID: agentId, tokens: iteration.usage.tokens, speed: iteration.usage.speed,
+                                      cwd: cwd.flatMap(nonEmpty), gitBranch: gitBranch.flatMap(nonEmpty)))
+        }
+    }
+
     private func promptItem(_ sessionID: String) -> ClaudeTranscriptItem? {
         guard !isSidechain, !isMeta, !isCompactSummary, !hasToolUseResult,
               let content = message?.content, !content.hasToolResult,
@@ -311,6 +308,32 @@ private struct Usage: Decodable {
     var cacheCreation: CacheCreation?
     var thinkingTokens: Int?
     var speed: String?
+    var iterations: [Iteration]?
+
+    struct Iteration: Decodable {
+        var type: String?
+        var model: String?
+        var usage: Usage
+
+        enum CodingKeys: String, CodingKey { case type, model }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            type = c.lenient(String.self, .type)
+            model = c.lenient(String.self, .model)
+            usage = try Usage(from: decoder, nested: true)
+        }
+    }
+
+    var tokens: TokenCounts {
+        let created = cacheCreationInputTokens ?? 0
+        var write5m = cacheCreation?.ephemeral5m ?? 0
+        let write1h = cacheCreation?.ephemeral1h ?? 0
+        // Older transcripts have no 5m/1h split; anything unaccounted for was written at the default 5 minute TTL.
+        if created > write5m + write1h { write5m = created - write1h }
+        return TokenCounts(input: inputTokens ?? 0, output: outputTokens ?? 0, reasoning: thinkingTokens ?? 0,
+                           cacheRead: cacheReadInputTokens ?? 0, cacheWrite5m: write5m, cacheWrite1h: write1h)
+    }
 
     enum CodingKeys: String, CodingKey {
         case inputTokens = "input_tokens"
@@ -319,7 +342,7 @@ private struct Usage: Decodable {
         case cacheCreationInputTokens = "cache_creation_input_tokens"
         case cacheCreation = "cache_creation"
         case outputTokensDetails = "output_tokens_details"
-        case speed
+        case speed, iterations
     }
 
     struct CacheCreation: Decodable {
@@ -344,7 +367,12 @@ private struct Usage: Decodable {
     }
 
     init(from decoder: any Decoder) throws {
+        try self.init(from: decoder, nested: false)
+    }
+
+    init(from decoder: any Decoder, nested: Bool) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        iterations = nested ? nil : c.lenient([Iteration].self, .iterations)
         inputTokens = c.lenient(Int.self, .inputTokens)
         outputTokens = c.lenient(Int.self, .outputTokens)
         cacheReadInputTokens = c.lenient(Int.self, .cacheReadInputTokens)
@@ -385,7 +413,6 @@ private struct ModelUsage: Decodable {
     }
 }
 
-/// Message content is either a string or an array of blocks. Only block types and text are read.
 private enum Content: Decodable {
     case text(String)
     case blocks([Block])

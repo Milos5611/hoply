@@ -6,36 +6,25 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var vllmName = ""
     public var claudeLimitsEnabled = false
     public var notificationsEnabled = true
-    /// Models whose name contains one of these (case-insensitive) run locally: $0 cost, API-equivalent at `referenceModel`.
     public var localModelPatterns = PricingTable.defaultLocalModelPatterns
     public var referenceModel = PricingTable.defaultReferenceModel
-    /// Claude Code's config directory; empty means `~/.claude`.
     public var claudeConfigDir = ""
-    /// Copilot CLI's home (holds `session-store.db`); empty means `$COPILOT_HOME`, else `~/.copilot`.
     public var copilotHome = ""
-    /// Quiet hours silence every notification. Start and end are minutes after local midnight; the range may
-    /// wrap midnight (the default is 22:00–08:00).
     public var quietHoursEnabled = false
     public var quietHoursStart = 22 * 60
     public var quietHoursEnd = 8 * 60
-    /// Session notifications from these project roots (or cwds, while unresolved) stay silent.
     public var mutedProjectRoots: [String] = []
     public var limitAlertsEnabled = true
     public var localModelAlertsEnabled = true
-    /// Copilot premium requests included per month (300 = Copilot Pro); 0 = not set.
     public var copilotMonthlyAllowance = 300
     public var copilotUSDPerPremiumRequest = 0.04
-    /// sparkDash on the GPU box (GPU, energy, memory); empty = off. Its token lives in the Keychain only.
     public var sparkDashURL = ""
-    /// The spark id in sparkDash's paths, e.g. `zgx-ff24`.
     public var sparkDashName = ""
-    /// Price of a kWh for the GPU's energy cost; 0 = off.
     public var energyPricePerKWh = 0.0
+    public var priceAliases: [String: String] = [:]
 
     public init() {}
 
-    /// Every key is optional and a wrongly typed value falls back to its default, so settings saved by an
-    /// older or newer build keep the rest of their values instead of resetting wholesale.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = AppSettings()
@@ -60,6 +49,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         sparkDashURL = container.lenient(String.self, .sparkDashURL) ?? defaults.sparkDashURL
         sparkDashName = container.lenient(String.self, .sparkDashName) ?? defaults.sparkDashName
         energyPricePerKWh = container.lenient(Double.self, .energyPricePerKWh) ?? defaults.energyPricePerKWh
+        priceAliases = container.lenient([String: String].self, .priceAliases) ?? defaults.priceAliases
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

@@ -2,8 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Owns the menu bar item and the panel popover. Replaces `MenuBarExtra`, which can't be opened or
-/// closed from code and draws its own opaque window.
 final class StatusItemController: NSObject, NSPopoverDelegate {
     private let model: AppModel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

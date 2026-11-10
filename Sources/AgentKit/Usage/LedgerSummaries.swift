@@ -1,17 +1,12 @@
 import Foundation
 
-/// Sums over usage ledger rows. `costUSD` is what was actually spent (local models count as $0);
-/// `apiEquivUSD` is what the same tokens would cost on the API (for Claude the two are equal).
 public struct LedgerTotals: Sendable, Equatable, Hashable {
     public var costUSD: Double
     public var apiEquivUSD: Double
     public var tokens: TokenCounts
     public var calls: Int
-    /// At least one non-local call has an unknown price, so `costUSD` is a lower bound.
     public var hasUnpriced: Bool
-    /// Copilot CLI's own AI units (`total_nano_aiu` ÷ 1e9); 0 for other sources.
     public var aiu: Double
-    /// Copilot CLI premium requests: per user turn, the highest request multiplier among its calls.
     public var premiumRequests: Double
 
     public init(costUSD: Double = 0, apiEquivUSD: Double = 0, tokens: TokenCounts = TokenCounts(),
@@ -53,25 +48,19 @@ public struct ProjectRef: Sendable, Equatable, Hashable, Identifiable {
     public var title: String { displayName ?? name }
 }
 
-/// Selects one project's usage in `StoreReader` queries, including the usage no project claimed.
 public enum ProjectFilter: Sendable, Equatable, Hashable {
     case project(Int64)
-    /// Usage and sessions with no project ("Unassigned").
     case unassigned
 }
 
-/// One row of the Projects page: a project's usage in a date range. `project` is nil for "Unassigned".
 public struct ProjectSummary: Sendable, Equatable, Identifiable {
     public var project: ProjectRef?
     public var totals: LedgerTotals
     public var sessionCount: Int
     public var bySource: [AgentSource: LedgerTotals]
-    /// Largest share first, at most the number asked for.
     public var topModels: [ModelShare]
-    /// First and last usage in the range.
     public var firstActive: Date?
     public var lastActive: Date?
-    /// Distinct non-empty branches and linked worktree roots of the project's sessions in the range, sorted.
     public var branches: [String]
     public var worktrees: [String]
 
@@ -89,7 +78,6 @@ public struct ProjectSummary: Sendable, Equatable, Identifiable {
         self.worktrees = worktrees
     }
 
-    /// The project id as text, or "" for Unassigned (the same ids `SpendSlice` uses).
     public var id: String { project.map { String($0.id) } ?? "" }
     public var filter: ProjectFilter { project.map { .project($0.id) } ?? .unassigned }
     public var title: String { project?.title ?? "Unassigned" }
@@ -118,9 +106,7 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var lastAt: Date?
     public var turns: Int
     public var totals: LedgerTotals
-    /// Largest share first.
     public var models: [ModelShare]
-    /// The agent's own cost figure (Claude Code `cost-state`), for comparison only.
     public var nativeCostUSD: Double?
     public var linesAdded: Int?
     public var linesRemoved: Int?
@@ -154,7 +140,6 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
 
 public struct SessionPage: Sendable, Equatable {
     public var sessions: [SessionSummary]
-    /// All sessions matching the query, across pages.
     public var totalCount: Int
 
     public init(sessions: [SessionSummary], totalCount: Int) {
@@ -169,9 +154,7 @@ public enum SpendSeriesSplit: Sendable, Equatable {
 }
 
 public struct DailySpendPoint: Sendable, Equatable, Identifiable {
-    /// Local midnight of the day.
     public var day: Date
-    /// The model id, or the `AgentSource` raw value, depending on the split.
     public var series: String
     public var totals: LedgerTotals
 
@@ -185,9 +168,7 @@ public struct DailySpendPoint: Sendable, Equatable, Identifiable {
 }
 
 public struct DailySpendSeries: Sendable, Equatable {
-    /// Every day in the range, oldest first, including days with no usage.
     public var days: [Date]
-    /// Only non-empty (day, series) pairs.
     public var points: [DailySpendPoint]
 
     public init(days: [Date], points: [DailySpendPoint]) {
@@ -197,7 +178,6 @@ public struct DailySpendSeries: Sendable, Equatable {
 }
 
 public struct SpendSlice: Sendable, Equatable, Identifiable {
-    /// Project id, model id or source raw value; "" for usage with no project or model.
     public var id: String
     public var label: String
     public var project: ProjectRef?
@@ -227,14 +207,10 @@ public struct SpendOverview: Sendable, Equatable {
     }
 }
 
-/// How reading Copilot CLI's `session-store.db` went on the last poll.
 public enum CopilotStoreStatus: Sendable, Equatable {
-    /// Not polled yet.
     case idle
-    /// No database at the configured Copilot home.
     case notFound
     case ready(schemaVersion: Int?)
-    /// Tables or columns Hoply needs are missing (a Copilot update changed the schema); nothing is read.
     case unsupported(String)
     case failed(String)
 }

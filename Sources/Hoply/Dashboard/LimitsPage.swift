@@ -55,8 +55,6 @@ struct LimitsPage: View {
         }
     }
 
-    /// The ledger's projections; with History off (or before its first read) the live fetch alone, which has no
-    /// burn rate yet.
     private func windows(_ data: LimitsData?, now: Date) -> [LimitsProjection] {
         guard model.settings.claudeLimitsEnabled else { return [] }
         var projections = data?.projections ?? [:]
@@ -84,9 +82,6 @@ enum LimitsStyle {
         }
     }
 
-    /// A model's weekly window takes a hue next to its family's fixed window (Opus purple → indigo, Sonnet
-    /// teal → cyan, Haiku mint); other models get a stable pick from colors that no fixed window, Claude's
-    /// orange or the alert oranges and reds use, so a window keeps its color across launches.
     private static func scopedColor(_ kind: LimitKind) -> Color {
         let scope = kind.scopeName.lowercased()
         if scope.hasPrefix("opus") { return .indigo }
@@ -96,7 +91,6 @@ enum LimitsStyle {
         return palette[Int(FNV1a.hash64(Array(kind.rawValue.utf8)) % UInt64(palette.count))]
     }
 
-    /// "Weekly Sonnet 4.5": the API's own model name while a fetch has it, else rebuilt from the stored kind.
     static func name(_ kind: LimitKind, live: ClaudeLimits?) -> String {
         if !kind.isFixed, let scoped = live?.scoped.first(where: { $0.kind == kind }) {
             return "Weekly \(scoped.displayName)"
@@ -108,7 +102,6 @@ enum LimitsStyle {
         kind == .fiveHour ? "5-hour window" : name(kind, live: live)
     }
 
-    /// The 5-hour and weekly windows count every model; the others count one model's usage.
     static func coversAllModels(_ kind: LimitKind) -> Bool {
         kind == .fiveHour || kind == .sevenDay
     }
@@ -219,7 +212,6 @@ struct LimitWindowCard: View {
             + " Within 5 points either way counts as on pace; the dark tick on the bar and the ring marks the time gone."
     }
 
-    /// Where the bar's projected part ends: 100 when the pace runs into the limit before the reset.
     private var projectedEnd: Double? {
         guard !hasReset else { return nil }
         return projection.limitReachedAt != nil ? 100 : projection.projectedUtilization
@@ -281,8 +273,6 @@ private struct LimitChip: View {
     }
 }
 
-/// Used so far (solid), where the current pace ends at reset (faint), the share of the window gone by (dark
-/// tick), and small ticks at the 80% and 95% alerts. Solid past the dark tick reads as ahead of pace.
 struct ProjectionBar: View {
     let current: Double
     let projected: Double?
@@ -470,8 +460,6 @@ struct LimitChart: View {
         names = Dictionary(uniqueKeysWithValues: kinds.map { ($0, name($0)) })
     }
 
-    /// Weekly windows of different models usually reset together; one dashed rule per reset time, named after
-    /// the weekly window when it is among them.
     private static func mergedWeeklyResets(_ resets: [Reset], name: (LimitKind) -> String) -> [Reset] {
         var clusters: [[Reset]] = []
         for reset in resets.sorted(by: { $0.at < $1.at }) {
@@ -595,7 +583,6 @@ struct LimitChart: View {
         domain.lowerBound.addingTimeInterval(domain.upperBound.timeIntervalSince(domain.lowerBound) / 2)
     }
 
-    /// Each window's latest reading at or before `time`, if it was running then.
     private func rows(at time: Date) -> [LimitTooltip.Row] {
         let reach: TimeInterval = days > 7 ? 2 * 3_600 : 45 * 60
         return kinds.compactMap { kind in
@@ -654,11 +641,8 @@ struct LimitTooltip: View {
 
 // MARK: - Extra usage and spend
 
-/// Pay-as-you-go usage past the plan and a spend budget, as the latest fetch returned them. Extra usage has no
-/// unit in the API, so only its share shows.
 struct PlanExtrasCard: View {
     let limits: ClaudeLimits
-    /// Sections one above the other, to fill the grid cell next to an odd window card.
     var stacked = false
 
     var body: some View {
@@ -741,7 +725,6 @@ private struct PlanExtraSection: View {
     }
 }
 
-/// Top-level keys of Anthropic's response that this build doesn't read, so new windows or fields get noticed.
 private struct UnrecognizedKeysNote: View {
     let keys: [String]
 

@@ -33,7 +33,7 @@ You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 
   same ordering `SessionBoard.ordered` uses.
 - Panel and Dashboard must show the same numbers: both read ledger totals, never their own sums.
 - Notifications and Launch at login only work in the bundled `.app`; guard with `AppModel.isBundledApp`.
-- No comments unless the logic is genuinely complex.
+- Comments: default to none. No `///` doc comments on types, properties, enum cases or functions, and nothing that says what code is or does. Write one only where a reader would otherwise "simplify" the code into a bug (a format quirk, a workaround, an ordering invariant), one or two lines. Before reporting, re-read the comments you added (`git diff -U0 | grep -E '^\+\s*//'`) and remove the rest.
 
 ## Verify
 

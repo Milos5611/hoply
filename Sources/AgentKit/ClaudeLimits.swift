@@ -1,11 +1,7 @@
 import Foundation
 
-/// Claude plan usage windows, as returned by the endpoint Claude Code's /usage screen uses.
-/// Note: `/api/oauth/usage` is undocumented and may change without notice, so everything beyond `five_hour` and
-/// `seven_day` is decoded only when present and well formed, and never fails the decode.
 public struct ClaudeLimits: Sendable, Equatable {
     public struct Window: Sendable, Equatable {
-        /// Percent used, 0…100.
         public var utilization: Double
         public var resetsAt: Date?
 
@@ -15,23 +11,18 @@ public struct ClaudeLimits: Sendable, Equatable {
         }
     }
 
-    /// A weekly window for one model (the Agent SDK's `model_scoped`, or a `weekly_scoped` entry of `limits`).
     public struct ScopedWindow: Sendable, Equatable {
-        /// As the API names it, e.g. "Opus".
         public var displayName: String
         public var kind: LimitKind
         public var window: Window
     }
 
-    /// Pay-as-you-go usage past the plan. The API gives no unit for the amounts, so they stay raw numbers.
     public struct ExtraUsage: Sendable, Equatable {
         public var isEnabled: Bool?
         public var usedCredits: Double?
         public var monthlyLimit: Double?
-        /// As sent, percent 0…100.
         public var utilization: Double?
 
-        /// `utilization`, else used ÷ limit.
         public var percentUsed: Double? {
             if let utilization { return utilization }
             guard let usedCredits, let monthlyLimit, monthlyLimit > 0, usedCredits >= 0 else { return nil }
@@ -39,15 +30,12 @@ public struct ClaudeLimits: Sendable, Equatable {
         }
     }
 
-    /// A spend budget (seen on Enterprise plans through the Agent SDK).
     public struct Spend: Sendable, Equatable {
         public struct Money: Sendable, Equatable {
             public var amountMinor: Double
-            /// As sent; not checked against any list.
             public var currency: String
             public var exponent: Int
 
-            /// `amountMinor ÷ 10^exponent`.
             public var amount: Double { amountMinor / pow(10, Double(exponent)) }
         }
 
@@ -55,7 +43,6 @@ public struct ClaudeLimits: Sendable, Equatable {
         public var used: Money?
         public var limit: Money?
 
-        /// used ÷ limit, only when both are in the same currency and scale.
         public var percentUsed: Double? {
             guard let used, let limit, used.currency == limit.currency, used.exponent == limit.exponent,
                   limit.amountMinor > 0, used.amountMinor >= 0 else { return nil }
@@ -70,7 +57,6 @@ public struct ClaudeLimits: Sendable, Equatable {
     public var scoped: [ScopedWindow] = []
     public var extraUsage: ExtraUsage?
     public var spend: Spend?
-    /// Top-level keys of the response this build doesn't decode, sorted; surface them once to discover new windows.
     public var unrecognizedKeys: [String] = []
 
     static let knownKeys: Set<String> = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet",
@@ -95,8 +81,6 @@ public struct ClaudeLimits: Sendable, Equatable {
         )
     }
 
-    /// Extracts the OAuth access token from the JSON Claude Code keeps in the macOS Keychain
-    /// (service "Claude Code-credentials").
     public static func accessToken(fromCredentials data: Data, now: Date = Date()) throws -> String {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = root["claudeAiOauth"] as? [String: Any],
@@ -115,8 +99,6 @@ public struct ClaudeLimits: Sendable, Equatable {
         return Window(utilization: min(max(utilization, 0), 100), resetsAt: Timestamps.date(dict["resets_at"]))
     }
 
-    /// `model_scoped: [{display_name, utilization, resets_at}]` and `limits: [{kind: "weekly_scoped", percent,
-    /// resets_at, scope: {model: {display_name}}}]`; the first entry of a kind wins.
     static func scopedWindows(modelScoped: Any?, limits: Any?) -> [ScopedWindow] {
         var entries: [(name: String?, utilization: Any?, resetsAt: Any?)] = []
         for case let entry as [String: Any] in (modelScoped as? [Any]) ?? [] {
@@ -156,7 +138,6 @@ public struct ClaudeLimits: Sendable, Equatable {
         return Spend(enabled: bool(dict["enabled"]), used: money(dict["used"]), limit: money(dict["limit"]))
     }
 
-    /// A finite JSON number; booleans don't count.
     static func number(_ raw: Any?) -> Double? {
         guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let value = number.doubleValue
@@ -186,8 +167,6 @@ public enum ClaudeLimitsError: Error, LocalizedError, Equatable {
 }
 
 #if os(macOS)
-/// Reads Claude Code's login from the Keychain via /usr/bin/security (so the Keychain
-/// "Always Allow" grant survives rebuilds of this app) and fetches the plan limits.
 public struct ClaudeLimitsClient: Sendable {
     public init() {}
 

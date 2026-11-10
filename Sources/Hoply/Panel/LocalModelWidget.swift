@@ -27,7 +27,7 @@ struct LocalModelWidget: View {
                        footer: "\(status.snapshot.running) running · \(Self.shortModel(status.snapshot))") {
                 HStack(spacing: 10) {
                     RingGauge(fraction: status.snapshot.kvCacheUsage ?? 0, tint: .orange) {
-                        Text(status.snapshot.kvCacheUsage.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
+                        Text(status.snapshot.kvCacheUsage.map { "\(Format.whole($0 * 100))%" } ?? "–")
                             .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     }
                     .frame(width: 54, height: 54)

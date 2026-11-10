@@ -112,4 +112,14 @@ final class AppSettingsTests: XCTestCase {
         settings.notificationsEnabled = false
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
+
+    func testPriceAliasesDecodeLeniently() throws {
+        var settings = AppSettings()
+        settings.priceAliases = ["claude-opus-4-5": "claude-opus-4-6"]
+        XCTAssertEqual(AppSettings.decode(settings.encoded()).priceAliases, ["claude-opus-4-5": "claude-opus-4-6"])
+        XCTAssertEqual(AppSettings.decode(Data(#"{"port": 5000}"#.utf8)).priceAliases, [:])
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "priceAliases": ["a", "b"]}"#.utf8))
+        XCTAssertEqual(wrong.priceAliases, [:])
+        XCTAssertEqual(wrong.port, 5000)
+    }
 }

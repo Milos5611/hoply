@@ -1,7 +1,5 @@
 import Foundation
 
-/// Fixed number of equal time buckets ending at the current one; the oldest falls off as time moves on.
-/// In-memory only, for panel sparklines until the persisted `samples` series exists.
 public struct RollingSeries: Equatable, Sendable {
     public let bucketLength: TimeInterval
     public private(set) var values: [Double]
@@ -33,7 +31,6 @@ public struct RollingSeries: Equatable, Sendable {
         currentStart += Double(elapsed) * bucketLength
     }
 
-    /// Late samples (OTel arrives in batches) land in the bucket they belong to, if it is still kept.
     private mutating func index(for time: Date) -> Int? {
         advance(to: time)
         guard time < currentStart else { return values.count - 1 }

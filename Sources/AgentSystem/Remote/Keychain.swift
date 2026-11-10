@@ -3,16 +3,12 @@ import Foundation
 import Security
 import Synchronization
 
-/// Where secrets live. The app uses `Keychain`; tests and previews use `InMemorySecretStore`.
 public protocol SecretStore: Sendable {
     func secret(service: String, account: String) throws -> String?
     func setSecret(_ secret: String, service: String, account: String) throws
-    /// Deleting a missing item is not an error.
     func deleteSecret(service: String, account: String) throws
 }
 
-/// Generic-password services, named after the bundle id (`com.coolcraftcoders.hoply`). The account is the
-/// endpoint's host.
 public enum KeychainService {
     public static let sparkDash = "com.coolcraftcoders.hoply.sparkdash"
 }
@@ -22,7 +18,6 @@ extension SecretStore {
         try secret(service: service, account: endpoint.host)
     }
 
-    /// A blank token deletes the saved one.
     public func setBearerToken(_ token: String, for endpoint: RemoteEndpoint,
                                service: String = KeychainService.sparkDash) throws {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -38,8 +33,6 @@ extension SecretStore {
     }
 }
 
-/// Generic passwords in the login keychain. Not the data-protection keychain: that needs a keychain-access-group
-/// entitlement, which an ad-hoc or self-signed build doesn't have.
 public struct Keychain: SecretStore {
     public init() {}
 

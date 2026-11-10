@@ -1,11 +1,7 @@
 import Darwin
 import Foundation
 
-/// A process's working directory through libproc (no root needed for our own processes).
 public enum ProcessDirectory {
-    /// Nil when the process is gone, not ours, or started after `notStartedAfter`: OTLP arrives in delayed
-    /// batches, and a pid reused since the record was written would name the wrong project. Also nil for `/`,
-    /// where GUI apps (an IDE hosting Copilot) run, since it names no project.
     public static func cwd(of pid: Int32, notStartedAfter: Date? = nil) -> String? {
         guard pid > 0 else { return nil }
         if let limit = notStartedAfter, let started = startTime(of: pid), started > limit.addingTimeInterval(1) {

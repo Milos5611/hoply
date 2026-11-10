@@ -2,9 +2,7 @@ import Foundation
 
 public struct HTTPRequest: Sendable, Equatable {
     public var method: String
-    /// Path without the query string.
     public var path: String
-    /// Header names are lowercased.
     public var headers: [String: String]
     public var body: Data
 }
@@ -45,8 +43,6 @@ public struct HTTPResponse: Sendable, Equatable {
     }
 }
 
-/// Incremental HTTP/1.1 request parser. Supports Content-Length and chunked bodies
-/// (the official OpenTelemetry JS exporters send chunked bodies with no Content-Length).
 public enum HTTPRequestParser {
     public enum Result: Equatable {
         case incomplete(expectsContinue: Bool)
@@ -116,7 +112,6 @@ public enum HTTPRequestParser {
             guard let size = Int(hex, radix: 16), size >= 0 else { return .invalid("Bad chunk size") }
             index = lineEnd + 2
             if size == 0 {
-                // Optional trailers, then an empty line.
                 guard let end = find(bytes, [13, 10], from: index) else { return .incomplete }
                 if end == index { return .complete(body) }
                 return find(bytes, [13, 10, 13, 10], from: index) == nil ? .incomplete : .complete(body)

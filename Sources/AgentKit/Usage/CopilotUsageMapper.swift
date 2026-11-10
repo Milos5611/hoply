@@ -1,13 +1,11 @@
 import Foundation
 
-/// One `assistant_usage_events` row from Copilot CLI's `session-store.db`.
 public struct CopilotUsageEvent: Sendable, Equatable {
     public var id: Int64
     public var sessionID: String
     public var turnIndex: Int?
     public var agentID: String?
     public var model: String?
-    /// Copilot's `input_tokens` includes cache reads and cache writes.
     public var inputTokens: Int
     public var outputTokens: Int
     public var cacheReadTokens: Int
@@ -39,7 +37,6 @@ public struct CopilotUsageEvent: Sendable, Equatable {
     }
 }
 
-/// One `sessions` row from Copilot CLI's `session-store.db`, with its count of `turns` rows.
 public struct CopilotSession: Sendable, Equatable {
     public var id: String
     public var cwd: String?
@@ -61,13 +58,9 @@ public struct CopilotSession: Sendable, Equatable {
     }
 }
 
-/// Turns Copilot CLI's own usage rows into ledger rows. Copilot prices every call itself in nano-AIU, and
-/// 1 AIU is $0.01 at API list price (Haiku 4.5 costs 100 / 500 AIU per 1M tokens, i.e. $1 / $5), so its figure
-/// is used as both the cost and the API-equivalent.
 public enum CopilotUsageMapper {
     public static let nanoAIUPerAIU = 1e9
     public static let usdPerAIU = 0.01
-    /// Copilot's summaries are generated, like Claude Code's AI titles.
     public static let titleRank = 2
 
     public static func batch(events: [CopilotUsageEvent], sessions: [String: CopilotSession]) -> LedgerBatch {
@@ -80,7 +73,6 @@ public enum CopilotUsageMapper {
         return LedgerBatch(usage: usage, sessions: updates)
     }
 
-    /// Nil when the row has no usable time at all, since a ledger row must have one.
     public static func usage(_ event: CopilotUsageEvent, session: CopilotSession?) -> UsageRecord? {
         guard let timestamp = date(event.createdAt) ?? date(session?.createdAt) else { return nil }
         let details = tokenDetails(event.tokenDetailsJSON)
@@ -101,7 +93,6 @@ public enum CopilotUsageMapper {
             cwd: nonEmpty(session?.cwd), gitBranch: nonEmpty(session?.branch))
     }
 
-    /// `usage` widens first/last activity beyond the session row's own timestamps.
     public static func sessionUpdate(_ session: CopilotSession, usage: [UsageRecord] = []) -> SessionUpdate {
         let times = usage.map(\.timestamp)
         let created = date(session.createdAt)
@@ -115,20 +106,17 @@ public enum CopilotUsageMapper {
                              titleRank: title == nil ? 0 : titleRank, prompts: session.turns, resetsTurns: true)
     }
 
-    /// The first line of the summary. Empty summaries and harness-injected text (`<…>`) never name a session.
     public static func title(_ summary: String?) -> String? {
         guard let line = summary?.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespaces),
               !line.isEmpty, !line.hasPrefix("<") else { return nil }
         return line
     }
 
-    /// ISO 8601 (`2026-09-17T17:45:32.462Z`) or SQLite's `datetime('now')` (`2026-09-17 17:45:32`, UTC).
     public static func date(_ text: String?) -> Date? {
         guard let text = text?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
         return Timestamps.parse(text) ?? Timestamps.parse(text + "Z")
     }
 
-    /// `tokenType` → `tokenCount` from `token_details_json`; empty when absent or malformed.
     static func tokenDetails(_ json: String?) -> [String: Int] {
         guard let json, let data = json.data(using: .utf8),
               let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [:] }

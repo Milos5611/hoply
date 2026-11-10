@@ -2,9 +2,6 @@ import AgentKit
 import AppKit
 import SwiftUI
 
-/// `Hoply --snapshot <dir>` renders the panel and the Dashboard pages with `PreviewData` in light and dark
-/// mode to PNGs, so UI work can be checked without Screen Recording permission. Glass and vibrancy are
-/// composited by the window server and don't appear; the window background stands in for them.
 enum Snapshot {
     static func render(to directory: URL) {
         do {
@@ -26,9 +23,15 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_300),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_520),
                            model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
+                var allPriced = PreviewData.history(now: now)
+                allPriced.unpricedModels = []
+                model.history.show(allPriced)
+                try render(PricingSettings(aliases: .constant([:])).font(.system(size: 12.5)).padding(12).frame(width: 448),
+                           model: model, appearance: looks,
+                           to: directory.appendingPathComponent("panel-settings-pricing-empty-\(name).png"))
 
                 for page in DashboardPage.allCases {
                     var preview = PreviewData.history(now: now)
@@ -36,6 +39,8 @@ enum Snapshot {
                     model.history.show(preview, page: page)
                     let height: CGFloat = switch page {
                     case .projects: 880
+                    case .sessions: 900
+                    case .spending: 1_420
                     case .limits: 1_200
                     case .localModel: 1_320
                     default: 760

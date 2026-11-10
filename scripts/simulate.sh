@@ -66,6 +66,23 @@ step "Copilot in the IDE made two model calls (Unassigned: no hoply.cwd)"
 post /hooks/claude-code "{\"hook_event_name\":\"Notification\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\"}"
 step "Claude Code needs permission"
 
+claude_hook() { # event name, extra JSON fields (start with a comma)
+  post /hooks/claude-code "{\"hook_event_name\":\"$1\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\"${2:-}}"
+}
+claude_hook PostToolUse ',"tool_name":"Bash"'
+claude_hook SubagentStart ',"agent_id":"sim-agent-1","agent_type":"Explore"'
+claude_hook SubagentStart ',"agent_id":"sim-agent-2","agent_type":"general-purpose"'
+claude_hook PreToolUse ',"tool_name":"Grep","agent_id":"sim-agent-1","agent_type":"Explore"'
+step "Claude Code runs two subagents"
+
+claude_hook SubagentStop ',"agent_id":"sim-agent-1","agent_type":"Explore"'
+claude_hook PreToolUse ',"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Rotate refresh tokens on every use?","header":"Rotation","options":[{"label":"Yes"},{"label":"No"}]}]}'
+step "Claude Code asks a question (Input), one subagent still working"
+
+claude_hook PostToolUse ',"tool_name":"AskUserQuestion"'
+claude_hook SubagentStop ',"agent_id":"sim-agent-2","agent_type":"general-purpose"'
+step "Claude Code got its answer"
+
 post /hooks/copilot-cli/agentStop "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"stopReason\":\"end_turn\"}"
 step "Copilot CLI finished its turn"
 
