@@ -66,7 +66,7 @@ struct SpendChart: View {
         .chartXScale(domain: data.domain)
         .chartXSelection(value: $selection)
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: strideDays)) { _ in
+            AxisMarks(values: Self.labelDays(data.days, every: strideDays)) { _ in
                 AxisGridLine()
                 AxisValueLabel(format: .dateTime.month(.abbreviated).day(), centered: false)
             }
@@ -89,6 +89,13 @@ struct SpendChart: View {
     private func tooltipSide(for day: Date) -> AnnotationPosition {
         let index = data.days.firstIndex(of: day) ?? 0
         return index < data.days.count / 2 ? .trailing : .leading
+    }
+
+    /// Every `step`-th day, counted back from three days before the last, so in a narrow card the last
+    /// label never runs past the chart's right edge.
+    static func labelDays(_ days: [Date], every step: Int) -> [Date] {
+        guard step > 1 else { return days }
+        return days.enumerated().filter { index, _ in (days.count - 1 - index) % step == 3 % step }.map(\.element)
     }
 
     private var strideDays: Int {

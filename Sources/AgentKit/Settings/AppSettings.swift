@@ -25,6 +25,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Copilot premium requests included per month (300 = Copilot Pro); 0 = not set.
     public var copilotMonthlyAllowance = 300
     public var copilotUSDPerPremiumRequest = 0.04
+    /// sparkDash on the GPU box (GPU, energy, memory); empty = off. Its token lives in the Keychain only.
+    public var sparkDashURL = ""
+    /// The spark id in sparkDash's paths, e.g. `zgx-ff24`.
+    public var sparkDashName = ""
+    /// Price of a kWh for the GPU's energy cost; 0 = off.
+    public var energyPricePerKWh = 0.0
 
     public init() {}
 
@@ -51,6 +57,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         copilotMonthlyAllowance = container.lenient(Int.self, .copilotMonthlyAllowance) ?? defaults.copilotMonthlyAllowance
         copilotUSDPerPremiumRequest = container.lenient(Double.self, .copilotUSDPerPremiumRequest)
             ?? defaults.copilotUSDPerPremiumRequest
+        sparkDashURL = container.lenient(String.self, .sparkDashURL) ?? defaults.sparkDashURL
+        sparkDashName = container.lenient(String.self, .sparkDashName) ?? defaults.sparkDashName
+        energyPricePerKWh = container.lenient(Double.self, .energyPricePerKWh) ?? defaults.energyPricePerKWh
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

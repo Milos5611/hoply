@@ -20,11 +20,19 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         model.history.setDashboardVisible(true)
+        model.setDashboardOnScreen(true)
     }
 
     func windowWillClose(_ notification: Notification) {
         model.history.setDashboardVisible(false)
+        model.setDashboardOnScreen(false)
         NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Minimized or fully covered, the window no longer needs the model server's fast polling.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window, window.isVisible else { return }
+        model.setDashboardOnScreen(window.occlusionState.contains(.visible))
     }
 
     private func makeWindow() -> NSWindow {

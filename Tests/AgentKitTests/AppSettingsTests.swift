@@ -76,6 +76,30 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(changed.encoded()), changed)
     }
 
+    func testSparkDashKeysDecodeLeniently() {
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertEqual(older.sparkDashURL, "")
+        XCTAssertEqual(older.sparkDashName, "")
+        XCTAssertEqual(older.energyPricePerKWh, 0)
+        XCTAssertEqual(older.vllmName, "ZGX")
+
+        let wrong = #"{"sparkDashURL":5555,"sparkDashName":["zgx"],"energyPricePerKWh":"0.30","vllmName":"ZGX"}"#
+        let settings = AppSettings.decode(Data(wrong.utf8))
+        XCTAssertEqual(settings.sparkDashURL, "")
+        XCTAssertEqual(settings.sparkDashName, "")
+        XCTAssertEqual(settings.energyPricePerKWh, 0)
+        XCTAssertEqual(settings.vllmName, "ZGX")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"energyPricePerKWh":1}"#.utf8)).energyPricePerKWh, 1)
+
+        var changed = AppSettings()
+        changed.sparkDashURL = "http://192.168.40.141:5555"
+        changed.sparkDashName = "zgx-ff24"
+        changed.energyPricePerKWh = 0.31
+        XCTAssertEqual(AppSettings.decode(changed.encoded()), changed)
+        XCTAssertFalse(String(decoding: changed.encoded() ?? Data(), as: UTF8.self).lowercased().contains("token"),
+                       "the token is never a setting")
+    }
+
     func testGarbageOrMissingDataGivesDefaults() {
         XCTAssertEqual(AppSettings.decode(nil), AppSettings())
         XCTAssertEqual(AppSettings.decode(Data("[1,2".utf8)), AppSettings())

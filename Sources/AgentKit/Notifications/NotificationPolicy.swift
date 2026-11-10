@@ -327,8 +327,7 @@ private extension LimitKind {
         switch self {
         case .fiveHour: return "5-hour limit"
         case .sevenDay: return "weekly limit"
-        case .sevenDayOpus: return "weekly Opus limit"
-        case .sevenDaySonnet: return "weekly Sonnet limit"
+        default: return "weekly \(scopeName) limit"
         }
     }
 }

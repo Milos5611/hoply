@@ -16,8 +16,12 @@ struct ClaudeLimitsWidget: View {
         } else {
             Button { model.openDashboard(.limits) } label: { tile }
                 .buttonStyle(.plain)
-                .help("Open Limits in the Dashboard")
+                .help(help)
         }
+    }
+
+    private var fiveHourPace: LimitPace? {
+        model.claudeLimits?.fiveHour?.pace(.fiveHour, at: model.claudeLimitsFetchedAt ?? Date())
     }
 
     @ViewBuilder
@@ -27,7 +31,8 @@ struct ClaudeLimitsWidget: View {
                        footer: model.claudeLimitsError ?? Format.resetTime(fiveHour.resetsAt),
                        footerColor: model.claudeLimitsError == nil ? .secondary : .red) {
                 HStack(spacing: 10) {
-                    RingGauge(fraction: fiveHour.utilization / 100, tint: Self.tint(fiveHour.utilization)) {
+                    RingGauge(fraction: fiveHour.utilization / 100, tint: Self.tint(fiveHour.utilization),
+                              marker: fiveHourPace.map { $0.elapsedPercent / 100 }) {
                         Text(Self.percent(fiveHour.utilization))
                             .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     }
@@ -53,6 +58,17 @@ struct ClaudeLimitsWidget: View {
         }
     }
 
+    private var help: String {
+        guard let fiveHour = model.claudeLimits?.fiveHour else { return "Open Limits in the Dashboard" }
+        var lines = ["5-hour window: \(Self.percent(fiveHour.utilization)) used"]
+        if let pace = fiveHourPace {
+            lines[0] += ", \(Self.percent(pace.elapsedPercent)) of the time gone"
+            lines.append(Self.paceSentence(pace) + " The tick on the ring marks the time gone.")
+        }
+        lines.append("Open Limits in the Dashboard")
+        return lines.joined(separator: "\n")
+    }
+
     static func percent(_ utilization: Double) -> String {
         "\(Int(utilization.rounded()))%"
     }
@@ -61,5 +77,15 @@ struct ClaudeLimitsWidget: View {
         if utilization >= 90 { return .red }
         if utilization >= 70 { return .orange }
         return .blue
+    }
+
+    /// "Ahead of pace by 14 points." and the like; the band uses ±5 points.
+    static func paceSentence(_ pace: LimitPace) -> String {
+        let points = Int(abs(pace.delta).rounded())
+        switch pace.band {
+        case .ahead: return "Ahead of an even pace by \(points) points."
+        case .under: return "Under an even pace by \(points) points."
+        case .onTrack: return "On an even pace."
+        }
     }
 }

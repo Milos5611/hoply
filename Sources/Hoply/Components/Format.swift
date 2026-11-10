@@ -44,6 +44,32 @@ enum Format {
         return "\(premiumRequests(totals.premiumRequests)) \(compact ? "req" : "premium req") · \(aiu(totals.aiu)) AIU"
     }
 
+    /// An amount in the currency the API named, with as many decimals as its minor unit has.
+    static func money(_ money: ClaudeLimits.Spend.Money) -> String {
+        money.amount.formatted(.currency(code: money.currency)
+            .precision(.fractionLength(min(money.exponent, 4)))
+            .locale(Locale(identifier: "en_US")))
+    }
+
+    /// "vLLM" or "tensorfold", as the engines name themselves.
+    static func engine(_ engine: String) -> String {
+        engine == "vllm" ? "vLLM" : engine
+    }
+
+    /// The served model without its organization prefix ("Qwen/Qwen3-Coder" → "Qwen3-Coder").
+    static func servedModel(_ name: String) -> String {
+        name.split(separator: "/").last.map(String.init) ?? name
+    }
+
+    /// Thousands as "k", like token counts, for figures that aren't tokens (tok/s).
+    static func compact(_ value: Double) -> String {
+        switch value {
+        case ..<100: return String(format: "%.1f", value)
+        case ..<10_000: return count(Int(value.rounded()))
+        default: return String(format: "%.1fk", value / 1_000)
+        }
+    }
+
     static func premiumRequests(_ value: Double) -> String {
         if value >= 1_000 { return count(Int(value.rounded())) }
         let rounded = (value * 10).rounded() / 10

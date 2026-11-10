@@ -62,16 +62,45 @@ final class LimitSamplesTests: XCTestCase {
         XCTAssertEqual(latest, [.fiveHour: sample(35, at: 3700), .sevenDay: sample(31, .sevenDay, at: 1200, resets: 86_400)])
     }
 
-    func testUnknownKindsAreSkipped() async throws {
+    func testScopedKindsDecodeAndUnknownKindsAreSkipped() async throws {
         let (store, reader, path) = try open(try TempDirectory())
         try await store.recordLimitSamples([sample(10, at: 0)])
         let raw = try SQLiteConnection(path: path)
         try raw.run("INSERT INTO limit_samples (kind, ts, utilization, resets_at) VALUES ('seven_day_haiku', ?, 5, NULL)",
                     [t0.timeIntervalSince1970 + 60])
+        try raw.run("INSERT INTO limit_samples (kind, ts, utilization, resets_at) VALUES ('monthly_spend', ?, 9, NULL)",
+                    [t0.timeIntervalSince1970 + 120])
+        let haiku = try XCTUnwrap(LimitKind(rawValue: "seven_day_haiku"))
         let all = try await reader.limitSamples(in: allTime)
-        XCTAssertEqual(all.map(\.kind), [.fiveHour])
+        XCTAssertEqual(all.map(\.kind), [.fiveHour, haiku], "a weekly scoped kind decodes; a non-window kind is skipped")
         let latest = try await reader.latestLimitSamples()
-        XCTAssertEqual(Array(latest.keys), [.fiveHour])
+        XCTAssertEqual(Set(latest.keys), [.fiveHour, haiku])
+    }
+
+    func testScopedWindowsPersistAndProject() async throws {
+        let directory = try TempDirectory()
+        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
+                                                                   claudeConfigDirectory: directory.path("claude"),
+                                                                   copilotHome: directory.path("copilot"),
+                                                                   pricingOverridesURL: nil, watchForChanges: false))
+        let now = Date()
+        func fetch(_ fable: Double) throws -> ClaudeLimits {
+            try ClaudeLimits.decode(Data("""
+                {"five_hour":{"utilization":5,"resets_at":"2099-01-01T00:00:00Z"},
+                 "model_scoped":[{"display_name":"Fable","utilization":\(fable),"resets_at":"2099-01-05T00:00:00Z"}]}
+                """.utf8))
+        }
+        let fable = try XCTUnwrap(LimitKind.scoped(displayName: "Fable"))
+        try await ledger.recordLimits(try fetch(20), at: now.addingTimeInterval(-7200))
+        let previous = try await ledger.recordLimits(try fetch(30), at: now)
+        XCTAssertEqual(previous[fable]?.utilization, 20)
+
+        let history = try await ledger.limitHistory(days: 1, now: now)
+        XCTAssertEqual(history.filter { $0.kind == fable }.map(\.utilization), [20, 30])
+        let projections = try await ledger.limitProjections(now: now)
+        let projection = try XCTUnwrap(projections[fable])
+        XCTAssertEqual(try XCTUnwrap(projection.burnRatePerHour), 5, accuracy: 1e-9)
+        XCTAssertEqual(projection.windowStart, Timestamps.parse("2098-12-29T00:00:00Z"))
     }
 
     func testLedgerRecordsFetchesAndProjects() async throws {

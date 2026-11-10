@@ -76,7 +76,11 @@ public struct VLLMSnapshot: Sendable, Equatable {
     /// Fraction 0…1 of KV cache in use.
     public var kvCacheUsage: Double?
     public var promptTokensTotal: Double
+    /// The engine's counter plus tokens held by live streams; moves while decoding, so rates use it. It can dip
+    /// when a stream is cancelled, so it is not a counter.
     public var generationTokensTotal: Double
+    /// The engine's own monotonic counter (tensorfold: finished requests only); a drop means a restart.
+    public var generationTokensCounter: Double
     public var takenAt: Date
 
     public static let engines = ["vllm", "tensorfold"]
@@ -108,8 +112,8 @@ public struct VLLMSnapshot: Sendable, Equatable {
         let model = samples.first { $0.name.hasPrefix(engine + ":") && $0.labels["model_name"] != nil }?.labels["model_name"]
         // tensorfold counts generated tokens only when a request finishes; adding the tokens held by live
         // streams turns that into a counter that moves while decoding, so tok/s isn't zero until the end.
-        let generated = (sum(["generation_tokens_total", "generation_tokens"]) ?? 0)
-            + (sum(["generation_tokens_running"]) ?? 0)
+        let counter = sum(["generation_tokens_total", "generation_tokens"]) ?? 0
+        let generated = counter + (sum(["generation_tokens_running"]) ?? 0)
         return VLLMSnapshot(
             engine: engine,
             model: model,
@@ -118,6 +122,7 @@ public struct VLLMSnapshot: Sendable, Equatable {
             kvCacheUsage: maximum(["kv_cache_usage_perc", "gpu_cache_usage_perc"]),
             promptTokensTotal: sum(["prompt_tokens_total", "prompt_tokens"]) ?? 0,
             generationTokensTotal: generated,
+            generationTokensCounter: counter,
             takenAt: time
         )
     }

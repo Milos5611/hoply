@@ -12,7 +12,10 @@ final class AppModel {
     private(set) var serverStatus: HubServer.Status = .stopped
     private(set) var vllm: VLLMStatus?
     private(set) var vllmError: String?
+    private(set) var vllmLastSeen: Date?
     private(set) var claudeLimits: ClaudeLimits?
+    /// When `claudeLimits` was read; its pace compares utilization with the window's elapsed share at this time.
+    private(set) var claudeLimitsFetchedAt: Date?
     private(set) var claudeLimitsError: String?
     private(set) var lastNote: String?
     private(set) var settings: AppSettings
@@ -25,6 +28,7 @@ final class AppModel {
     let history = History()
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
+    @ObservationIgnored var settingsOpener: (() -> Void)?
 
     @ObservationIgnored private var board = SessionBoard()
     @ObservationIgnored private let server = HubServer()
@@ -35,6 +39,16 @@ final class AppModel {
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var resolvingCwds: Set<String> = []
     @ObservationIgnored private var unresolvedCwds: Set<String> = []
+    @ObservationIgnored private var modelLoop: Task<Void, Never>?
+    @ObservationIgnored private var isPollingModel = false
+    @ObservationIgnored private var pollModelAgain = false
+    @ObservationIgnored private var lastModelPoll: Date?
+    @ObservationIgnored private var modelOfflineSince: Date?
+    @ObservationIgnored private var panelOnScreen = false
+    @ObservationIgnored private var dashboardOnScreen = false
+
+    static let fastModelPoll: Duration = .seconds(5)
+    static let slowModelPoll: Duration = .seconds(30)
 
     var attentionCount: Int { sessions.filter { $0.state.needsAttention }.count }
     var workingCount: Int { sessions.filter { $0.state == .working }.count }
@@ -72,6 +86,7 @@ final class AppModel {
         }
         server.start(port: UInt16(clamping: settings.port))
         history.open(LedgerConfiguration(settings: settings))
+        Task { [weak self] in await self?.seedThroughput() }
 
         if settings.notificationsEnabled { notifier.requestAuthorization() }
         refreshLaunchAtLogin()
@@ -82,12 +97,7 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(5))
             }
         })
-        loops.append(Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.pollVLLM()
-                try? await Task.sleep(for: .seconds(5))
-            }
-        })
+        startModelLoop()
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshClaudeLimits()
@@ -147,6 +157,10 @@ final class AppModel {
         dashboardOpener?(page)
     }
 
+    func openSettings() {
+        settingsOpener?()
+    }
+
     private func tick() {
         let now = Date()
         for change in board.tick(now: now) {
@@ -175,7 +189,8 @@ final class AppModel {
         for request in actions.post { notifier.post(request) }
     }
 
-    /// A clicked notification: a session opens on the Sessions page, a limit alert on the Limits page.
+    /// A clicked notification: a session opens on the Sessions page, a limit alert on the Limits page, a model
+    /// server alert on the Local model page.
     func open(_ target: NotificationTarget) {
         switch target {
         case .session(let key):
@@ -184,7 +199,7 @@ final class AppModel {
         case .limits:
             openDashboard(.limits)
         case .localModel:
-            panelOpener?()
+            openDashboard(.localModel)
         }
     }
 
@@ -210,10 +225,83 @@ final class AppModel {
 
     // MARK: - Local model (vLLM)
 
+    /// The panel popover or the Dashboard window is on screen: the model server is polled every 5 s then,
+    /// every 30 s otherwise, and at once when either appears.
+    func setPanelOnScreen(_ visible: Bool) {
+        panelOnScreen = visible
+        if visible { modelServerWatched() }
+    }
+
+    func setDashboardOnScreen(_ visible: Bool) {
+        dashboardOnScreen = visible
+        if visible { modelServerWatched() }
+    }
+
+    private func modelServerWatched() {
+        guard Date().timeIntervalSince(lastModelPoll ?? .distantPast) >= 4 else { return }
+        pollModelServerNow()
+    }
+
+    /// Restarts the sleeping loop so the poll happens now. A poll already running is never cancelled (that
+    /// would read as offline); the loop polls again right after it instead.
+    private func pollModelServerNow() {
+        if isPollingModel {
+            pollModelAgain = true
+        } else {
+            startModelLoop()
+        }
+    }
+
+    private func startModelLoop() {
+        modelLoop?.cancel()
+        modelLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollVLLM()
+                guard let delay = self?.nextModelPollDelay() else { return }
+                if delay > .zero { try? await Task.sleep(for: delay) }
+            }
+        }
+    }
+
+    private func nextModelPollDelay() -> Duration {
+        if pollModelAgain {
+            pollModelAgain = false
+            return .zero
+        }
+        if panelOnScreen || dashboardOnScreen { return Self.fastModelPoll }
+        // The offline alert counts from the first failed poll; confirming the outage at the fast pace keeps it
+        // firing two minutes after that miss instead of up to 30 s later, and shows a recovery sooner.
+        if let since = modelOfflineSince,
+           Date().timeIntervalSince(since) < NotificationPolicy.offlineAlertAfter + 10 {
+            return Self.fastModelPoll
+        }
+        return Self.slowModelPoll
+    }
+
     func pollVLLM() async {
+        isPollingModel = true
         await fetchVLLM()
+        isPollingModel = false
+        let now = Date()
+        lastModelPoll = now
+        let configured = !settings.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        modelOfflineSince = configured && !vllmOnline ? (modelOfflineSince ?? now) : nil
         perform(policy.localModelChecked(server: settings.vllmBaseURL, name: settings.vllmName, online: vllmOnline,
-                                         now: Date()))
+                                         now: now))
+    }
+
+    /// The panel sparkline is in memory; after a restart it starts from the stored per-minute peaks.
+    private func seedThroughput() async {
+        let now = Date()
+        let span = throughput.bucketLength * Double(throughput.values.count)
+        guard let recent = await history.recentModelSamples(since: now.addingTimeInterval(-span)) else { return }
+        for bucket in recent[ModelServerSeries.generationTokensPerSecond] ?? [] {
+            guard let peak = bucket.max else { continue }
+            for offset in stride(from: 0, to: TimeInterval(bucket.resolution), by: throughput.bucketLength) {
+                let time = bucket.startDate.addingTimeInterval(offset)
+                if time <= now { throughput.recordMax(peak, at: time) }
+            }
+        }
     }
 
     private func fetchVLLM() async {
@@ -222,6 +310,7 @@ final class AppModel {
             vllm = nil
             vllmError = nil
             lastSnapshot = nil
+            vllmLastSeen = nil
             return
         }
         guard let base = URL(string: raw) else {
@@ -246,6 +335,8 @@ final class AppModel {
             if let rate = status.generationTokensPerSecond { throughput.recordMax(rate, at: snapshot.takenAt) }
             lastSnapshot = snapshot
             vllmError = nil
+            vllmLastSeen = snapshot.takenAt
+            history.recordModelSamples(status)
         } catch {
             vllmError = "Offline"
             lastSnapshot = nil
@@ -265,6 +356,7 @@ final class AppModel {
             return
         }
         claudeLimits = limits
+        claudeLimitsFetchedAt = fetched
         claudeLimitsError = nil
         // `previous` must come from this write: reading the latest samples afterwards returns this fetch itself.
         let previous = await history.recordLimits(limits, at: fetched)
@@ -298,13 +390,17 @@ final class AppModel {
         if updated.vllmBaseURL != old.vllmBaseURL {
             lastSnapshot = nil
             vllm = nil
-            Task { await pollVLLM() }
+            vllmLastSeen = nil
+            modelOfflineSince = nil
+            history.resetModelCounters()
+            pollModelServerNow()
         }
         if updated.claudeLimitsEnabled && !old.claudeLimitsEnabled {
             Task { await refreshClaudeLimits() }
         }
         if !updated.claudeLimitsEnabled {
             claudeLimits = nil
+            claudeLimitsFetchedAt = nil
             claudeLimitsError = nil
         }
         if updated.notificationsEnabled && !old.notificationsEnabled {
@@ -353,6 +449,8 @@ extension AppModel {
         model.throughput = PreviewData.throughput(now: now)
         model.vllm = PreviewData.vllm(now: now)
         model.claudeLimits = PreviewData.claudeLimits(now: now)
+        model.claudeLimitsFetchedAt = now
+        model.vllmLastSeen = now
         model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
         model.history.show(PreviewData.history(now: now))
         model.projectsByCwd = PreviewData.projectsByCwd
@@ -362,5 +460,12 @@ extension AppModel {
     /// Snapshots only: other settings, without saving them or restarting anything.
     func showPreview(settings: AppSettings) {
         self.settings = settings
+    }
+
+    /// Snapshots only: a model server state (online with `vllm`, or offline since `lastSeen`).
+    func showPreview(vllm: VLLMStatus?, error: String?, lastSeen: Date?) {
+        self.vllm = vllm
+        vllmError = error
+        vllmLastSeen = lastSeen
     }
 }

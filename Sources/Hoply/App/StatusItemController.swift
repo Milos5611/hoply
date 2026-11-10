@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Owns the menu bar item and the panel popover. Replaces `MenuBarExtra`, which can't be opened or
 /// closed from code and draws its own opaque window.
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSPopoverDelegate {
     private let model: AppModel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
@@ -27,8 +27,13 @@ final class StatusItemController: NSObject {
             self?.model.showingSettings = false
             self?.showPanel()
         }
+        model.settingsOpener = { [weak self] in
+            self?.model.showingSettings = true
+            self?.showPanel()
+        }
         popover.behavior = Self.holdOpen ? .applicationDefined : .transient
         popover.animates = true
+        popover.delegate = self
         popover.contentSize = NSSize(width: 448, height: 600)
         popover.contentViewController = NSHostingController(rootView: PanelView().environment(model))
         if let button = statusItem.button {
@@ -59,6 +64,14 @@ final class StatusItemController: NSObject {
     func openDashboard(_ page: DashboardPage? = nil) {
         if popover.isShown { popover.performClose(nil) }
         dashboard.show(page)
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        model.setPanelOnScreen(true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        model.setPanelOnScreen(false)
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {

@@ -52,6 +52,21 @@ struct LimitsData: Equatable {
     var copilotMonth: LedgerTotals
 }
 
+struct LocalModelData: Equatable {
+    var range: LocalModelRange
+    /// The speed and KV cache charts' span.
+    var interval: DateInterval
+    var generation: [SampleBucket]
+    var kvCache: [SampleBucket]
+    var tokenDays: [ModelTokenDay]
+    /// Local-model usage in the ledger by source; `apiEquivUSD` is what it saved vs the API.
+    var saved: DailySpendSeries
+    /// The end of the latest bucket with a reading, for "last seen" while the server is offline.
+    var lastSeen: Date?
+
+    var savedTotal: LedgerTotals { saved.points.reduce(.zero) { $0 + $1.totals } }
+}
+
 /// Everything the UI reads from the usage ledger: ingest progress, totals for the live sessions and today,
 /// and the Dashboard pages. The panel and the Dashboard both read these ledger totals, so they always agree.
 @MainActor
@@ -88,6 +103,8 @@ final class History {
     private(set) var selectedProjectSession: SessionSummary?
     private(set) var limits: LimitsData?
     private(set) var limitsDays = 7
+    private(set) var localModel: LocalModelData?
+    private(set) var localModelRange: LocalModelRange = .day
 
     static let pageSize = 50
     static let limitDayChoices = [7, 30]
@@ -108,6 +125,8 @@ final class History {
     @ObservationIgnored private var projectAutoSelect = true
     @ObservationIgnored private var pendingUsage: [UsageRecord] = []
     @ObservationIgnored private var recordTask: Task<Void, Never>?
+    @ObservationIgnored private var sampleTask: Task<Void, Never>?
+    @ObservationIgnored private var localModelLoadedAt: Date?
     /// A session to select on the Sessions page whatever its range (a notification click).
     @ObservationIgnored private var requestedSession: SessionKey?
     /// The Copilot plan the Limits page measures against.
@@ -236,10 +255,7 @@ final class History {
     /// so it is compared with what an earlier run stored and a restart doesn't repeat an alert. nil when History
     /// is off or the write failed.
     func recordLimits(_ limits: ClaudeLimits, at time: Date) async -> [LimitKind: LimitSample]? {
-        while status == .opening, let task = openTask {
-            await task.value
-            if task == openTask, status == .opening { break }
-        }
+        await waitForOpen()
         guard let ledger else { return nil }
         do {
             let previous = try await ledger.recordLimits(limits, at: time)
@@ -248,6 +264,52 @@ final class History {
         } catch {
             note = "Recording limits failed: \(Self.describe(error))"
             return nil
+        }
+    }
+
+    /// One successful model-server poll into the `samples` series. Dropped while no ledger is open: the Store
+    /// re-seeds counter baselines from what it stored, so a missed poll costs nothing but its gauge readings.
+    /// Writes are chained, because a counter reading that lands after a later one is skipped.
+    /// Chained behind pending sample writes, so the old server's last reading still lands on its baseline.
+    func resetModelCounters() {
+        guard let ledger else { return }
+        let previous = sampleTask
+        sampleTask = Task {
+            await previous?.value
+            await ledger.resetModelCounters()
+        }
+    }
+
+    func recordModelSamples(_ status: VLLMStatus) {
+        guard let ledger else { return }
+        let previous = sampleTask
+        sampleTask = Task {
+            await previous?.value
+            do {
+                try await ledger.recordModelSamples(status)
+            } catch {
+                note = "Recording model samples failed: \(Self.describe(error))"
+                return
+            }
+            // The charts are per minute at best, so the visible page re-reads at most twice a minute.
+            if isDashboardVisible, page == .localModel,
+               Date().timeIntervalSince(localModelLoadedAt ?? .distantPast) >= 30 {
+                reload(.localModel)
+            }
+        }
+    }
+
+    /// The model-server series since `since`, waiting for the ledger to open; nil when History is off.
+    func recentModelSamples(since: Date) async -> [String: [SampleBucket]]? {
+        await waitForOpen()
+        guard let ledger else { return nil }
+        return try? await ledger.recentModelSamples(since: since)
+    }
+
+    private func waitForOpen() async {
+        while status == .opening, let task = openTask {
+            await task.value
+            if task == openTask, status == .opening { break }
         }
     }
 
@@ -326,6 +388,12 @@ final class History {
         guard days != limitsDays else { return }
         limitsDays = days
         reload(.limits)
+    }
+
+    func setLocalModelRange(_ range: LocalModelRange) {
+        guard range != localModelRange else { return }
+        localModelRange = range
+        reload(.localModel)
     }
 
     func setProjectsRange(_ range: HistoryRange) {
@@ -505,10 +573,38 @@ final class History {
                                       copilot: copilot, copilotMonth: month)
                 guard generation == pageGeneration[page] else { return }
                 if data != limits { limits = data }
+            case .localModel:
+                let range = localModelRange
+                let interval = range.interval(now: now)
+                let generationRate = try await ledger.samples(ModelServerSeries.generationTokensPerSecond,
+                                                              resolution: range.resolution, in: interval)
+                let kvCache = try await ledger.samples(ModelServerSeries.kvCachePercent, resolution: range.resolution,
+                                                       in: interval)
+                let tokenDays = try await ledger.modelTokensPerDay(days: range.dailyDays, now: now)
+                let saved = try await ledger.localModelSpend(days: range.dailyDays, split: .source, now: now)
+                let lastSeen = try await lastModelReading(ledger, now: now)
+                let data = LocalModelData(range: range, interval: interval, generation: generationRate,
+                                          kvCache: kvCache, tokenDays: tokenDays, saved: saved, lastSeen: lastSeen)
+                guard generation == pageGeneration[page] else { return }
+                localModelLoadedAt = now
+                if data != localModel { localModel = data }
             }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
         }
+    }
+
+    /// Every successful poll writes `model.running`, so its latest bucket is when the server last answered.
+    /// The last day is read per minute; older stretches only exist hourly.
+    private func lastModelReading(_ ledger: Ledger, now: Date) async throws -> Date? {
+        let series = ModelServerSeries.running
+        let recent = try await ledger.samples(series, in: DateInterval(start: now.addingTimeInterval(-86_400), end: now))
+        var bucket = recent.last
+        if bucket == nil {
+            bucket = try await ledger.samples(series, resolution: 3_600,
+                                              in: DateInterval(start: now.addingTimeInterval(-90 * 86_400), end: now)).last
+        }
+        return bucket.map { min($0.startDate.addingTimeInterval(TimeInterval($0.resolution)), now) }
     }
 
     /// "All time" charts start at the project's first usage, but never show fewer than 30 days.
@@ -537,6 +633,7 @@ struct HistoryPreview {
     var projects: ProjectsData
     var projectDetail: ProjectDetailData?
     var limits: LimitsData?
+    var localModel: LocalModelData?
 }
 
 extension History {
@@ -558,6 +655,8 @@ extension History {
         selectedProjectSession = nil
         limits = preview.limits
         limitsDays = preview.limits?.days ?? 7
+        localModel = preview.localModel
+        localModelRange = preview.localModel?.range ?? .day
         self.page = page
     }
 

@@ -66,26 +66,39 @@ enum PreviewData {
     }
 
     static func vllm(now: Date) -> VLLMStatus {
-        func snapshot(generated: Double, at time: Date) -> VLLMSnapshot {
+        func snapshot(generated: Double, prompt: Double, at time: Date) -> VLLMSnapshot {
             let text = """
-            vllm:num_requests_running{model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct"} 2
-            vllm:num_requests_waiting{model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct"} 1
-            vllm:kv_cache_usage_perc{model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct"} 0.44
-            vllm:prompt_tokens_total{model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct"} 120000
-            vllm:generation_tokens_total{model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct"} \(generated)
+            vllm:num_requests_running{model_name="Qwen/Qwen3.8-Flash-Next"} 2
+            vllm:num_requests_waiting{model_name="Qwen/Qwen3.8-Flash-Next"} 1
+            vllm:kv_cache_usage_perc{model_name="Qwen/Qwen3.8-Flash-Next"} 0.44
+            vllm:prompt_tokens_total{model_name="Qwen/Qwen3.8-Flash-Next"} \(prompt)
+            vllm:generation_tokens_total{model_name="Qwen/Qwen3.8-Flash-Next"} \(generated)
             """
             return VLLMSnapshot.from(samples: PrometheusParser.parse(text), at: time)
         }
-        return VLLMStatus.compute(previous: snapshot(generated: 45_000, at: now.addingTimeInterval(-5)),
-                                  current: snapshot(generated: 45_215, at: now))
+        return VLLMStatus.compute(previous: snapshot(generated: 2_845_000, prompt: 61_400_000, at: now.addingTimeInterval(-5)),
+                                  current: snapshot(generated: 2_845_215, prompt: 61_406_100, at: now))
     }
 
+    /// Besides the two fixed windows: a model-scoped weekly window, extra usage, a spend budget and two keys
+    /// Hoply doesn't read, so every part of the Limits page renders.
     static func claudeLimits(now: Date) -> ClaudeLimits? {
         let fiveHour = Int(now.addingTimeInterval(2.6 * 3_600).timeIntervalSince1970)
         let week = Int(now.addingTimeInterval(3.7 * 86_400).timeIntervalSince1970)
-        let json = #"{"five_hour":{"utilization":62,"resets_at":\#(fiveHour)},"seven_day":{"utilization":25,"resets_at":\#(week)}}"#
+        let json = #"""
+        {"five_hour":{"utilization":62,"resets_at":\#(fiveHour)},"seven_day":{"utilization":25,"resets_at":\#(week)},
+         "model_scoped":[{"display_name":"Sonnet 4.5","utilization":\#(scopedShare * 25),"resets_at":\#(week)}],
+         "extra_usage":{"is_enabled":true,"used_credits":1240,"monthly_limit":5000,"utilization":24.8},
+         "spend":{"enabled":true,"used":{"amount_minor":1240,"currency":"USD","exponent":2},
+                  "limit":{"amount_minor":10000,"currency":"USD","exponent":2}},
+         "seven_day_oauth_apps":null,"iguana_necktie":null}
+        """#
         return try? ClaudeLimits.decode(Data(json.utf8))
     }
+
+    /// The Sonnet 4.5 weekly window runs at this share of the overall week.
+    private static let scopedShare = 0.48
+    static let scopedKind = LimitKind.scoped(displayName: "Sonnet 4.5") ?? .sevenDaySonnet
 
     private static func series(now: Date, values: [Double], max: Bool) -> RollingSeries {
         var series = RollingSeries(bucketLength: 30, capacity: values.count, now: now)
@@ -147,6 +160,9 @@ enum PreviewData {
                projects: [(0, 0.6), (3, 0.35), (5, 0.05)]),
         Stream(model: "claude-sonnet-5", source: .copilotIDE, scale: 0.8, every: 2,
                projects: [(1, 0.5), (nil, 0.5)]),
+        // Claude Code pointed at the local server, as on the real ZGX.
+        Stream(model: "Qwen3.8-Flash-Next", source: .claudeCode, scale: 0.7, local: true, every: 2,
+               projects: [(2, 0.7), (0, 0.3)]),
     ]
 
     private struct Entry {
@@ -170,6 +186,7 @@ enum PreviewData {
             let weekend = weekday == 1 || weekday == 7 ? 0.25 : 1
             let ramp = 0.55 + 0.45 * Double(index) / Double(days.count)
             for (offset, stream) in streams.enumerated() where (index + offset) % stream.every == 0 {
+                if stream.local, index == days.count - 1 - serverOffDaysAgo { continue }
                 let wave = 0.55 + 0.45 * sin(Double(index) * 0.9 + Double(offset) * 1.7)
                 let usd = stream.scale * weekend * ramp * wave
                 guard usd > 0.05 else { continue }
@@ -245,7 +262,61 @@ enum PreviewData {
             projects: ProjectsData(range: .month, projects: summaries),
             projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
                                              sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)),
-            limits: limits(now: now, entries: entries))
+            limits: limits(now: now, entries: entries),
+            localModel: localModel(now: now, entries: entries, days: days))
+    }
+
+    // MARK: - Local model
+
+    /// The model server was off on this day, so it has no readings and no local usage.
+    private static let serverOffDaysAgo = 4
+
+    /// A day of the server, ending in `vllm(now:)`: busy afternoons, an idle evening, three hours off overnight.
+    /// Tokens per day and saved vs API come from the same local-model streams as Spending's "Ran locally".
+    private static func localModel(now: Date, entries: [Entry], days: [Date],
+                                   range: LocalModelRange = .day) -> LocalModelData {
+        let calendar = Calendar.current
+        let interval = range.interval(now: now)
+        let step = range.resolution
+        let first = Int((interval.start.timeIntervalSince1970 / Double(step)).rounded(.down)) * step
+        var generation: [SampleBucket] = []
+        var kvCache: [SampleBucket] = []
+        for start in stride(from: first, to: Int(now.timeIntervalSince1970), by: step) {
+            let date = Date(timeIntervalSince1970: TimeInterval(start))
+            let hour = Double(calendar.component(.hour, from: date)) + Double(calendar.component(.minute, from: date)) / 60
+            if (2.5..<5.5).contains(hour) { continue }
+            let minutesAgo = now.timeIntervalSince(date) / 60
+            let wave = 0.5 + 0.5 * sin(Double(start / step) * 0.37) * cos(Double(start / step) * 0.11)
+            var busy = (9..<12.5).contains(hour) || (13.5..<19).contains(hour) ? 0.35 + 0.65 * wave
+                : (20..<23).contains(hour) ? 0.15 * wave : 0
+            if minutesAgo < 25 { busy = 0.9 }
+            let mean = busy * (minutesAgo < 25 ? 31 : 9)
+            let peak = busy > 0.05 ? min(48, 22 + busy * 26) : mean
+            let readings = 10
+            generation.append(SampleBucket(series: ModelServerSeries.generationTokensPerSecond, resolution: step,
+                                           start: start, n: readings, sum: mean * Double(readings), min: 0, max: peak))
+            let kv = minutesAgo < 25 ? 44 : 6 + busy * 46
+            kvCache.append(SampleBucket(series: ModelServerSeries.kvCachePercent, resolution: step, start: start,
+                                        n: readings, sum: kv * Double(readings), min: kv * 0.7, max: min(kv * 1.35, 100)))
+        }
+
+        let window = Array(days.suffix(range.dailyDays))
+        let local = entries.filter { $0.day >= window[0] && $0.totals.costUSD == 0 && $0.totals.apiEquivUSD > 0 }
+        let offDay = days[days.count - 1 - serverOffDaysAgo]
+        let tokenDays = window.map { day in
+            let tokens = local.filter { $0.day == day }.reduce(TokenCounts()) { $0 + $1.totals.tokens }
+            // Other clients (a chat UI) use the server too, so its counters run above the agents' ledger rows.
+            return ModelTokenDay(day: day,
+                                 generated: Double(tokens.output + tokens.reasoning) * 3.2,
+                                 prompt: Double(tokens.input + tokens.cacheRead + tokens.cacheWrite5m + tokens.cacheWrite1h) * 1.1,
+                                 observed: day != offDay)
+        }
+        var bySource: [Date: [String: LedgerTotals]] = [:]
+        for entry in local { bySource[entry.day, default: [:]][entry.source.rawValue, default: .zero] += entry.totals }
+        let points = bySource.flatMap { day, sums in sums.map { DailySpendPoint(day: day, series: $0.key, totals: $0.value) } }
+            .sorted { ($0.day, $0.series) < ($1.day, $1.series) }
+        return LocalModelData(range: range, interval: interval, generation: generation, kvCache: kvCache,
+                              tokenDays: tokenDays, saved: DailySpendSeries(days: window, points: points), lastSeen: now)
     }
 
     // MARK: - Limits
@@ -290,8 +361,9 @@ enum PreviewData {
             // The previous week started before the chart, so its climb starts part way up.
             let floor = weeksBack == 0 ? 0 : peak * max(0, times[first].timeIntervalSince(weekStart) / week)
             let progress = (activity[index] - activity[first]) / max(activity[last] - activity[first], 1)
-            samples.append(LimitSample(kind: .sevenDay, ts: time, utilization: floor + (peak - floor) * progress,
-                                       resetsAt: weekEnd))
+            let used = floor + (peak - floor) * progress
+            samples.append(LimitSample(kind: .sevenDay, ts: time, utilization: used, resetsAt: weekEnd))
+            samples.append(LimitSample(kind: scopedKind, ts: time, utilization: used * scopedShare, resetsAt: weekEnd))
         }
         return samples.sorted { $0.ts < $1.ts }
     }
@@ -308,6 +380,7 @@ enum PreviewData {
         var spend = [LimitKind.fiveHour: scaled(claude(since: calendar.startOfDay(for: now)), by: 0.6)]
         if let weekStart = projections[.sevenDay]?.windowStart {
             spend[.sevenDay] = claude(since: calendar.startOfDay(for: weekStart))
+            spend[scopedKind] = spend[.sevenDay]
         }
         let month = CopilotAllowance.month(containing: now)
         let copilot = entries.filter { $0.source == .copilotCLI && $0.day >= month.start }

@@ -1,3 +1,4 @@
+import AgentKit
 import AppKit
 import SwiftUI
 
@@ -35,7 +36,8 @@ enum Snapshot {
                     model.history.show(preview, page: page)
                     let height: CGFloat = switch page {
                     case .projects: 880
-                    case .limits: 880
+                    case .limits: 1_200
+                    case .localModel: 1_320
                     default: 760
                     }
                     try render(DashboardView(plainSidebar: true).frame(width: 1180, height: height),
@@ -54,6 +56,34 @@ enum Snapshot {
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model, appearance: looks,
                            to: directory.appendingPathComponent("dashboard-limits-empty-\(name).png"))
                 model.showPreview(settings: PreviewData.settings)
+
+                let lastSeen = now.addingTimeInterval(-47 * 60)
+                var offline = PreviewData.history(now: now)
+                offline.localModel?.generation.removeAll { $0.startDate > lastSeen }
+                offline.localModel?.kvCache.removeAll { $0.startDate > lastSeen }
+                offline.localModel?.lastSeen = lastSeen
+                model.showPreview(vllm: PreviewData.vllm(now: now), error: "Offline", lastSeen: lastSeen)
+                model.history.show(offline, page: .localModel)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_320), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-offline-\(name).png"))
+
+                var noServer = PreviewData.settings
+                noServer.vllmBaseURL = ""
+                var unset = PreviewData.history(now: now)
+                unset.localModel?.generation = []
+                unset.localModel?.kvCache = []
+                let unobserved = (unset.localModel?.tokenDays ?? []).map {
+                    ModelTokenDay(day: $0.day, generated: 0, prompt: 0, observed: false)
+                }
+                unset.localModel?.tokenDays = unobserved
+                model.showPreview(settings: noServer)
+                model.showPreview(vllm: nil, error: nil, lastSeen: nil)
+                model.history.show(unset, page: .localModel)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-empty-\(name).png"))
+                model.showPreview(settings: PreviewData.settings)
+                model.showPreview(vllm: PreviewData.vllm(now: now), error: nil, lastSeen: now)
+
                 model.history.showProjectDetail(PreviewData.history(now: now))
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1260), model: model, appearance: looks,
                            to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))

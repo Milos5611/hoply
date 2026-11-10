@@ -122,6 +122,52 @@ public struct Ledger: Sendable {
         return CopilotAllowance(used: used, settings: settings, now: now)
     }
 
+    // MARK: - Samples (local model, later GPU)
+
+    /// Records one model-server poll (`VLLMStatus.compute` of the latest two snapshots) into the `samples`
+    /// series named in `ModelServerSeries`. Call once per successful poll.
+    @discardableResult
+    public func recordModelSamples(_ status: VLLMStatus) async throws -> [SampleBucket] {
+        try await store.recordSamples(ModelServerSeries.observations(status))
+    }
+
+    /// Call when the model server URL changes, before the new server's first reading is recorded.
+    public func resetModelCounters() async {
+        await store.resetCounterBaselines(ModelServerSeries.counters)
+    }
+
+    @discardableResult
+    public func recordSamples(_ observations: [SampleObservation]) async throws -> [SampleBucket] {
+        try await store.recordSamples(observations)
+    }
+
+    /// A series over `range` at `resolution` seconds (coarser where only rollups are stored), oldest first.
+    public func samples(_ series: String, resolution: Int = SampleAggregator.resolution,
+                        in range: DateInterval) async throws -> [SampleBucket] {
+        try await reader.samples(series, resolution: resolution, in: range)
+    }
+
+    /// The model-server series' 60 s buckets since `since`, to seed the panel sparkline after a restart.
+    public func recentModelSamples(since: Date, now: Date = Date()) async throws -> [String: [SampleBucket]] {
+        try await reader.recentSamples(ModelServerSeries.all, since: since, now: now)
+    }
+
+    /// Generated and prompt tokens per local day (the last `days`, today included), from the server's counters.
+    public func modelTokensPerDay(days: Int, now: Date = Date(),
+                                  calendar: Calendar = .current) async throws -> [ModelTokenDay] {
+        let generated = try await reader.dailySums(ModelServerSeries.generatedTokens, days: days, now: now,
+                                                   calendar: calendar)
+        let prompt = try await reader.dailySums(ModelServerSeries.promptTokens, days: days, now: now, calendar: calendar)
+        return ModelTokenDay.days(generated: generated, prompt: prompt)
+    }
+
+    /// Local-model usage per day from the ledger (agents' calls to models matching the local patterns): tokens,
+    /// and `apiEquivUSD` as "saved vs API" (their cost is $0).
+    public func localModelSpend(days: Int, split: SpendSeriesSplit = .source, now: Date = Date(),
+                                calendar: Calendar = .current) async throws -> DailySpendSeries {
+        try await reader.dailySpend(days: days, split: split, localOnly: true, now: now, calendar: calendar)
+    }
+
     /// Reloads `pricing.json` and applies new local-model settings; re-prices affected rows. Returns how many.
     @discardableResult
     public func updatePricing(localModelPatterns: [String], referenceModel: String) async throws -> Int {

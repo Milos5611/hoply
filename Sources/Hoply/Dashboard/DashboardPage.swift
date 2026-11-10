@@ -6,6 +6,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     case projects
     case sessions
     case spending
+    case localModel = "local-model"
     case limits
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .projects: return "Projects"
         case .sessions: return "Sessions"
         case .spending: return "Spending"
+        case .localModel: return "Local model"
         case .limits: return "Limits"
         }
     }
@@ -26,6 +28,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .projects: return "folder"
         case .sessions: return "list.bullet.rectangle"
         case .spending: return "chart.bar.xaxis"
+        case .localModel: return "cpu"
         case .limits: return "gauge.with.dots.needle.67percent"
         }
     }
@@ -71,5 +74,54 @@ enum HistoryRange: String, CaseIterable, Identifiable, Hashable {
         let today = StoreReader.days(1, endingAt: now)
         guard let days else { return DateInterval(start: Date(timeIntervalSince1970: 0), end: today.end) }
         return StoreReader.days(days, endingAt: now)
+    }
+}
+
+/// The Local model page's range: the speed and KV cache charts cover `duration` at `resolution`; the daily cards
+/// show at least a week, so the 24-hour view still has days to compare.
+enum LocalModelRange: String, CaseIterable, Identifiable, Hashable {
+    case day
+    case week
+    case month
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .day: return "24 hours"
+        case .week: return "7 days"
+        case .month: return "30 days"
+        }
+    }
+
+    var duration: TimeInterval {
+        switch self {
+        case .day: return 86_400
+        case .week: return 7 * 86_400
+        case .month: return 30 * 86_400
+        }
+    }
+
+    /// Seconds per chart point: 288, 336 and 720 points.
+    var resolution: Int {
+        switch self {
+        case .day: return 300
+        case .week: return 1_800
+        case .month: return 3_600
+        }
+    }
+
+    var resolutionLabel: String {
+        switch self {
+        case .day: return "5 minutes"
+        case .week: return "30 minutes"
+        case .month: return "hour"
+        }
+    }
+
+    var dailyDays: Int { self == .month ? 30 : 7 }
+
+    func interval(now: Date = Date()) -> DateInterval {
+        DateInterval(start: now.addingTimeInterval(-duration), end: now)
     }
 }

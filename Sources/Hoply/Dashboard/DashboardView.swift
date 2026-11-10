@@ -47,6 +47,7 @@ struct DashboardView: View {
             case .projects: ProjectsPage()
             case .sessions: SessionsPage()
             case .spending: SpendingPage()
+            case .localModel: LocalModelPage()
             case .limits: LimitsPage()
             }
         }

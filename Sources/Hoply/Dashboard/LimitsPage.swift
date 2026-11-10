@@ -9,7 +9,9 @@ struct LimitsPage: View {
         let history = model.history
         let data = history.limits
         let now = Date()
+        let live = model.claudeLimits
         let windows = windows(data, now: now)
+        let extras = model.settings.claudeLimitsEnabled && (live?.extraUsage != nil || live?.spend != nil) ? live : nil
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeader(title: "Limits", subtitle: "Claude plan usage windows and Copilot premium requests")
@@ -23,20 +25,31 @@ struct LimitsPage: View {
                         ForEach(Array(stride(from: 0, to: windows.count, by: 2)), id: \.self) { start in
                             GridRow {
                                 ForEach(windows[start..<min(start + 2, windows.count)], id: \.kind) { projection in
-                                    LimitWindowCard(projection: projection, spend: data?.windowSpend[projection.kind],
-                                                    now: now)
+                                    LimitWindowCard(projection: projection,
+                                                    title: LimitsStyle.title(projection.kind, live: live),
+                                                    spend: data?.windowSpend[projection.kind], now: now)
                                 }
                                 if start + 1 == windows.count {
-                                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                                    if let extras {
+                                        PlanExtrasCard(limits: extras, stacked: true)
+                                    } else {
+                                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                if let extras, windows.count % 2 == 0 {
+                    PlanExtrasCard(limits: extras)
+                }
                 if model.settings.claudeLimitsEnabled || !(data?.samples.isEmpty ?? true) {
                     LimitHistoryCard(data: data, now: now)
                 }
                 CopilotAllowanceCard(data: data, historyOff: history.unavailableReason != nil)
+                if model.settings.claudeLimitsEnabled, let keys = live?.unrecognizedKeys, !keys.isEmpty {
+                    UnrecognizedKeysNote(keys: keys)
+                }
             }
             .padding(24)
         }
@@ -48,9 +61,15 @@ struct LimitsPage: View {
         guard model.settings.claudeLimitsEnabled else { return [] }
         var projections = data?.projections ?? [:]
         if projections.isEmpty, let live = model.claudeLimits {
-            projections = LimitsProjection.projections(live.samples(at: now))
+            projections = LimitsProjection.projections(live.samples(at: model.claudeLimitsFetchedAt ?? now))
         }
-        return LimitKind.allCases.compactMap { projections[$0] }
+        // A window the latest fetch no longer returns (a model's weekly window that went away) isn't kept alive
+        // by its older readings.
+        if let live = model.claudeLimits {
+            let current = Set(live.windows.map(\.kind))
+            projections = projections.filter { current.contains($0.key) }
+        }
+        return projections.keys.sorted().compactMap { projections[$0] }
     }
 }
 
@@ -61,11 +80,53 @@ enum LimitsStyle {
         case .sevenDay: return .blue
         case .sevenDayOpus: return .purple
         case .sevenDaySonnet: return .teal
+        default: return scopedColor(kind)
         }
     }
 
-    static func title(_ kind: LimitKind) -> String {
-        kind == .fiveHour ? "5-hour window" : kind.displayName
+    /// A model's weekly window takes a hue next to its family's fixed window (Opus purple → indigo, Sonnet
+    /// teal → cyan, Haiku mint); other models get a stable pick from colors that no fixed window, Claude's
+    /// orange or the alert oranges and reds use, so a window keeps its color across launches.
+    private static func scopedColor(_ kind: LimitKind) -> Color {
+        let scope = kind.scopeName.lowercased()
+        if scope.hasPrefix("opus") { return .indigo }
+        if scope.hasPrefix("sonnet") { return .cyan }
+        if scope.hasPrefix("haiku") { return .mint }
+        let palette: [Color] = [.pink, .green, .brown, Color(red: 0.56, green: 0.45, blue: 0.86)]
+        return palette[Int(FNV1a.hash64(Array(kind.rawValue.utf8)) % UInt64(palette.count))]
+    }
+
+    /// "Weekly Sonnet 4.5": the API's own model name while a fetch has it, else rebuilt from the stored kind.
+    static func name(_ kind: LimitKind, live: ClaudeLimits?) -> String {
+        if !kind.isFixed, let scoped = live?.scoped.first(where: { $0.kind == kind }) {
+            return "Weekly \(scoped.displayName)"
+        }
+        return kind.displayName
+    }
+
+    static func title(_ kind: LimitKind, live: ClaudeLimits?) -> String {
+        kind == .fiveHour ? "5-hour window" : name(kind, live: live)
+    }
+
+    /// The 5-hour and weekly windows count every model; the others count one model's usage.
+    static func coversAllModels(_ kind: LimitKind) -> Bool {
+        kind == .fiveHour || kind == .sevenDay
+    }
+
+    static func paceLabel(_ band: LimitPace.Band) -> String {
+        switch band {
+        case .ahead: return "Ahead of pace"
+        case .onTrack: return "On pace"
+        case .under: return "Under pace"
+        }
+    }
+
+    static func paceColor(_ band: LimitPace.Band) -> Color {
+        switch band {
+        case .ahead: return .orange
+        case .onTrack: return .blue
+        case .under: return .teal
+        }
     }
 }
 
@@ -73,25 +134,33 @@ enum LimitsStyle {
 
 struct LimitWindowCard: View {
     let projection: LimitsProjection
+    let title: String
     let spend: LedgerTotals?
     let now: Date
 
     var body: some View {
         let tint = ClaudeLimitsWidget.tint(projection.utilization)
         let outlook = outlook
+        let pace = pace
         Card(prominent: true, padding: 16) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 6) {
                     Image(systemName: "asterisk")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(LimitsStyle.color(projection.kind))
-                    Text(LimitsStyle.title(projection.kind))
+                    Text(title)
                         .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
                     Spacer(minLength: 8)
+                    if let pace {
+                        LimitChip(text: LimitsStyle.paceLabel(pace.band), color: LimitsStyle.paceColor(pace.band))
+                            .help(paceHelp(pace))
+                    }
                     LimitChip(text: outlook.chip, color: outlook.color)
                 }
                 HStack(alignment: .center, spacing: 18) {
-                    RingGauge(fraction: projection.utilization / 100, tint: tint, lineWidth: 9) {
+                    RingGauge(fraction: projection.utilization / 100, tint: tint, lineWidth: 9,
+                              marker: pace.map { $0.elapsedPercent / 100 }) {
                         VStack(spacing: -1) {
                             Text(ClaudeLimitsWidget.percent(projection.utilization))
                                 .font(.system(size: 22, weight: .semibold).monospacedDigit())
@@ -109,7 +178,8 @@ struct LimitWindowCard: View {
                                 .font(.system(size: 12).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        ProjectionBar(current: projection.utilization, projected: projectedEnd, tint: tint)
+                        ProjectionBar(current: projection.utilization, projected: projectedEnd,
+                                      elapsed: pace?.elapsedPercent, tint: tint)
                         Text(outlook.sentence)
                             .font(.system(size: 12))
                             .foregroundStyle(outlook.color == .green ? Color.secondary : outlook.color)
@@ -121,8 +191,13 @@ struct LimitWindowCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     Metric(value: burnRate, label: "Burn rate")
                     Metric(value: projectedEnd.map { "\(Int($0.rounded()))%" } ?? "–", label: "At reset")
-                    Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv so far")
-                        .help("What Claude Code's usage in this window would cost on the API, from the usage ledger")
+                    if LimitsStyle.coversAllModels(projection.kind) {
+                        Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv so far")
+                            .help("What Claude Code's usage in this window would cost on the API, from the usage ledger")
+                    } else {
+                        Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv, all models")
+                            .help("What all of Claude Code's usage since this window started would cost on the API. The ledger doesn't split it by model per window.")
+                    }
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -131,6 +206,17 @@ struct LimitWindowCard: View {
 
     private var hasReset: Bool {
         projection.resetsAt.map { $0 <= now } ?? false
+    }
+
+    /// Measured at the reading, so a stale reading isn't compared with time that passed after it.
+    private var pace: LimitPace? {
+        hasReset ? nil : projection.pace(at: projection.current.ts)
+    }
+
+    private func paceHelp(_ pace: LimitPace) -> String {
+        "\(ClaudeLimitsWidget.percent(projection.utilization)) used with \(ClaudeLimitsWidget.percent(pace.elapsedPercent)) of the window gone. "
+            + ClaudeLimitsWidget.paceSentence(pace)
+            + " Within 5 points either way counts as on pace; the dark tick on the bar and the ring marks the time gone."
     }
 
     /// Where the bar's projected part ends: 100 when the pace runs into the limit before the reset.
@@ -148,6 +234,9 @@ struct LimitWindowCard: View {
         var parts: [String] = []
         if let resetsAt = projection.resetsAt {
             parts.append(hasReset ? "Waiting for a new reading" : "in \(Format.span(resetsAt.timeIntervalSince(now)))")
+            if let pace {
+                parts.append("\(ClaudeLimitsWidget.percent(pace.elapsedPercent)) of the window gone")
+            }
         } else {
             parts.append("Starts with your next request")
         }
@@ -192,10 +281,12 @@ private struct LimitChip: View {
     }
 }
 
-/// Used so far (solid), where the current pace ends at reset (faint), and ticks at the 80% and 95% alerts.
+/// Used so far (solid), where the current pace ends at reset (faint), the share of the window gone by (dark
+/// tick), and small ticks at the 80% and 95% alerts. Solid past the dark tick reads as ahead of pace.
 struct ProjectionBar: View {
     let current: Double
     let projected: Double?
+    var elapsed: Double?
     let tint: Color
 
     var body: some View {
@@ -217,10 +308,16 @@ struct ProjectionBar: View {
                         .frame(width: 1, height: 11)
                         .offset(x: width * threshold / 100)
                 }
+                if let elapsed {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.75))
+                        .frame(width: 2, height: 15)
+                        .offset(x: width * min(max(elapsed, 0), 100) / 100 - 1)
+                }
             }
         }
         .frame(height: 7)
-        .help("Solid: used so far. Faint: where the current pace ends at reset. Ticks: the 80% and 95% alerts.")
+        .help("Solid: used so far. Faint: where the current pace ends at reset. Dark tick: the share of the window gone by. Small ticks: the 80% and 95% alerts.")
     }
 }
 
@@ -301,7 +398,7 @@ struct LimitHistoryCard: View {
             if history.unavailableReason != nil {
                 EmptyNote(text: "The utilization history lives in the usage ledger, which is off.")
             } else if let data, !data.samples.isEmpty {
-                LimitChart(samples: data.samples, days: data.days, now: now)
+                LimitChart(samples: data.samples, days: data.days, now: now) { LimitsStyle.name($0, live: model.claudeLimits) }
                     .frame(height: 250)
             } else {
                 EmptyNote(text: data == nil ? "Loading…" : "No readings yet. Hoply stores one every 3 minutes while it runs.")
@@ -322,22 +419,25 @@ struct LimitChart: View {
     struct Reset: Identifiable {
         let kind: LimitKind
         let at: Date
+        let label: String
         var id: String { "\(kind.rawValue)-\(at.timeIntervalSince1970)" }
     }
 
     let kinds: [LimitKind]
+    let names: [LimitKind: String]
     let points: [LimitKind: [Point]]
     let resets: [Reset]
     let domain: ClosedRange<Date>
     let days: Int
     @State private var selection: Date?
 
-    init(samples: [LimitSample], days: Int, now: Date) {
+    init(samples: [LimitSample], days: Int, now: Date, name: (LimitKind) -> String) {
         let range = now.addingTimeInterval(-Double(days) * 86_400)...now
         self.days = days
         domain = range
         var points: [LimitKind: [Point]] = [:]
         var resets: [String: Reset] = [:]
+        var weeklyResets: [Reset] = []
         for (kind, samples) in Dictionary(grouping: samples, by: \.kind) {
             var window = 0
             var previous: LimitSample?
@@ -352,17 +452,40 @@ struct LimitChart: View {
                 if let previous, !sample.isSameWindow(as: previous) { window += 1 }
                 list.append(Point(ts: sample.ts, utilization: sample.utilization, window: "\(kind.rawValue)-\(window)"))
                 if let resetsAt = sample.resetsAt, range.contains(resetsAt) {
-                    let reset = Reset(kind: kind, at: resetsAt)
-                    let slot = "\(kind.rawValue)-\(Int(resetsAt.timeIntervalSince1970 / LimitSample.windowTolerance))"
-                    resets[slot] = resets[slot] ?? reset
+                    let reset = Reset(kind: kind, at: resetsAt, label: "")
+                    if kind == .fiveHour {
+                        let slot = "\(Int(resetsAt.timeIntervalSince1970 / LimitSample.windowTolerance))"
+                        resets[slot] = resets[slot] ?? reset
+                    } else {
+                        weeklyResets.append(reset)
+                    }
                 }
                 previous = sample
             }
             points[kind] = list
         }
         self.points = points
-        self.resets = resets.values.sorted { $0.at < $1.at }
-        kinds = LimitKind.allCases.filter { !(points[$0]?.isEmpty ?? true) }
+        self.resets = (Array(resets.values) + Self.mergedWeeklyResets(weeklyResets, name: name)).sorted { $0.at < $1.at }
+        kinds = points.keys.filter { !(points[$0]?.isEmpty ?? true) }.sorted()
+        names = Dictionary(uniqueKeysWithValues: kinds.map { ($0, name($0)) })
+    }
+
+    /// Weekly windows of different models usually reset together; one dashed rule per reset time, named after
+    /// the weekly window when it is among them.
+    private static func mergedWeeklyResets(_ resets: [Reset], name: (LimitKind) -> String) -> [Reset] {
+        var clusters: [[Reset]] = []
+        for reset in resets.sorted(by: { $0.at < $1.at }) {
+            if let last = clusters.last?.last, reset.at.timeIntervalSince(last.at) <= LimitSample.windowTolerance {
+                clusters[clusters.count - 1].append(reset)
+            } else {
+                clusters.append([reset])
+            }
+        }
+        return clusters.compactMap { cluster in
+            guard let first = cluster.first else { return nil }
+            let lead = cluster.first { $0.kind == .sevenDay } ?? first
+            return Reset(kind: lead.kind, at: lead.at, label: lead.kind == .sevenDay ? "Week reset" : "\(name(lead.kind)) reset")
+        }
     }
 
     var body: some View {
@@ -390,7 +513,7 @@ struct LimitChart: View {
                         .foregroundStyle(LimitsStyle.color(reset.kind).opacity(0.5))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .annotation(position: .top, alignment: .center, spacing: 2) {
-                            Text("\(reset.kind == .sevenDay ? "Week" : reset.kind.displayName) reset")
+                            Text(reset.label)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(LimitsStyle.color(reset.kind))
                         }
@@ -447,7 +570,7 @@ struct LimitChart: View {
             ForEach(kinds, id: \.self) { kind in
                 HStack(spacing: 5) {
                     Circle().fill(LimitsStyle.color(kind)).frame(width: 7, height: 7)
-                    Text(kind.displayName)
+                    Text(names[kind] ?? kind.displayName)
                 }
             }
             Spacer(minLength: 8)
@@ -478,7 +601,7 @@ struct LimitChart: View {
         return kinds.compactMap { kind in
             guard let point = points[kind]?.last(where: { $0.ts <= time }),
                   time.timeIntervalSince(point.ts) <= reach else { return nil }
-            return LimitTooltip.Row(kind: kind, utilization: point.utilization)
+            return LimitTooltip.Row(kind: kind, name: names[kind] ?? kind.displayName, utilization: point.utilization)
         }
     }
 }
@@ -486,6 +609,7 @@ struct LimitChart: View {
 struct LimitTooltip: View {
     struct Row: Identifiable {
         let kind: LimitKind
+        let name: String
         let utilization: Double
         var id: LimitKind { kind }
     }
@@ -507,7 +631,7 @@ struct LimitTooltip: View {
             ForEach(rows) { row in
                 HStack(spacing: 6) {
                     Circle().fill(LimitsStyle.color(row.kind)).frame(width: 7, height: 7)
-                    Text(row.kind.displayName)
+                    Text(row.name)
                     Spacer(minLength: 12)
                     Text(ClaudeLimitsWidget.percent(row.utilization))
                         .monospacedDigit()
@@ -525,6 +649,113 @@ struct LimitTooltip: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+}
+
+// MARK: - Extra usage and spend
+
+/// Pay-as-you-go usage past the plan and a spend budget, as the latest fetch returned them. Extra usage has no
+/// unit in the API, so only its share shows.
+struct PlanExtrasCard: View {
+    let limits: ClaudeLimits
+    /// Sections one above the other, to fill the grid cell next to an odd window card.
+    var stacked = false
+
+    var body: some View {
+        Card(prominent: true, padding: 16) {
+            let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+                                 : AnyLayout(HStackLayout(alignment: .top, spacing: 20))
+            layout {
+                if let extra = limits.extraUsage {
+                    PlanExtraSection(title: "Extra usage", symbol: "plus.circle.fill", enabled: extra.isEnabled,
+                                     value: extra.percentUsed.map(ClaudeLimitsWidget.percent) ?? "–",
+                                     caption: extraCaption(extra), fraction: extra.percentUsed.map { $0 / 100 })
+                        .help("Usage past the plan's limits, billed separately. Anthropic sends these amounts without a unit, so Hoply shows only the share of the monthly limit.")
+                }
+                if limits.extraUsage != nil, limits.spend != nil {
+                    Divider()
+                }
+                if let spend = limits.spend {
+                    PlanExtraSection(title: "Spend limit", symbol: "creditcard.fill", enabled: spend.enabled,
+                                     value: spend.used.map(Format.money) ?? "–", caption: spendCaption(spend),
+                                     fraction: spend.percentUsed.map { $0 / 100 })
+                        .help("Spend against your organization's budget, as Anthropic reports it.")
+                }
+                if stacked {
+                    Spacer(minLength: 0)
+                    Hint("From Anthropic's latest reading. Extra usage has no unit in the API, so only its share shows.")
+                }
+            }
+            .frame(maxHeight: stacked ? .infinity : nil, alignment: .top)
+        }
+    }
+
+    private func extraCaption(_ extra: ClaudeLimits.ExtraUsage) -> String {
+        if extra.percentUsed != nil { return "of the monthly limit used" }
+        return extra.isEnabled == false ? "Turned off" : "No usage figure yet"
+    }
+
+    private func spendCaption(_ spend: ClaudeLimits.Spend) -> String {
+        guard let limit = spend.limit else { return spend.used == nil ? "No spend figure yet" : "spent" }
+        if let percent = spend.percentUsed {
+            return "of \(Format.money(limit)) · \(ClaudeLimitsWidget.percent(percent))"
+        }
+        return "limit \(Format.money(limit))"
+    }
+}
+
+private struct PlanExtraSection: View {
+    let title: String
+    let symbol: String
+    let enabled: Bool?
+    let value: String
+    let caption: String
+    let fraction: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SourceBadge.color(for: .claudeCode))
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer(minLength: 8)
+                if let enabled {
+                    LimitChip(text: enabled ? "On" : "Off", color: enabled ? .green : .secondary)
+                }
+            }
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(value)
+                    .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if let fraction {
+                ShareBar(fraction: fraction, tint: ClaudeLimitsWidget.tint(fraction * 100))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Top-level keys of Anthropic's response that this build doesn't read, so new windows or fields get noticed.
+private struct UnrecognizedKeysNote: View {
+    let keys: [String]
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "info.circle")
+            Text("Anthropic also returned: \(keys.joined(separator: ", ")). Hoply doesn't read these fields yet.")
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 4)
+        .help("Fields in /api/oauth/usage beyond the known windows, extra usage and spend")
     }
 }
 

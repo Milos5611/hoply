@@ -13,9 +13,18 @@ struct LocalModelWidget: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-        } else if let status = model.vllm, model.vllmOnline {
+        } else {
+            Button { model.openDashboard(.localModel) } label: { tile }
+                .buttonStyle(.plain)
+                .help("Open Local model in the Dashboard")
+        }
+    }
+
+    @ViewBuilder
+    private var tile: some View {
+        if let status = model.vllm, model.vllmOnline {
             WidgetTile(title: "KV cache", symbol: "cpu", tint: tint,
-                       footer: "\(status.snapshot.running) running · \(shortModel(status.snapshot))") {
+                       footer: "\(status.snapshot.running) running · \(Self.shortModel(status.snapshot))") {
                 HStack(spacing: 10) {
                     RingGauge(fraction: status.snapshot.kvCacheUsage ?? 0, tint: .orange) {
                         Text(status.snapshot.kvCacheUsage.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
@@ -40,8 +49,7 @@ struct LocalModelWidget: View {
         }
     }
 
-    private func shortModel(_ snapshot: VLLMSnapshot) -> String {
-        guard let name = snapshot.model else { return snapshot.engine }
-        return name.split(separator: "/").last.map(String.init) ?? name
+    static func shortModel(_ snapshot: VLLMSnapshot) -> String {
+        snapshot.model.map(Format.servedModel) ?? Format.engine(snapshot.engine)
     }
 }

@@ -38,7 +38,7 @@ struct SettingsView: View {
                             TextField("http://<server-ip>:8000", text: $draft.vllmBaseURL)
                                 .textFieldStyle(.roundedBorder)
                         }
-                        Hint("The base URL of the model server (vLLM or tensorfold), e.g. http://192.168.1.20:8000. Hoply reads <url>/metrics every 5 seconds.")
+                        Hint("The base URL of the model server (vLLM or tensorfold), e.g. http://192.168.1.20:8000. Hoply reads <url>/metrics every 5 seconds while the panel or Dashboard is open, every 30 seconds otherwise, and keeps the history for the Local model page.")
                     }
                 }
 

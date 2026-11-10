@@ -12,6 +12,9 @@ public actor Store {
     private let db: SQLiteConnection
     private let registry: ProjectRegistry
     public private(set) var pricing: PricingTable
+    private var aggregator = SampleAggregator()
+    private var seededCounters: Set<String> = []
+    private var lastRollup: Date
 
     public init(path: String = Store.defaultDatabaseURL.path, pricing: PricingTable = .bundled(),
                 resolver: ProjectResolver = ProjectResolver(home: NSHomeDirectory()),
@@ -27,6 +30,9 @@ public actor Store {
             try? Backups.rotateIfDue(db, databasePath: path, keep: 2, interval: 7 * 86_400)
         }
         _ = try Self.reprice(db, pricing)
+        let opened = Date()
+        _ = try Self.rollUpSamples(db, now: opened)
+        self.lastRollup = opened
         self.db = db
         self.databasePath = path
         self.pricing = pricing
@@ -130,6 +136,98 @@ public actor Store {
                 if sample.ts >= last[sample.kind]?.ts ?? .distantPast { last[sample.kind] = sample }
             }
             return previous
+        }
+    }
+
+    // MARK: - Samples
+
+    /// Rollups run when the store opens and then at most this often, on the next sample write.
+    public static let sampleRollupInterval: TimeInterval = 86_400
+
+    /// Buckets the observations into 60 s rows and merges them into what is stored (n and sum add, min/max
+    /// widen), so each poll is recorded exactly once. A counter seen for the first time since launch takes its
+    /// baseline from its latest stored bucket. Returns the buckets this call added.
+    @discardableResult
+    public func recordSamples(_ observations: [SampleObservation], now: Date = Date()) throws -> [SampleBucket] {
+        let saved = aggregator
+        do {
+            for series in Set(observations.filter { $0.kind == .counter }.map(\.series)).sorted()
+            where !seededCounters.contains(series) {
+                if let latest = try db.queryOne("""
+                    SELECT bucket, max FROM samples WHERE series = ? AND max IS NOT NULL ORDER BY bucket DESC LIMIT 1
+                    """, [series], { (row: SQLiteRow) in
+                        CounterReading(ts: Date(timeIntervalSince1970: row.double(0)), value: row.double(1))
+                    }) {
+                    aggregator.seed(series, latest)
+                }
+                seededCounters.insert(series)
+            }
+            let buckets = aggregator.add(observations)
+            try db.transaction {
+                for bucket in buckets { try Self.upsert(bucket, db) }
+            }
+            if now.timeIntervalSince(lastRollup) >= Self.sampleRollupInterval { try rollUpSamples(now: now) }
+            return buckets
+        } catch {
+            aggregator = saved
+            throw error
+        }
+    }
+
+    /// For a counter that now comes from a different server: its next reading only sets a baseline. Without
+    /// this, a new server whose counter is below the old one's reads as a restart and books its whole total.
+    public func resetCounterBaselines(_ series: [String]) {
+        for name in series {
+            aggregator.forget(name)
+            seededCounters.insert(name)
+        }
+    }
+
+    /// Moves sample buckets past each `SampleAggregator.rollups` age into the coarser resolution (merged, then
+    /// the fine rows removed), in one transaction. Running it again changes nothing. Returns the rows moved.
+    @discardableResult
+    public func rollUpSamples(now: Date = Date()) throws -> Int {
+        lastRollup = now
+        return try Self.rollUpSamples(db, now: now)
+    }
+
+    private static let mergeBucket = """
+        ON CONFLICT(series, res, bucket) DO UPDATE SET
+            n = samples.n + excluded.n,
+            sum = samples.sum + excluded.sum,
+            min = min(COALESCE(samples.min, excluded.min), COALESCE(excluded.min, samples.min)),
+            max = max(COALESCE(samples.max, excluded.max), COALESCE(excluded.max, samples.max))
+        """
+
+    private static func upsert(_ bucket: SampleBucket, _ db: SQLiteConnection) throws {
+        try db.run("INSERT INTO samples (series, res, bucket, n, sum, min, max) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                   + mergeBucket,
+                   [bucket.series, bucket.resolution, bucket.start, bucket.n, bucket.sum, bucket.min, bucket.max])
+    }
+
+    private static func rollUpSamples(_ db: SQLiteConnection, now: Date) throws -> Int {
+        let due = SampleAggregator.rollups.map { ($0, $0.cutoff(now: now)) }
+        let pending = try due.contains { rollup, cutoff in
+            try db.queryOne("SELECT 1 FROM samples WHERE res = ? AND bucket < ? LIMIT 1",
+                            [rollup.from, cutoff]) { _ in true } == true
+        }
+        guard pending else { return 0 }
+        return try db.transaction {
+            var moved = 0
+            for (rollup, cutoff) in due {
+                // `WHERE true` keeps SQLite from reading the upsert's ON as a join constraint.
+                try db.run("""
+                    INSERT INTO samples (series, res, bucket, n, sum, min, max)
+                    SELECT * FROM (
+                        SELECT series, ?2, (bucket / ?2) * ?2, SUM(n), SUM(sum), MIN(min), MAX(max)
+                        FROM samples WHERE res = ?1 AND bucket < ?3
+                        GROUP BY series, bucket / ?2
+                    ) WHERE true
+                    """ + "\n" + mergeBucket, [rollup.from, rollup.to, cutoff])
+                try db.run("DELETE FROM samples WHERE res = ? AND bucket < ?", [rollup.from, cutoff])
+                moved += db.changes
+            }
+            return moved
         }
     }
 

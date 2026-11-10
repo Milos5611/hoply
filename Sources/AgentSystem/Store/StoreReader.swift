@@ -81,8 +81,9 @@ public actor StoreReader {
     }
 
     /// The last `days` local days including today, split by model or by source, optionally for one project.
-    public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, now: Date = Date(),
-                           calendar: Calendar = .current) throws -> DailySpendSeries {
+    /// `localOnly` keeps local-model rows only: their cost is $0 and `apiEquivUSD` is what they saved vs the API.
+    public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, localOnly: Bool = false,
+                           now: Date = Date(), calendar: Calendar = .current) throws -> DailySpendSeries {
         let count = max(days, 1)
         let start = calendar.startOfDay(for: now)
         let dayStarts = (0...count).compactMap { calendar.date(byAdding: .day, value: $0 - count + 1, to: start) }
@@ -91,7 +92,7 @@ public actor StoreReader {
         let rangesJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: ranges)) ?? Data("[]".utf8),
                                 as: UTF8.self)
         let series = split == .model ? "COALESCE(model, '')" : "source"
-        var filter = "1"
+        var filter = localOnly ? "usage.is_local = 1" : "1"
         var values: [any SQLiteBindable] = [rangesJSON]
         Self.append(project, column: "usage.project_id", to: &filter, values: &values)
         let points = try db.query("""
@@ -247,6 +248,61 @@ public actor StoreReader {
         guard let kind = LimitKind(rawValue: row.text(0)) else { return nil }
         return LimitSample(kind: kind, ts: Date(timeIntervalSince1970: row.double(1)), utilization: row.double(2),
                            resetsAt: row.optionalDouble(3).map(Date.init(timeIntervalSince1970:)))
+    }
+
+    // MARK: - Samples
+
+    /// One series' buckets overlapping `range`, oldest first, merged up to `resolution` seconds. Older stretches
+    /// are only stored coarser (900 s after 7 days, 3600 s after 90), and those buckets keep their resolution.
+    public func samples(_ series: String, resolution: Int = SampleAggregator.resolution,
+                        in range: DateInterval) throws -> [SampleBucket] {
+        let rows = try db.query("""
+            SELECT res, bucket, n, sum, min, max FROM samples
+            WHERE series = ? AND bucket < ? AND bucket + res > ?
+            ORDER BY bucket
+            """, [series, range.end.timeIntervalSince1970, range.start.timeIntervalSince1970]) { row in
+            SampleBucket(series: series, resolution: row.int(0), start: row.int(1), n: row.int(2), sum: row.double(3),
+                         min: row.optionalDouble(4), max: row.optionalDouble(5))
+        }
+        return SampleAggregator.rollup(rows, to: resolution)
+    }
+
+    /// The 60 s buckets of each series since `since`, to seed in-memory sparklines after a restart. Series
+    /// without samples are absent.
+    public func recentSamples(_ series: [String], since: Date, now: Date = Date()) throws -> [String: [SampleBucket]] {
+        var result: [String: [SampleBucket]] = [:]
+        for name in Set(series) {
+            let buckets = try samples(name, in: DateInterval(start: since, end: max(now, since).addingTimeInterval(60)))
+            if !buckets.isEmpty { result[name] = buckets }
+        }
+        return result
+    }
+
+    /// The last `days` local days including today (every day present, oldest first): the sum and reading count
+    /// of one series per day. For a counter series the sum is its increase, e.g. tokens per day.
+    public func dailySums(_ series: String, days: Int, now: Date = Date(),
+                          calendar: Calendar = .current) throws -> [DailySampleSum] {
+        let count = max(days, 1)
+        let start = calendar.startOfDay(for: now)
+        let dayStarts = (0...count).compactMap { calendar.date(byAdding: .day, value: $0 - count + 1, to: start) }
+        guard dayStarts.count == count + 1 else { return [] }
+        let ranges = (0..<count).map { [dayStarts[$0].timeIntervalSince1970, dayStarts[$0 + 1].timeIntervalSince1970] }
+        let rangesJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: ranges)) ?? Data("[]".utf8),
+                                as: UTF8.self)
+        let rows = try db.query("""
+            WITH days(idx, start_ts, end_ts) AS (
+                SELECT CAST(key AS INTEGER), json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+            )
+            SELECT days.idx, SUM(s.sum), SUM(s.n)
+            FROM days JOIN samples s ON s.series = ? AND s.bucket >= days.start_ts AND s.bucket < days.end_ts
+            GROUP BY days.idx
+            """, [rangesJSON, series]) { row in (row.int(0), row.double(1), row.int(2)) }
+        var sums = (0..<count).map { DailySampleSum(day: dayStarts[$0], sum: 0, readings: 0) }
+        for (index, sum, readings) in rows where sums.indices.contains(index) {
+            sums[index].sum = sum
+            sums[index].readings = readings
+        }
+        return sums
     }
 
     /// The last `count` local days including the one containing `now`, ending at the next midnight.
