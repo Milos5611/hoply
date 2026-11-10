@@ -22,6 +22,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var sparkDashName = ""
     public var energyPricePerKWh = 0.0
     public var priceAliases: [String: String] = [:]
+    public var cleanupIncludesNodeModules = false
 
     public init() {}
 
@@ -50,6 +51,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         sparkDashName = container.lenient(String.self, .sparkDashName) ?? defaults.sparkDashName
         energyPricePerKWh = container.lenient(Double.self, .energyPricePerKWh) ?? defaults.energyPricePerKWh
         priceAliases = container.lenient([String: String].self, .priceAliases) ?? defaults.priceAliases
+        cleanupIncludesNodeModules = container.lenient(Bool.self, .cleanupIncludesNodeModules)
+            ?? defaults.cleanupIncludesNodeModules
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

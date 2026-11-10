@@ -122,4 +122,14 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(wrong.priceAliases, [:])
         XCTAssertEqual(wrong.port, 5000)
     }
+
+    func testCleanupKeyDecodesLeniently() {
+        XCTAssertFalse(AppSettings.decode(Data(v1JSON.utf8)).cleanupIncludesNodeModules)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "cleanupIncludesNodeModules": "yes"}"#.utf8))
+        XCTAssertFalse(wrong.cleanupIncludesNodeModules)
+        XCTAssertEqual(wrong.port, 5000)
+        var settings = AppSettings()
+        settings.cleanupIncludesNodeModules = true
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    }
 }

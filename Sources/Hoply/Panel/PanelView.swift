@@ -98,6 +98,8 @@ struct PanelFooter: View {
             Spacer()
             if model.history.progress.isBackfilling {
                 BackfillIndicator(progress: model.history.progress)
+            } else if model.cleanup.reclaimableBytes >= ReclaimableButton.minimumBytes {
+                ReclaimableButton(bytes: model.cleanup.reclaimableBytes)
             }
             Button {
                 model.quit()
@@ -127,6 +129,23 @@ struct PanelFooter: View {
         case .failed: return .red
         case .stopped: return .secondary
         }
+    }
+}
+
+struct ReclaimableButton: View {
+    static let minimumBytes: Int64 = 100 * 1_048_576
+
+    @Environment(AppModel.self) private var model
+    let bytes: Int64
+
+    var body: some View {
+        Button { model.openDashboard(.cleanUp) } label: {
+            Label("\(Format.bytes(bytes)) reclaimable", systemImage: DashboardPage.cleanUp.symbol)
+                .font(.system(size: 11).monospacedDigit())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help("Review merged worktrees, build caches and old transcripts in Clean up")
     }
 }
 

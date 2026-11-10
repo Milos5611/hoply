@@ -34,6 +34,7 @@ final class DevServers {
     private(set) var stops: [String: StopState] = [:]
     private(set) var notice: Notice?
     @ObservationIgnored var context: (() -> Context?)?
+    @ObservationIgnored var onSnapshot: ((ProcessSnapshot) -> Void)?
 
     @ObservationIgnored private let monitor: DevServerMonitor?
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -190,6 +191,7 @@ final class DevServers {
                                            resolveProjects: context.resolveProjects)
         if result != scan { scan = result }
         lastScan = result.snapshot.takenAt
+        onSnapshot?(result.snapshot)
         let ids = Set(result.servers.map(\.id))
         stops = stops.filter { ids.contains($0.key) || $0.value == .stopping }
     }

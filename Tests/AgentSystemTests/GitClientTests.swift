@@ -5,16 +5,7 @@ import XCTest
 
 final class GitClientTests: XCTestCase {
     private func git(_ arguments: [String], in directory: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false",
-                             "-c", "init.defaultBranch=main"] + arguments
-        process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "git \(arguments.joined(separator: " "))")
+        try TestRepository.git(arguments, in: directory)
     }
 
     private func repository() throws -> TempDirectory {

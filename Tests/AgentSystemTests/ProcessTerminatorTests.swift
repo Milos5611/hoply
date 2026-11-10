@@ -66,4 +66,24 @@ final class ProcessTerminatorTests: XCTestCase {
         XCTAssertEqual(second, .refused(.noProcessGroup))
         XCTAssertTrue(child.isRunning)
     }
+
+    func testStopsListedProcessesOnlyWhileTheirIdentityHolds() async throws {
+        let child = try SpawnedProcess("/bin/sleep", ["60"])
+        defer { child.cleanUp() }
+        let identity = try XCTUnwrap(ProcessScanner.identity(of: child.pid))
+        var stale = identity
+        stale.startedAt = stale.startedAt.addingTimeInterval(-5)
+
+        let refused = await ProcessTerminator(grace: 0.2).stop([stale])
+        XCTAssertEqual(refused, .refused(.processGone))
+        XCTAssertTrue(child.isRunning)
+        let own = try XCTUnwrap(ProcessScanner.identity(of: getpid()))
+        let hoply = await ProcessTerminator(grace: 0.2).stop([identity, own])
+        XCTAssertEqual(hoply, .refused(.includesHoply))
+        XCTAssertTrue(child.isRunning)
+
+        let outcome = await ProcessTerminator(grace: 3).stop([identity])
+        XCTAssertEqual(outcome, .terminated)
+        XCTAssertEqual(signal(of: child.waitForExit()), SIGTERM)
+    }
 }

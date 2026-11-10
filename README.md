@@ -110,6 +110,17 @@ Costs are API-equivalent list prices from a table bundled in the app. Local mode
 
 Cache prices default to 0.1× input (read), 1.25× (5 minute write) and 2× (1 hour write); `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, `fast` and `longContext` can be set per model.
 
+## Clean up
+
+The Dashboard's Clean up page lists what Hoply thinks is safe to remove, and what it keeps and why. Nothing is removed until you tick it and confirm the review sheet, and each item is checked again right before it goes.
+
+- **Worktrees:** linked git worktrees that are merged into the default branch, clean, unlocked and idle for a week, with no session or dev server in them. The folder moves to the Trash and git forgets the worktree; the branch stays. Squash-merged branches count as unmerged and are kept.
+- **Build caches:** `.next`, `.turbo`, `.build`, `target` and the like, over 50 MB, in projects idle for two weeks. In a repo the folder must be gitignored. `node_modules` is opt-in.
+- **Claude transcripts:** sessions older than 90 days that are fully in Hoply's history. The usage stays in the ledger; Claude Code can no longer resume those sessions.
+- **Orphan processes:** processes an agent session started and left running after it ended. These are terminated, not trashed.
+
+Files go to the Trash, so Finder's Put Back works.
+
 ## Known gaps
 
 - `api.anthropic.com/api/oauth/usage` is the undocumented endpoint Claude Code's `/usage` uses; it can change without notice.

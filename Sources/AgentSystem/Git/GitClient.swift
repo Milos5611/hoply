@@ -27,33 +27,34 @@ public struct GitClient: Sendable {
     }
 
     // `/usr/bin/git` is a shim that opens the "install developer tools" dialog when none are installed.
-    private var isAvailable: Bool {
+    var isAvailable: Bool {
         guard FileManager.default.isExecutableFile(atPath: gitPath) else { return false }
         return gitPath != Self.defaultGitPath || Self.developerToolsInstalled
     }
 
     private static let developerToolsInstalled: Bool = {
-        Self.execute("/usr/bin/xcode-select", ["-p"], directory: nil, timeout: 5) != nil
+        Self.execute("/usr/bin/xcode-select", ["-p"], directory: nil, timeout: 5)?.status == 0
     }()
 
     // No optional locks: git never writes to the repo. fsmonitor, ext-diff, textconv off: it runs nothing the repo configures.
-    private func run(_ arguments: [String], in directory: String) -> Data? {
-        Self.execute(gitPath, ["--no-optional-locks", "-c", "core.fsmonitor=false"] + arguments,
-                     directory: directory, timeout: timeout)
+    static let readOnlyOptions = ["--no-optional-locks", "-c", "core.fsmonitor=false"]
+
+    func run(_ arguments: [String], in directory: String) -> Data? {
+        guard let output = Self.execute(gitPath, Self.readOnlyOptions + arguments, directory: directory,
+                                        timeout: timeout), output.status == 0 else { return nil }
+        return output.data
     }
 
-    private static func text(_ data: Data) -> String {
+    static func text(_ data: Data) -> String {
         String(decoding: data, as: UTF8.self)
     }
 
-    private static func execute(_ path: String, _ arguments: [String], directory: String?,
-                                timeout: TimeInterval) -> Data? {
+    static func execute(_ path: String, _ arguments: [String], directory: String?,
+                        timeout: TimeInterval) -> Subprocess.Output? {
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_OPTIONAL_LOCKS"] = "0"
         environment["GIT_TERMINAL_PROMPT"] = "0"
-        guard let output = Subprocess.run(path, arguments, directory: directory, environment: environment,
-                                          timeout: timeout), output.status == 0 else { return nil }
-        return output.data
+        return Subprocess.run(path, arguments, directory: directory, environment: environment, timeout: timeout)
     }
 }
 

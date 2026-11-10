@@ -111,7 +111,7 @@ final class History {
     static let limitDayChoices = [7, 30]
     private static let pendingUsageLimit = 5_000
 
-    @ObservationIgnored private var ledger: Ledger?
+    @ObservationIgnored private(set) var ledger: Ledger?
     @ObservationIgnored private var liveSessions: [AgentSession] = []
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var stopping: Task<Void, Never>?
@@ -627,7 +627,7 @@ final class History {
                                       copilot: copilot, copilotMonth: month)
                 guard generation == pageGeneration[page] else { return }
                 if data != limits { limits = data }
-            case .devServers:
+            case .devServers, .cleanUp:
                 break
             case .localModel:
                 let range = localModelRange

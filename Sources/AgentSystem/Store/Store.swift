@@ -7,7 +7,7 @@ public actor Store {
     }
 
     public nonisolated let databasePath: String
-    private let db: SQLiteConnection
+    let db: SQLiteConnection
     private let registry: ProjectRegistry
     public private(set) var pricing: PricingTable
     private var aggregator = SampleAggregator()

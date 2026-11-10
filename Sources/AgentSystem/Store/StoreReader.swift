@@ -2,7 +2,7 @@ import AgentKit
 import Foundation
 
 public actor StoreReader {
-    private let db: SQLiteConnection
+    let db: SQLiteConnection
 
     public init(path: String = Store.defaultDatabaseURL.path) throws {
         let db = try SQLiteConnection(path: path, readOnly: true)
@@ -456,7 +456,7 @@ public actor StoreReader {
             linesRemoved: row.optionalInt(11), prURL: row.optionalText(12), transcriptPath: row.optionalText(13))
     }
 
-    private static func project(_ row: SQLiteRow, from start: Int32) -> ProjectRef? {
+    static func project(_ row: SQLiteRow, from start: Int32) -> ProjectRef? {
         guard let id = row.optionalInt64(start) else { return nil }
         return ProjectRef(id: id, root: row.text(start + 1), name: row.text(start + 2),
                           displayName: row.optionalText(start + 3),

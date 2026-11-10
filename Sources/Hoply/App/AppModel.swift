@@ -28,6 +28,7 @@ final class AppModel {
     var showingSettings = false
     let history = History()
     let devServers: DevServers
+    let cleanup: Cleanup
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
     @ObservationIgnored var settingsOpener: (() -> Void)?
@@ -86,6 +87,7 @@ final class AppModel {
     init(live: Bool = true) {
         isLive = live
         devServers = DevServers(live: live)
+        cleanup = Cleanup(history: history, live: live)
         guard live else {
             settings = AppSettings()
             return
@@ -125,7 +127,10 @@ final class AppModel {
         })
         startModelLoop()
         devServers.context = { [weak self] in self?.devServerContext }
+        devServers.onSnapshot = { [weak self] snapshot in self?.cleanup.observe(snapshot) }
         devServers.start()
+        cleanup.context = { [weak self] in self?.cleanupContext }
+        cleanup.start()
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshClaudeLimits()
@@ -305,6 +310,22 @@ final class AppModel {
         let resolve: DevServerMonitor.ProjectLookup = { cwds in await history.resolveProjects(cwds) ?? [:] }
         return DevServers.Context(hubPort: settings.port, sessions: live,
                                   resolveProjects: history.isReady ? resolve : nil)
+    }
+
+    // MARK: - Clean up
+
+    private var cleanupContext: Cleanup.Context {
+        let live = sessions.filter { $0.state != .ended }.compactMap(\.cwd).filter { !$0.isEmpty }
+        return Cleanup.Context(activity: CleanupActivity(sessionDirectories: live,
+                                                         devServerDirectories: devServers.servers.map(\.cwd)),
+                               thresholds: CleanupRules.Thresholds(settings: settings))
+    }
+
+    func setCleanupIncludesNodeModules(_ included: Bool) {
+        var updated = settings
+        updated.cleanupIncludesNodeModules = included
+        apply(updated)
+        cleanup.refresh()
     }
 
     func session(_ key: SessionKey?) -> AgentSession? {
@@ -592,6 +613,8 @@ extension AppModel {
         model.gitStats = PreviewData.gitStats
         model.editors = PreviewData.editors
         model.devServers.show(PreviewData.devServers(now: now))
+        model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
+                           log: PreviewData.cleanupLog(now: now))
         return model
     }
 

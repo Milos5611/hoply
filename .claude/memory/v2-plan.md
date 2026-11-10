@@ -10,7 +10,7 @@ metadata:
 
 # Hoply v2: history, spending, projects, and a Mizu-quality UI
 
-Status (2026-11-09): plan approved by the user. **M0**, **M0.5 panel look** and **M2** are done and committed (user live check of M2 passed on real data; glass look deferred, see "Known issues"). **M3** is done and committed. **M4** is built, including its limits polish: pace, model-scoped windows, extra usage/spend. **M5** is built without GPU/energy/memory, which the user skipped until a sparkDash capture exists: model-server samples + rollups, Local model page, saved vs API, 5 s/30 s cadence, Keychain/`RemoteEndpoint` plumbing. Both are committed (2026-11-10, `6c36b3b` and `bb3d25d`); notifications, click-through, the Limits and Local model pages on real data, and the cadence switch are still unverified live. **2026-11-10 (uncommitted):** M4 + M5 review fixes and the **M5.5** core half are done; **M5.5** is built, core and UI. Review fixes and M5.5 are committed (`166e164`). **M6** is built, core and UI (uncommitted). **Next:** M7 Clean up. Still open: the user's live check (re-run `scripts/install.sh` for the new hooks). The deferred glass polish pass (live, see "Known issues") is still open. GPU joins M5 when a capture arrives (routes listed in "M5 core outcome"). **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M5.5 → M6 → M7 → M8 → M1.** M5.5 holds the T3 Code ideas. Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
+Status (2026-11-09): plan approved by the user. **M0**, **M0.5 panel look** and **M2** are done and committed (user live check of M2 passed on real data; glass look deferred, see "Known issues"). **M3** is done and committed. **M4** is built, including its limits polish: pace, model-scoped windows, extra usage/spend. **M5** is built without GPU/energy/memory, which the user skipped until a sparkDash capture exists: model-server samples + rollups, Local model page, saved vs API, 5 s/30 s cadence, Keychain/`RemoteEndpoint` plumbing. Both are committed (2026-11-10, `6c36b3b` and `bb3d25d`); notifications, click-through, the Limits and Local model pages on real data, and the cadence switch are still unverified live. **2026-11-10 (uncommitted):** M4 + M5 review fixes and the **M5.5** core half are done; **M5.5** is built, core and UI. Review fixes and M5.5 are committed (`166e164`). **M6** is built and committed (`9ac069f`). **M7** Clean up is built, core and UI (2026-11-10, uncommitted; nothing ran live). **Next:** M8 Palette. Still open: the user's live check (re-run `scripts/install.sh` for the new hooks). The deferred glass polish pass (live, see "Known issues") is still open. GPU joins M5 when a capture arrives (routes listed in "M5 core outcome"). **Build order (user, 2026-11-09): M2 → M3 → M4 → M5 → M5.5 → M6 → M7 → M8 → M1.** M5.5 holds the T3 Code ideas. Cloudflare Access moved to the end; IDs kept so references stay valid. Work milestone by milestone and update this status line as milestones land.
 
 ## Context
 
@@ -464,6 +464,20 @@ Rules for the data:
 - **Known gaps:** the app has no session pids, so two sessions of one agent in one folder tie by `.directory`, not `.lineage`. `DevServer` has no public init; the preview goes through the classifier.
 - **Snapshots:** `dashboard-dev-servers-*`, `dashboard-dev-servers-empty-*`, `dashboard-dev-servers-stop-*`, `panel-*`, `panel-full-*`, `panel-dev-servers-stop-*`. The red Stop button renders grey in snapshots.
 - **Unverified live:** everything in the app (scan cadence, pills on real servers, Stop on a real `npm run dev`, menus, tooltips).
+
+**M7 outcome (2026-11-10, uncommitted):** core and UI. `swift build` warning-free, tests green, snapshots render; no real scan, Trash move or Terminate ran from the app.
+- **Core:** `AgentKit/Cleanup/` (pure rules, keep reasons, `TrashGuard`, report), `OrphanTracker` + `OrphanStop`, `GitWorktree`; `AgentSystem/Cleanup/` (`CleanupScanner`, `CleanupService`, `DirectorySizer`, `TrashBin`), `GitClient+Worktrees`, `Ledger+Cleanup` (`cleanupInventory`, `logCleanup`, `cleanupLog`), `ProcessTerminator.stop([ProcessIdentity])`. No schema change (`cleanup_log` is v1's). New setting `cleanupIncludesNodeModules` (false).
+- **Decisions:**
+  - Squash-merged branches count as not merged (ancestor check only), so they are kept.
+  - Worktree idle time = the later of ledger activity and the admin dir's `index`/`HEAD` mtime.
+  - Caches: walk depth 3, stop at nested repos; a repo cache must be gitignored and hold no tracked file.
+  - A transcript item is the main `.jsonl` plus its session folder. `~/.claude` stays read-only except for this user-ticked move to the Trash (CLAUDE.md says so).
+  - Folders git no longer tracks as worktrees are listed with their size, never offered.
+  - Unattended scans skip TCC-protected folders until the user has scanned once.
+  - Only build caches are pre-ticked. Put Back restores a worktree folder but not its pruned git admin entry (the branch is still there).
+  - The run report is in memory; `cleanup_log` gets one row per removed item (an item inside a trashed worktree gets none).
+- **UI:** `Models/Cleanup`, `Dashboard/Cleanup/` (page, section, review sheet, report + log cards), `Services/Trash`, panel footer "X reclaimable" from 100 MB, `DashboardPage.cleanUp`. The node_modules toggle is on the page, not in Settings.
+- **Unverified live:** `NSWorkspace.recycle` + Put Back, the sheet on the Dashboard window, TCC behaviour, orphan detection on real agent sessions (it needs the agent seen alive first, so orphans from before Hoply launched are never flagged), scan time on real projects.
 
 **Comments (2026-11-10, user):** about 700 comment lines removed from `Sources/` (every `///` doc comment in the core targets, 140 lines in the app target). See the `comments-only-complex` memory; the agent definitions carry the stricter rule.
 

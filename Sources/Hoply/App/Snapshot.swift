@@ -44,6 +44,7 @@ enum Snapshot {
                     case .spending: 1_420
                     case .limits: 1_200
                     case .localModel: 1_320
+                    case .cleanUp: 1_180
                     default: 760
                     }
                     try render(DashboardView(plainSidebar: true).frame(width: 1180, height: height),
@@ -62,6 +63,19 @@ enum Snapshot {
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
                            appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-empty-\(name).png"))
                 model.devServers.show(servers)
+
+                model.history.show(PreviewData.history(now: now), page: .cleanUp)
+                model.cleanup.show(PreviewData.cleanupScan(now: now), report: PreviewData.cleanupReport(now: now),
+                                   log: PreviewData.cleanupLog(now: now))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_180), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-clean-up-report-\(name).png"))
+                model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
+                                   log: PreviewData.cleanupLog(now: now))
+                model.cleanup.setSelected(model.cleanup.candidates, true)
+                try render(CleanupReviewSheet(), model: model, appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-clean-up-review-\(name).png"))
+                model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
+                                   log: PreviewData.cleanupLog(now: now))
 
                 var disconnected = PreviewData.settings
                 disconnected.claudeLimitsEnabled = false

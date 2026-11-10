@@ -9,6 +9,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
     case localModel = "local-model"
     case limits
     case devServers = "dev-servers"
+    case cleanUp = "clean-up"
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .localModel: return "Local model"
         case .limits: return "Limits"
         case .devServers: return "Dev servers"
+        case .cleanUp: return "Clean up"
         }
     }
 
@@ -33,6 +35,7 @@ enum DashboardPage: String, CaseIterable, Identifiable, Hashable {
         case .localModel: return "cpu"
         case .limits: return "gauge.with.dots.needle.67percent"
         case .devServers: return "server.rack"
+        case .cleanUp: return "sparkles"
         }
     }
 }
