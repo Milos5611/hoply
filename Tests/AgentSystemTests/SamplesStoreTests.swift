@@ -234,7 +234,8 @@ final class SamplesStoreTests: XCTestCase {
         try await ledger.recordModelSamples(VLLMStatus.compute(previous: nil, current: first))
         try await ledger.recordModelSamples(VLLMStatus.compute(previous: first, current: snapshot(1250, at: now)))
         let recent = try await ledger.recentModelSamples(since: now.addingTimeInterval(-600), now: now)
-        XCTAssertEqual(Set(recent.keys), Set(ModelServerSeries.all))
+        XCTAssertEqual(Set(recent.keys), Set(ModelServerSeries.all).subtracting([ModelServerSeries.memoryBytes]),
+                       "the old poll path never reads memory")
         XCTAssertEqual(recent[ModelServerSeries.generationTokensPerSecond]?.last?.max, 50)
         XCTAssertEqual(recent[ModelServerSeries.kvCachePercent]?.last?.max, 50)
         XCTAssertEqual(recent[ModelServerSeries.generatedTokens]?.map(\.sum).reduce(0, +), 250)

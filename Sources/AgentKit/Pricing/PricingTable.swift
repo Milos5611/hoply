@@ -179,8 +179,30 @@ public struct PricingTable: Sendable, Equatable {
     }
 
     public func isLocal(_ model: String?) -> Bool {
-        guard let model = model?.lowercased() else { return false }
-        return localModelPatterns.contains { model.contains($0) }
+        Self.localPattern(matching: model, in: localModelPatterns) != nil
+    }
+
+    public static let exactPatternPrefix = "="
+
+    public static func exactLocalPattern(for model: String) -> String {
+        exactPatternPrefix + model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    public static func localPattern(matching model: String?, in patterns: [String]) -> String? {
+        guard let model = model?.lowercased() else { return nil }
+        return patterns.first { pattern in
+            // "=id" names one model exactly; anything else is a substring, as it always was.
+            if pattern.hasPrefix(exactPatternPrefix), pattern.count > 1 { return model == pattern.dropFirst().lowercased() }
+            return model.contains(pattern)
+        }
+    }
+
+    public static func treatingAsLocal(_ model: String, _ local: Bool, patterns: [String]) -> [String] {
+        let exact = exactLocalPattern(for: model)
+        if local {
+            return localPattern(matching: model, in: patterns) == nil ? patterns + [exact] : patterns
+        }
+        return patterns.filter { $0.lowercased() != exact }
     }
 
     public func match(_ model: String) -> (id: String, price: ModelPrice)? {

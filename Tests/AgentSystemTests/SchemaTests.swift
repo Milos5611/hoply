@@ -15,7 +15,8 @@ final class SchemaTests: XCTestCase {
         try Schema.migrate(db, databasePath: path)
         XCTAssertEqual(try db.userVersion(), Schema.migrations.count)
         XCTAssertEqual(try tables(db), ["projects", "path_map", "sessions", "usage", "ingest_cursors", "samples",
-                                        "limit_samples", "state_spans", "cleanup_log", "subagents"])
+                                        "limit_samples", "state_spans", "cleanup_log", "subagents", "session_prompts",
+                                        "dismissed_suggestions"])
         XCTAssertEqual(try db.queryOne("PRAGMA journal_mode") { $0.text(0) }, "wal")
         XCTAssertEqual(try db.queryOne("PRAGMA synchronous") { $0.int(0) }, 1, "NORMAL")
         XCTAssertEqual(try db.queryOne("PRAGMA busy_timeout") { $0.int(0) }, 2000)
@@ -84,7 +85,7 @@ final class SchemaTests: XCTestCase {
             INSERT INTO usage (dedupe_key, source, session_id, ts, model, sidechain, agent_id, output, native_usd)
             VALUES ('cc:a:1', 'claude-code', 's1', 1, 'claude-opus-5-5', 1, 'a1', 10, NULL)
             """)
-        try Schema.migrate(db, databasePath: path)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(3)))
         XCTAssertEqual(try db.userVersion(), 3)
         XCTAssertTrue(try tables(db).contains("subagents"))
         XCTAssertEqual(try db.queryOne("SELECT COUNT(*) FROM subagents") { $0.int(0) }, 0)
@@ -92,6 +93,30 @@ final class SchemaTests: XCTestCase {
         let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
         XCTAssertEqual(try backup.userVersion(), 2, "the v2 ledger was backed up before migrating")
         XCTAssertFalse(try tables(backup).contains("subagents"))
+    }
+
+    func testV4KeepsAFilledV3LedgerAndItsOpenSpans() throws {
+        let directory = try TempDirectory()
+        let path = directory.path("hoply.sqlite")
+        let db = try SQLiteConnection(path: path)
+        try Schema.configure(db)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(3)))
+        try db.execute("""
+            INSERT INTO projects (id, root, name, kind) VALUES (1, '/p/fiba', 'fiba', 'repo');
+            INSERT INTO path_map (cwd, project_id) VALUES ('/p/fiba/src', 1);
+            INSERT INTO sessions (source, id, project_id, cwd, turns) VALUES ('qwen-code', 'q1', 1, '/p/fiba/src', 3);
+            INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, output) VALUES ('qw:q1:p1:1', 'qwen-code', 'q1', 1, 1, 10);
+            """)
+        try Schema.migrate(db, databasePath: path)
+        XCTAssertEqual(try db.userVersion(), 4)
+        XCTAssertTrue(try tables(db).isSuperset(of: ["session_prompts", "dismissed_suggestions"]))
+        XCTAssertEqual(try db.queryOne("SELECT project_origin, turns FROM sessions") { "\($0.text(0)) \($0.int(1))" }, "auto 3")
+        XCTAssertEqual(try db.queryOne("SELECT merged_into IS NULL FROM projects") { $0.bool(0) }, true)
+        XCTAssertEqual(try db.queryOne("SELECT origin FROM path_map") { $0.text(0) }, "auto")
+        XCTAssertEqual(try db.queryOne("SELECT project_id FROM usage") { $0.int(0) }, 1, "usage rows are untouched")
+        let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
+        XCTAssertEqual(try backup.userVersion(), 3, "the v3 ledger was backed up before migrating")
+        XCTAssertFalse(try tables(backup).contains("session_prompts"))
     }
 
     func testFailedMigrationRollsBack() throws {

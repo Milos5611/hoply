@@ -29,23 +29,29 @@ public enum TelemetryUsage {
         case .claudeCode, .copilotCLI:
             return nil
         }
-        let cwd = record.resource[cwdKey]?.string ?? record[cwdKey]?.string
-        let pid = record.resource["process.pid"]?.int.flatMap { Int32(exactly: $0) }
+        let place = place(of: record)
         return UsageRecord(dedupeKey: dedupeKey, source: source, sessionID: sessionID, timestamp: time,
                            model: record.first(TelemetryMapper.modelKeys)?.string, tokens: tokens,
-                           cwd: cwd.flatMap { $0.isEmpty ? nil : $0 }, processID: pid.flatMap { $0 > 0 ? $0 : nil })
+                           cwd: place.cwd, processID: place.processID)
     }
 
-    public static func ledgerBatch(_ usage: [UsageRecord]) -> LedgerBatch {
-        let bySession = Dictionary(grouping: usage) { SessionKey(source: $0.source, id: $0.sessionID) }
-        let updates = bySession.keys.sorted { ($0.source.rawValue, $0.id) < ($1.source.rawValue, $1.id) }.map { key in
-            let records = bySession[key] ?? []
-            let cwd = records.lazy.compactMap(\.cwd).first
-            return SessionUpdate(key: key, firstAt: records.map(\.timestamp).min(),
-                                 lastAt: records.map(\.timestamp).max(), cwd: cwd,
-                                 placeIsAuthoritative: cwd != nil)
+    public static func ledgerBatch(_ usage: [UsageRecord], prompts: [PromptRecord] = []) -> LedgerBatch {
+        var seen: [SessionKey: (times: [Date], cwd: String?)] = [:]
+        for record in usage {
+            let key = SessionKey(source: record.source, id: record.sessionID)
+            seen[key, default: ([], nil)].times.append(record.timestamp)
+            if seen[key]?.cwd == nil { seen[key]?.cwd = record.cwd }
         }
-        return LedgerBatch(usage: usage, sessions: updates)
+        for prompt in prompts {
+            seen[prompt.session, default: ([], nil)].times.append(prompt.timestamp)
+            if seen[prompt.session]?.cwd == nil { seen[prompt.session]?.cwd = prompt.cwd }
+        }
+        let updates = seen.keys.sorted { ($0.source.rawValue, $0.id) < ($1.source.rawValue, $1.id) }.map { key in
+            let facts = seen[key] ?? ([], nil)
+            return SessionUpdate(key: key, firstAt: facts.times.min(), lastAt: facts.times.max(), cwd: facts.cwd,
+                                 placeIsAuthoritative: facts.cwd != nil)
+        }
+        return LedgerBatch(usage: usage, sessions: updates, prompts: prompts)
     }
 
     static func otelKey(_ record: TelemetryRecord, source: AgentSource, session: String) -> String? {

@@ -78,8 +78,11 @@ final class RemoteEndpointTests: XCTestCase {
         let redirect = endpoint.classify(status: 302, contentType: "text/html", location:
                                             "https://team.cloudflareaccess.com/cdn-cgi/access/login?redirect_url=x",
                                          body: Data())
-        XCTAssertEqual(redirect.failure?.kind, .redirected(status: 302, host: "team.cloudflareaccess.com"))
-        XCTAssertTrue(redirect.failure?.errorDescription?.contains("team.cloudflareaccess.com") ?? false)
+        XCTAssertEqual(redirect.failure?.kind, .accessRequired(host: "team.cloudflareaccess.com"))
+        XCTAssertEqual(redirect.failure?.errorDescription, "sparkDash is behind Cloudflare Access; add a service token")
+        let elsewhere = endpoint.classify(status: 302, contentType: nil, location: "https://sso.example.com/login", body: Data())
+        XCTAssertEqual(elsewhere.failure?.kind, .redirected(status: 302, host: "sso.example.com"))
+        XCTAssertTrue(elsewhere.failure?.errorDescription?.contains("sso.example.com") ?? false)
         XCTAssertEqual(endpoint.classify(status: 301, contentType: nil, location: "/login", body: Data()).failure?.kind,
                        .redirected(status: 301, host: "192.168.40.141"))
         XCTAssertEqual(endpoint.classify(status: 503, contentType: nil, location: nil, body: Data()).failure?.kind,

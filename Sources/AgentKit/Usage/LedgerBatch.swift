@@ -43,14 +43,17 @@ public struct LedgerBatch: Sendable, Equatable {
     public var usage: [UsageRecord]
     public var sessions: [SessionUpdate]
     public var subagents: [SubagentInfo]
+    public var prompts: [PromptRecord]
 
-    public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = [], subagents: [SubagentInfo] = []) {
+    public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = [], subagents: [SubagentInfo] = [],
+                prompts: [PromptRecord] = []) {
         self.usage = usage
         self.sessions = sessions
         self.subagents = subagents
+        self.prompts = prompts
     }
 
-    public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty && subagents.isEmpty }
+    public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty && subagents.isEmpty && prompts.isEmpty }
 }
 
 extension ClaudeTranscriptBatch {

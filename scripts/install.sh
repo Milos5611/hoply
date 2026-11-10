@@ -30,7 +30,8 @@ has_claude() { command -v claude >/dev/null || [ -d "$CLAUDE_DIR" ]; }
 has_copilot() { command -v copilot >/dev/null || [ -d "$COPILOT_DIR" ]; }
 
 CLAUDE_EVENTS='["SessionStart","UserPromptSubmit","PreToolUse","PostToolUse","PermissionRequest","Notification","Elicitation","ElicitationResult","SubagentStart","SubagentStop","Stop","StopFailure","SessionEnd"]'
-CLAUDE_HOOK="curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' --data-binary @- ${ENDPOINT}/hooks/claude-code || true ${MARKER}"
+# X-Hoply-Pid: the hook shell's parent, which is the agent process (or a shell under it; Hoply walks up and checks).
+CLAUDE_HOOK="curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: \$PPID\" --data-binary @- ${ENDPOINT}/hooks/claude-code || true ${MARKER}"
 # Logs-only, signal-specific OTel variables, so any other OpenTelemetry export (metrics, traces) keeps working.
 CLAUDE_ENV=$(jq -n --arg logs "${ENDPOINT}/v1/logs" '{
   CLAUDE_CODE_ENABLE_TELEMETRY: "1",
@@ -90,7 +91,7 @@ connect_copilot() {
                     "notification","agentStop","sessionEnd","errorOccurred"][] as $e ({};
       .[$e] = [{
         type: "command",
-        bash: ("curl -s -m 2 -o /dev/null -H '\''Expect:'\'' -H '\''Content-Type: application/json'\'' --data-binary @- "
+        bash: ("curl -s -m 2 -o /dev/null -H '\''Expect:'\'' -H '\''Content-Type: application/json'\'' -H \"X-Hoply-Pid: $PPID\" --data-binary @- "
                + $endpoint + "/hooks/copilot-cli/" + $e + " || true")
       }]))
   }' > "$COPILOT_HOOKS"

@@ -71,8 +71,8 @@ public struct Ledger: Sendable {
         try await Task.detached(priority: .utility) { try Ledger(configuration: configuration) }.value
     }
 
-    public func record(_ usage: [UsageRecord]) async {
-        await ingest.record(usage)
+    public func record(_ usage: [UsageRecord], prompts: [PromptRecord] = []) async {
+        await ingest.record(usage, prompts: prompts)
     }
 
     public func pollCopilot() async {

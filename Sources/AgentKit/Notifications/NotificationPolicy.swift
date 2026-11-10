@@ -147,7 +147,7 @@ public struct NotificationPolicy: Sendable {
     }
 
     private struct LocalModelWatch {
-        var server: String?
+        var server: String
         var seenOnline = false
         var offlineSince: Date?
         var lastCheck: Date?
@@ -157,7 +157,7 @@ public struct NotificationPolicy: Sendable {
     private var lastPosted: [Cooldown: Date] = [:]
     private var lastLimitSamples: [LimitKind: LimitSample] = [:]
     private var postedLimitAlerts: [String: Date] = [:]
-    private var localModel = LocalModelWatch()
+    private var modelServers: [String: LocalModelWatch] = [:]
     private var limitedWatch: LimitedWatch?
 
     public init(preferences: NotificationPreferences = NotificationPreferences(), calendar: Calendar = .current) {
@@ -335,38 +335,65 @@ public struct NotificationPolicy: Sendable {
 
     // MARK: - Local model
 
+    public static func modelServerOfflineID(_ serverID: String) -> String {
+        serverID == ModelServer.legacyID ? localModelOfflineID : localModelOfflineID + ":" + serverID
+    }
+
     public mutating func localModelChecked(server raw: String?, name: String? = nil, online: Bool,
                                            now: Date = Date()) -> NotificationActions {
-        let server = Self.nonEmpty(raw?.trimmingCharacters(in: .whitespacesAndNewlines))
-        var actions = NotificationActions()
-        if server != localModel.server {
-            if localModel.alerted { actions.withdraw.append(Self.localModelOfflineID) }
-            localModel = LocalModelWatch(server: server)
+        guard let url = Self.nonEmpty(raw?.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return forget(ModelServer.legacyID)
         }
-        guard let server else { return actions }
-        let gap = localModel.lastCheck.map { now.timeIntervalSince($0) } ?? 0
-        localModel.lastCheck = now
+        return modelServerChecked(ModelServer(id: ModelServer.legacyID, name: name ?? "", baseURL: url),
+                                  online ? .online : .offline, now: now)
+    }
 
-        if online {
-            if localModel.alerted { actions.withdraw.append(Self.localModelOfflineID) }
-            localModel.seenOnline = true
-            localModel.offlineSince = nil
-            localModel.alerted = false
+    public mutating func modelServersChanged(_ servers: [ModelServer]) -> NotificationActions {
+        let active = Dictionary(servers.filter(\.isActive).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var actions = NotificationActions()
+        for (id, watch) in modelServers.sorted(by: { $0.key < $1.key }) {
+            if let server = active[id], server.baseURL == watch.server, server.offlineAlerts { continue }
+            actions.withdraw += forget(id).withdraw
+        }
+        return actions
+    }
+
+    private mutating func forget(_ id: String) -> NotificationActions {
+        guard let watch = modelServers.removeValue(forKey: id), watch.alerted else { return NotificationActions() }
+        return NotificationActions(withdraw: [Self.modelServerOfflineID(id)])
+    }
+
+    public mutating func modelServerChecked(_ server: ModelServer, _ availability: ModelServerAvailability,
+                                            now: Date = Date()) -> NotificationActions {
+        let id = Self.modelServerOfflineID(server.id)
+        var actions = NotificationActions()
+        guard server.isActive else { return forget(server.id) }
+        if let known = modelServers[server.id], known.server != server.baseURL { actions = forget(server.id) }
+        var watch = modelServers[server.id] ?? LocalModelWatch(server: server.baseURL)
+        defer { modelServers[server.id] = watch }
+        let gap = watch.lastCheck.map { now.timeIntervalSince($0) } ?? 0
+        watch.lastCheck = now
+
+        if availability != .offline {
+            if watch.alerted { actions.withdraw.append(id) }
+            // A server that answers but refuses us is up: no outage, but it hasn't been seen working either.
+            if availability == .online { watch.seenOnline = true }
+            watch.offlineSince = nil
+            watch.alerted = false
             return actions
         }
-        guard localModel.seenOnline, !localModel.alerted else { return actions }
-        let since = gap > Self.offlineCheckGap ? now : localModel.offlineSince ?? now
-        localModel.offlineSince = since
+        guard watch.seenOnline, !watch.alerted else { return actions }
+        let since = gap > Self.offlineCheckGap ? now : watch.offlineSince ?? now
+        watch.offlineSince = since
         let down = now.timeIntervalSince(since)
-        guard down >= Self.offlineAlertAfter, preferences.enabled, preferences.localModelAlerts,
+        guard down >= Self.offlineAlertAfter, preferences.enabled, preferences.localModelAlerts, server.offlineAlerts,
               !isQuiet(at: now) else { return actions }
-        localModel.alerted = true
+        watch.alerted = true
 
-        let url = URL(string: server)
-        let host = url?.host().map { host in url?.port.map { "\(host):\($0)" } ?? host } ?? server
+        let host = server.host.isEmpty ? server.baseURL : server.host
+        let name = Self.nonEmpty(server.name.trimmingCharacters(in: .whitespaces)) ?? "Local model"
         actions.post.append(NotificationRequest(
-            id: Self.localModelOfflineID, kind: .localModelOffline, interruption: .active,
-            title: "\(Self.nonEmpty(name?.trimmingCharacters(in: .whitespaces)) ?? "Local model") is offline",
+            id: id, kind: .localModelOffline, interruption: .active, title: "\(name) is offline",
             body: "No response from \(host) for \(Self.duration(down)).", threadID: Self.localModelThreadID))
         return actions
     }

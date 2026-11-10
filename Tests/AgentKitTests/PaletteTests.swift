@@ -260,13 +260,56 @@ final class ResumeScriptTests: XCTestCase {
         XCTAssertNotNil(ResumeScript.script(source: .claudeCode, sessionID: id, cwd: "/"))
     }
 
-    func testOnlyClaudeCodeIsSupported() {
-        XCTAssertTrue(ResumeScript.isSupported(.claudeCode))
-        for source in [AgentSource.copilotCLI, .copilotIDE, .qwenCode] {
-            XCTAssertFalse(ResumeScript.isSupported(source))
-            XCTAssertNil(ResumeScript.script(source: source, sessionID: id, cwd: "/tmp"))
-            XCTAssertNil(ResumeScript.fileName(source: source, sessionID: id))
+    func testCopilotCLIAndQwenScripts() throws {
+        for (source, binary) in [(AgentSource.copilotCLI, "copilot"), (.qwenCode, "qwen")] {
+            XCTAssertTrue(ResumeScript.isSupported(source))
+            let script = try XCTUnwrap(ResumeScript.script(source: source, sessionID: id, cwd: "/Users/dev/My Project"))
+            XCTAssertEqual(script, """
+                #!/bin/zsh
+                cd -- '/Users/dev/My Project' || { print -r -- "Hoply: cannot open" '/Users/dev/My Project'; exit 1; }
+                if command -v '\(binary)' >/dev/null 2>&1; then
+                  exec '\(binary)' '--resume' '\(id)'
+                fi
+                exec /bin/zsh -ilc 'exec "$0" "$@"' '\(binary)' '--resume' '\(id)'
+
+                """)
+            XCTAssertEqual(ResumeScript.fileName(source: source, sessionID: id),
+                           "hoply-resume-\(source.rawValue)-\(id).command")
+            XCTAssertNil(ResumeScript.script(source: source, sessionID: "--allow-all-tools", cwd: "/tmp"))
+            XCTAssertNil(ResumeScript.script(source: source, sessionID: "a;b", cwd: "/tmp"))
+            XCTAssertNil(ResumeScript.script(source: source, sessionID: id, cwd: nil))
         }
+    }
+
+    func testCopilotIDEIsNotSupported() {
+        XCTAssertTrue(ResumeScript.isSupported(.claudeCode))
+        XCTAssertFalse(ResumeScript.isSupported(.copilotIDE))
+        XCTAssertNil(ResumeScript.script(source: .copilotIDE, sessionID: id, cwd: "/tmp"))
+        XCTAssertNil(ResumeScript.fileName(source: .copilotIDE, sessionID: id))
+    }
+
+    func testStaleScriptsAreOnlyHoplysOwnOldOnes() {
+        let now = Date(timeIntervalSince1970: 1_794_300_000)
+        func file(_ name: String, days: Double) -> (name: String, modified: Date) {
+            (name, now.addingTimeInterval(-days * 86_400))
+        }
+        let files = [
+            file("hoply-resume-claude-code-\(id).command", days: 8),
+            file("hoply-resume-qwen-code-sim-1.command", days: 30),
+            file("hoply-resume-copilot-cli-abc.command", days: 6.9),
+            file("hoply-resume-claude-code-fresh.command", days: 0),
+            file("hoply-resume-copilot-ide-abc.command", days: 30),
+            file("hoply-resume-claude-code-.command", days: 30),
+            file("hoply-resume-claude-code-a b.command", days: 30),
+            file("hoply-resume-claude-code-abc.command.bak", days: 30),
+            file("hoply-resume-other-abc.command", days: 30),
+            file("notes.command", days: 30),
+            file(".DS_Store", days: 30),
+        ]
+        XCTAssertEqual(ResumeScript.staleFileNames(files, now: now),
+                       ["hoply-resume-claude-code-\(id).command", "hoply-resume-qwen-code-sim-1.command"])
+        XCTAssertEqual(ResumeScript.staleFileNames(files, now: now, olderThan: 86_400).count, 3)
+        XCTAssertEqual(ResumeScript.staleFileNames([], now: now), [])
     }
 
     func testFileName() {

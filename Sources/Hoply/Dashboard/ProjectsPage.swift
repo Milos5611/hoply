@@ -46,6 +46,8 @@ struct ProjectListView: View {
                     ProjectRangePicker()
                 }
                 HistoryBanner()
+                ProjectEditBanner()
+                ForEach(model.projectEdits.suggestions) { MergeSuggestionCard(suggestion: $0) }
                 if list != nil, projects.isEmpty {
                     Card(prominent: true) {
                         EmptyNote(text: "No project usage in \(rangeText.lowercased()). Try a longer range.")
@@ -66,6 +68,7 @@ struct ProjectListView: View {
                 if let unassigned {
                     UnassignedTile(summary: unassigned, share: share(unassigned, of: total))
                 }
+                if named.count > 1 { SuggestionRestore() }
             }
             .padding(24)
         }
@@ -175,7 +178,7 @@ struct UnassignedTile: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
-                        Text("Telemetry with no project. Set hoply.cwd in OTEL_RESOURCE_ATTRIBUTES to attribute it.")
+                        Text("Telemetry with no project. Assign its sessions here, or set hoply.cwd in OTEL_RESOURCE_ATTRIBUTES.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -303,6 +306,7 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header(summary)
                 HistoryBanner()
+                ProjectEditBanner()
                 if detail == nil {
                     loadingTiles
                 } else {
@@ -321,6 +325,9 @@ struct ProjectDetailView: View {
                     }
                 }
                 sessions(detail, range: range)
+                if let project = opened.project, model.history.isReady {
+                    ProjectGroupingCard(project: project)
+                }
             }
             .padding(24)
         }
@@ -385,7 +392,7 @@ struct ProjectDetailView: View {
 
     private func caption(_ summary: ProjectSummary) -> String {
         guard let root = summary.root else {
-            return "Usage without a project: telemetry with no hoply.cwd and no readable process cwd"
+            return "Usage without a project: telemetry with no hoply.cwd and no readable process cwd. Assign a session from its details."
         }
         var parts = [Format.path(root), Self.kindName(summary.kind)]
         if !summary.branches.isEmpty {
@@ -452,7 +459,7 @@ struct ProjectDetailView: View {
         let page = detail?.sessions
         let total = page?.totalCount ?? 0
         return HStack(alignment: .top, spacing: 12) {
-            Card(prominent: true, padding: 0) {
+            Card(prominent: true, padding: 0, clipsContent: true) {
                 VStack(spacing: 0) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("Sessions")

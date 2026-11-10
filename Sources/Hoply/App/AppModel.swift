@@ -10,9 +10,6 @@ import ServiceManagement
 final class AppModel {
     private(set) var sessions: [AgentSession] = []
     private(set) var serverStatus: HubServer.Status = .stopped
-    private(set) var vllm: VLLMStatus?
-    private(set) var vllmError: String?
-    private(set) var vllmLastSeen: Date?
     private(set) var claudeLimits: ClaudeLimits?
     private(set) var claudeLimitsFetchedAt: Date?
     private(set) var claudeLimitsError: String?
@@ -20,17 +17,18 @@ final class AppModel {
     private(set) var settings: AppSettings
     private(set) var launchAtLogin = false
     private(set) var activity = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
-    private(set) var throughput = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
     private(set) var projectsByCwd: [String: ProjectRef] = [:]
     private(set) var gitStats: [String: GitDiffStat] = [:]
     private(set) var editors: [Editor] = []
     private(set) var defaultEditorID = ""
     var showingSettings = false
     let history = History()
+    let modelServers: ModelServers
     let devServers: DevServers
     let cleanup: Cleanup
     let palette: Palette
     let hotKey: HotKey
+    let projectEdits: ProjectEdits
     @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
@@ -41,18 +39,12 @@ final class AppModel {
     @ObservationIgnored private let notifier = Notifier()
     @ObservationIgnored private var policy = NotificationPolicy()
     @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
-    @ObservationIgnored private var lastSnapshot: VLLMSnapshot?
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var resolvingCwds: Set<String> = []
     @ObservationIgnored private var unresolvedCwds: Set<String> = []
-    @ObservationIgnored private var modelLoop: Task<Void, Never>?
-    @ObservationIgnored private var isPollingModel = false
-    @ObservationIgnored private var pollModelAgain = false
-    @ObservationIgnored private var lastModelPoll: Date?
-    @ObservationIgnored private var modelOfflineSince: Date?
+    @ObservationIgnored private var projectsEpoch = 0
     @ObservationIgnored private var panelOnScreen = false
     @ObservationIgnored private var dashboardOnScreen = false
-    @ObservationIgnored private var modelServerEpoch = 0
     @ObservationIgnored private var isFetchingLimits = false
     @ObservationIgnored private var limitsEpoch = 0
     @ObservationIgnored private let gitCache = GitStatCache()
@@ -63,9 +55,6 @@ final class AppModel {
         var cwd: String
         var settled: Bool
     }
-
-    static let fastModelPoll: Duration = .seconds(5)
-    static let slowModelPoll: Duration = .seconds(30)
 
     var attentionCount: Int {
         let grouping = grouping
@@ -84,18 +73,20 @@ final class AppModel {
     var defaultEditor: Editor? {
         editors.first { $0.id == defaultEditorID } ?? editors.first
     }
-    var vllmOnline: Bool { vllm != nil && vllmError == nil }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     init(live: Bool = true) {
         isLive = live
+        modelServers = ModelServers(history: history, live: live)
         devServers = DevServers(live: live)
         cleanup = Cleanup(history: history, live: live)
         palette = Palette(live: live)
         hotKey = HotKey(live: live)
+        projectEdits = ProjectEdits(history: history)
         guard live else {
             settings = AppSettings()
             palette.model = self
+            modelServers.settings = { [weak self] in self?.settings ?? AppSettings() }
             return
         }
         settings = AppSettings.load()
@@ -113,6 +104,9 @@ final class AppModel {
         server.onUsage = { [weak self] usage in
             Task { @MainActor in self?.history.record(usage) }
         }
+        server.onPrompts = { [weak self] prompts in
+            Task { @MainActor in self?.history.record([], prompts: prompts) }
+        }
         server.onStatus = { [weak self] status in
             Task { @MainActor in self?.serverStatus = status }
         }
@@ -120,8 +114,15 @@ final class AppModel {
             Task { @MainActor in self?.lastNote = note }
         }
         server.start(port: UInt16(clamping: settings.port))
+        history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
+        projectEdits.onEdited = { [weak self] in self?.projectsEdited() }
         history.open(LedgerConfiguration(settings: settings))
-        Task { [weak self] in await self?.seedThroughput() }
+        ResumeLauncher.prune()
+        modelServers.settings = { [weak self] in self?.settings ?? AppSettings() }
+        modelServers.onChecked = { [weak self] server, availability, now in
+            guard let self else { return }
+            perform(policy.modelServerChecked(server, availability, now: now))
+        }
 
         if settings.notificationsEnabled { notifier.requestAuthorization() }
         refreshLaunchAtLogin()
@@ -134,7 +135,7 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(5))
             }
         })
-        startModelLoop()
+        modelServers.start()
         devServers.context = { [weak self] in self?.devServerContext }
         devServers.onSnapshot = { [weak self] snapshot in self?.cleanup.observe(snapshot) }
         devServers.start()
@@ -152,11 +153,14 @@ final class AppModel {
 
     func ingest(_ events: [AgentEvent]) {
         let now = Date()
+        var changes: [StateChange] = []
         for event in events {
             activity.add(at: event.time)
             guard let change = board.apply(event) else { continue }
+            changes.append(change)
             perform(policy.sessionChanged(change, project: project(of: change.session), now: now))
         }
+        history.recordStateChanges(changes)
         history.tail(Set(events.compactMap(\.transcriptPath)))
         if events.contains(where: { $0.key.source == .copilotCLI && $0.fromHook }) {
             history.pollCopilot()
@@ -209,19 +213,38 @@ final class AppModel {
         max(session.subagents.count, history.subagentCounts[session.key] ?? 0)
     }
 
-    private func resolveProjects() {
+    private func resolveProjects(replacing: Bool = false) {
         guard history.isReady else { return }
-        let cwds = Set(sessions.compactMap(\.cwd).filter { !$0.isEmpty })
-            .subtracting(projectsByCwd.keys).subtracting(resolvingCwds).subtracting(unresolvedCwds)
-        guard !cwds.isEmpty else { return }
+        var cwds = Set(sessions.compactMap(\.cwd).filter { !$0.isEmpty })
+        if !replacing {
+            cwds = cwds.subtracting(projectsByCwd.keys).subtracting(resolvingCwds).subtracting(unresolvedCwds)
+        }
+        guard !cwds.isEmpty else {
+            if replacing { projectsByCwd = [:] }
+            return
+        }
         resolvingCwds.formUnion(cwds)
+        let epoch = projectsEpoch
         Task {
             let found = await history.resolveProjects(Array(cwds))
+            guard epoch == projectsEpoch else { return }
             resolvingCwds.subtract(cwds)
             guard let found else { return }
             unresolvedCwds.formUnion(cwds.subtracting(found.keys))
-            if !found.isEmpty { projectsByCwd.merge(found) { _, new in new } }
+            if replacing {
+                projectsByCwd = found
+            } else if !found.isEmpty {
+                projectsByCwd.merge(found) { _, new in new }
+            }
         }
+    }
+
+    // The old grouping stays up until the new one is resolved, so the panel regroups without a per-folder flash.
+    private func projectsEdited() {
+        projectsEpoch += 1
+        resolvingCwds = []
+        unresolvedCwds = []
+        resolveProjects(replacing: true)
     }
 
     func projectTitle(for session: AgentSession) -> String? {
@@ -268,11 +291,13 @@ final class AppModel {
         for change in sweep.changes {
             perform(policy.sessionChanged(change, project: project(of: change.session), now: now))
         }
+        history.recordStateChanges(sweep.changes)
         for session in sweep.dropped {
             perform(policy.sessionDismissed(session.key))
         }
+        history.closeStateSpans(for: sweep.dropped.map(\.key))
         activity.advance(to: now)
-        throughput.advance(to: now)
+        modelServers.advance(to: now)
         publishSessions()
         checkLimitedSessions(now: now)
     }
@@ -285,6 +310,7 @@ final class AppModel {
     func dismiss(_ key: SessionKey) {
         board.dismiss(key)
         perform(policy.sessionDismissed(key))
+        history.closeStateSpans(for: [key])
         publishSessions()
     }
 
@@ -336,7 +362,8 @@ final class AppModel {
     private var devServerContext: DevServers.Context {
         let history = history
         let live = sessions.filter { $0.state != .ended }.map { session in
-            DevServerClassifier.Session(key: session.key, cwd: session.cwd.flatMap { $0.isEmpty ? nil : $0 })
+            DevServerClassifier.Session(key: session.key, cwd: session.cwd.flatMap { $0.isEmpty ? nil : $0 },
+                                        reportedPID: session.reportedPID, reportedAt: session.pidReportedAt)
         }
         let resolve: DevServerMonitor.ProjectLookup = { cwds in await history.resolveProjects(cwds) ?? [:] }
         return DevServers.Context(hubPort: settings.port, sessions: live,
@@ -363,133 +390,22 @@ final class AppModel {
         key.flatMap { key in sessions.first { $0.key == key } }
     }
 
-    // MARK: - Local model (vLLM)
+    // MARK: - Model servers
 
     func setPanelOnScreen(_ visible: Bool) {
         panelOnScreen = visible
-        devServers.setWatched(panelOnScreen || dashboardOnScreen)
-        if visible { modelServerWatched() }
+        watchChanged(cameOnScreen: visible)
     }
 
     func setDashboardOnScreen(_ visible: Bool) {
         dashboardOnScreen = visible
+        watchChanged(cameOnScreen: visible)
+    }
+
+    private func watchChanged(cameOnScreen: Bool) {
         devServers.setWatched(panelOnScreen || dashboardOnScreen)
-        if visible { modelServerWatched() }
-    }
-
-    private func modelServerWatched() {
-        let elapsed = Date().timeIntervalSince(lastModelPoll ?? .distantPast)
-        if elapsed >= 4 {
-            pollModelServerNow()
-        } else if !isPollingModel {
-            // The loop may be inside its 30 s wait: restart it so the next poll comes 5 s after the last one.
-            // A running poll picks the fast pace by itself when it ends.
-            startModelLoop(after: Self.fastModelPoll - .seconds(max(elapsed, 0)))
-        }
-    }
-
-    /// Restarts the sleeping loop so the poll happens now. A poll already running is never cancelled (that
-    /// would read as offline); the loop polls again right after it instead.
-    private func pollModelServerNow() {
-        if isPollingModel {
-            pollModelAgain = true
-        } else {
-            startModelLoop()
-        }
-    }
-
-    private func startModelLoop(after first: Duration = .zero) {
-        modelLoop?.cancel()
-        modelLoop = Task { [weak self] in
-            if first > .zero { try? await Task.sleep(for: first) }
-            while !Task.isCancelled {
-                await self?.pollVLLM()
-                guard let delay = self?.nextModelPollDelay() else { return }
-                if delay > .zero { try? await Task.sleep(for: delay) }
-            }
-        }
-    }
-
-    private func nextModelPollDelay() -> Duration {
-        if pollModelAgain {
-            pollModelAgain = false
-            return .zero
-        }
-        if panelOnScreen || dashboardOnScreen { return Self.fastModelPoll }
-        // The offline alert counts from the first failed poll; confirming the outage at the fast pace keeps it
-        // firing two minutes after that miss instead of up to 30 s later, and shows a recovery sooner.
-        if let since = modelOfflineSince,
-           Date().timeIntervalSince(since) < NotificationPolicy.offlineAlertAfter + 10 {
-            return Self.fastModelPoll
-        }
-        return Self.slowModelPoll
-    }
-
-    func pollVLLM() async {
-        isPollingModel = true
-        let current = await fetchVLLM()
-        isPollingModel = false
-        // The URL changed during the poll: `apply` asked for another one, and this answer says nothing about
-        // the new server.
-        guard current else { return }
-        let now = Date()
-        lastModelPoll = now
-        let configured = !settings.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        modelOfflineSince = configured && !vllmOnline ? (modelOfflineSince ?? now) : nil
-        perform(policy.localModelChecked(server: settings.vllmBaseURL, name: settings.vllmName, online: vllmOnline,
-                                         now: now))
-    }
-
-    private func seedThroughput() async {
-        let now = Date()
-        let span = throughput.bucketLength * Double(throughput.values.count)
-        guard let recent = await history.recentModelSamples(since: now.addingTimeInterval(-span)) else { return }
-        for bucket in recent[ModelServerSeries.generationTokensPerSecond] ?? [] {
-            guard let peak = bucket.max else { continue }
-            for offset in stride(from: 0, to: TimeInterval(bucket.resolution), by: throughput.bucketLength) {
-                let time = bucket.startDate.addingTimeInterval(offset)
-                if time <= now { throughput.recordMax(peak, at: time) }
-            }
-        }
-    }
-
-    private func fetchVLLM() async -> Bool {
-        let epoch = modelServerEpoch
-        let raw = settings.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else {
-            vllm = nil
-            vllmError = nil
-            lastSnapshot = nil
-            vllmLastSeen = nil
-            return true
-        }
-        guard let base = URL(string: raw) else {
-            vllmError = "Invalid URL"
-            return true
-        }
-        var request = URLRequest(url: base.appendingPathComponent("metrics"), timeoutInterval: 4)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        let answer = try? await URLSession.shared.data(for: request)
-        guard epoch == modelServerEpoch else { return false }
-        guard let (data, response) = answer, (response as? HTTPURLResponse)?.statusCode == 200 else {
-            vllmError = "Offline"
-            lastSnapshot = nil
-            return true
-        }
-        let samples = PrometheusParser.parse(String(decoding: data, as: UTF8.self))
-        guard VLLMSnapshot.engine(of: samples) != nil else {
-            vllmError = "No vLLM or tensorfold metrics at /metrics"
-            return true
-        }
-        let snapshot = VLLMSnapshot.from(samples: samples, at: Date())
-        let status = VLLMStatus.compute(previous: lastSnapshot, current: snapshot)
-        vllm = status
-        if let rate = status.generationTokensPerSecond { throughput.recordMax(rate, at: snapshot.takenAt) }
-        lastSnapshot = snapshot
-        vllmError = nil
-        vllmLastSeen = snapshot.takenAt
-        history.recordModelSamples(status)
-        return true
+        modelServers.setWatched(panelOnScreen || dashboardOnScreen)
+        if cameOnScreen { modelServers.cameOnScreen() }
     }
 
     // MARK: - Claude plan limits
@@ -552,15 +468,9 @@ final class AppModel {
         if updated.port != old.port {
             server.start(port: UInt16(clamping: updated.port))
         }
-        if updated.vllmBaseURL != old.vllmBaseURL {
-            modelServerEpoch += 1
-            lastSnapshot = nil
-            vllm = nil
-            vllmError = nil
-            vllmLastSeen = nil
-            modelOfflineSince = nil
-            history.resetModelCounters()
-            pollModelServerNow()
+        if updated.modelServers != old.modelServers {
+            perform(policy.modelServersChanged(updated.modelServers))
+            modelServers.settingsChanged(from: old, to: updated)
         }
         if updated.claudeLimitsEnabled && !old.claudeLimitsEnabled {
             Task { await refreshClaudeLimits() }
@@ -634,11 +544,9 @@ extension AppModel {
         model.ingest(PreviewData.events(now: now))
         model.settings = PreviewData.settings
         model.activity = PreviewData.activity(now: now)
-        model.throughput = PreviewData.throughput(now: now)
-        model.vllm = PreviewData.vllm(now: now)
+        model.modelServers.show(PreviewData.modelServerStates(now: now))
         model.claudeLimits = PreviewData.claudeLimits(now: now)
         model.claudeLimitsFetchedAt = now
-        model.vllmLastSeen = now
         model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
         model.history.show(PreviewData.history(now: now))
         model.projectsByCwd = PreviewData.projectsByCwd
@@ -648,16 +556,11 @@ extension AppModel {
         model.devServers.show(PreviewData.devServers(now: now))
         model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
                            log: PreviewData.cleanupLog(now: now))
+        model.projectEdits.show(PreviewData.projectEdits(now: now))
         return model
     }
 
     func showPreview(settings: AppSettings) {
         self.settings = settings
-    }
-
-    func showPreview(vllm: VLLMStatus?, error: String?, lastSeen: Date?) {
-        self.vllm = vllm
-        vllmError = error
-        vllmLastSeen = lastSeen
     }
 }

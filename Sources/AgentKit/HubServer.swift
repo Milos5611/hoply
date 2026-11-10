@@ -11,6 +11,7 @@ public final class HubServer: @unchecked Sendable {
 
     public var onEvents: (@Sendable ([AgentEvent]) -> Void)?
     public var onUsage: (@Sendable ([UsageRecord]) -> Void)?
+    public var onPrompts: (@Sendable ([PromptRecord]) -> Void)?
     public var onStatus: (@Sendable (Status) -> Void)?
     public var onNote: (@Sendable (String) -> Void)?
 
@@ -108,6 +109,7 @@ public final class HubServer: @unchecked Sendable {
                 let outcome = self.router.handle(request)
                 if !outcome.events.isEmpty { self.onEvents?(outcome.events) }
                 if !outcome.usage.isEmpty { self.onUsage?(outcome.usage) }
+                if !outcome.prompts.isEmpty { self.onPrompts?(outcome.prompts) }
                 if let note = outcome.note { self.onNote?(note) }
                 self.send(outcome.response, on: connection)
             case .incomplete(let expectsContinue):

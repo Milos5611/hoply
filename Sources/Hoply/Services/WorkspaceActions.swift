@@ -20,6 +20,18 @@ enum WorkspaceActions {
         NSWorkspace.shared.open(url)
     }
 
+    static func chooseFolder(message: String, startingAt path: String? = nil) async -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.message = message
+        panel.prompt = "Add Folder"
+        if let path { panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true) }
+        return await panel.begin() == .OK ? panel.url?.path : nil
+    }
+
     static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

@@ -12,6 +12,7 @@ struct HoplyApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
+    private var model: AppModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -23,7 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
 
-        let controller = StatusItemController(model: AppModel())
+        let model = AppModel()
+        self.model = model
+        let controller = StatusItemController(model: model)
         statusItem = controller
         if let surface = ProcessInfo.processInfo.environment["HOPLY_OPEN"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -35,5 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.history.isReady else { return .terminateNow }
+        Task {
+            await model.history.closeStateSpans(within: .seconds(1))
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

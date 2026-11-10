@@ -8,7 +8,8 @@ public actor Store {
 
     public nonisolated let databasePath: String
     let db: SQLiteConnection
-    private let registry: ProjectRegistry
+    let registry: ProjectRegistry
+    var spans = StateSpanTracker()
     public private(set) var pricing: PricingTable
     private var aggregator = SampleAggregator()
     private var seededCounters: Set<String> = []
@@ -24,6 +25,7 @@ public actor Store {
         let db = try SQLiteConnection(path: path)
         try Schema.configure(db)
         try Schema.migrate(db, databasePath: path)
+        try Self.closeLeftoverStateSpans(db, now: Date())
         if try db.queryOne("SELECT EXISTS (SELECT 1 FROM usage)", [], { $0.bool(0) }) == true {
             try? Backups.rotateIfDue(db, databasePath: path, keep: 2, interval: 7 * 86_400)
         }
@@ -64,6 +66,7 @@ public actor Store {
                           subagent.description])
                 touched.insert(subagent.session)
             }
+            try record(batch.prompts, touched: &touched)
             if let cursor { try save(cursor) }
             return touched
         }
@@ -255,13 +258,14 @@ public actor Store {
 
     private func upsert(_ update: SessionUpdate) throws {
         let entry = try update.cwd.map { try registry.entry(for: $0, db: db) }
+        let projectID = try registry.pin(for: update.key, db: db) ?? entry?.projectID
         try db.run(Self.upsertSession, [
-            update.key.source.rawValue, update.key.id, entry?.projectID, update.cwd, update.branch, entry?.worktree,
+            update.key.source.rawValue, update.key.id, projectID, update.cwd, update.branch, entry?.worktree,
             update.title, update.titleRank, update.prURL, update.firstAt?.timeIntervalSince1970,
             update.lastAt?.timeIntervalSince1970, update.prompts, update.nativeCostUSD, update.linesAdded,
             update.linesRemoved, update.transcriptPath, update.placeIsAuthoritative, update.resetsTurns,
         ])
-        if let projectID = entry?.projectID, let lastAt = update.lastAt {
+        if let projectID, let lastAt = update.lastAt {
             try db.run("UPDATE projects SET last_active = max(COALESCE(last_active, 0), ?) WHERE id = ?",
                        [lastAt.timeIntervalSince1970, projectID])
         }
@@ -301,7 +305,8 @@ public actor Store {
         """
 
     private func upsert(_ record: UsageRecord) throws {
-        let projectID = try record.cwd.map { try registry.entry(for: $0, db: db).projectID }
+        let projectID = try registry.pin(for: SessionKey(source: record.source, id: record.sessionID), db: db)
+            ?? record.cwd.map { try registry.entry(for: $0, db: db).projectID }
         let tokens = record.tokens
         let stored = try db.queryOne(Self.upsertUsage, [
             record.dedupeKey, record.source.rawValue, record.sessionID, projectID, record.timestamp.timeIntervalSince1970,

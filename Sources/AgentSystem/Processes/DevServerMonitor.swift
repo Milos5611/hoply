@@ -55,8 +55,9 @@ public actor DevServerMonitor {
     public func stop(_ server: DevServer, sessions: [DevServerClassifier.Session] = []) async -> ProcessTerminator.Outcome {
         let scanner = scanner
         let snapshot = await Task.detached(priority: .userInitiated) { scanner.scan() }.value
+        let agents = classifier(hubPort: 0).verified(sessions, in: snapshot).compactMap(\.pid)
         let decision = DevServerStop.decide(server, in: snapshot, ownPID: getpid(), uid: getuid(),
-                                            protectedPIDs: Set(sessions.compactMap(\.pid)))
+                                            protectedPIDs: Set(agents))
         switch decision {
         case .refused(let refusal): return .refused(refusal)
         case .allowed(let target): return await terminator.stop(target)

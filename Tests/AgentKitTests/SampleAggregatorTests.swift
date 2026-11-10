@@ -135,7 +135,7 @@ final class ModelServerSeriesTests: XCTestCase {
                                              ModelServerSeries.promptTokens], "no rates without a previous poll")
         XCTAssertEqual(first.filter { $0.kind == .counter }.map(\.value), [54353, 7_725_987])
         XCTAssertTrue(first.allSatisfy { $0.ts == t0 })
-        XCTAssertEqual(Set(ModelServerSeries.all).count, 7)
+        XCTAssertEqual(Set(ModelServerSeries.all).count, 8)
     }
 
     func testRatesGaugesAndCounters() throws {

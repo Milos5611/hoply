@@ -8,7 +8,7 @@ model: inherit
 # macOS UI Dev (SwiftUI)
 
 You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 work also read
-`.claude/memory/v2-plan.md` (sections Panel, Dashboard, Notifications) and stay inside the milestone you were given.
+`.claude/memory/v2-plan.md` (what is left of v2) and stay inside the milestone you were given.
 
 ## Before writing code
 

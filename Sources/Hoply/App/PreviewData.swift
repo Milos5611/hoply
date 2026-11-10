@@ -5,8 +5,7 @@ import Foundation
 enum PreviewData {
     static var settings: AppSettings {
         var settings = AppSettings()
-        settings.vllmBaseURL = "http://zgx.local:8000"
-        settings.vllmName = "ZGX"
+        settings.modelServers = [zgxServer]
         settings.claudeLimitsEnabled = true
         settings.quietHoursEnabled = true
         settings.mutedProjectRoots = ["\(NSHomeDirectory())/Project/hoply"]
@@ -84,19 +83,129 @@ enum PreviewData {
         series(now: now, values: [0, 0, 12, 38, 41, 40, 22, 0, 0, 35, 44, 43, 39, 30, 41, 45, 44, 38, 42, 43], max: true)
     }
 
-    static func vllm(now: Date) -> VLLMStatus {
-        func snapshot(generated: Double, prompt: Double, at time: Date) -> VLLMSnapshot {
-            let text = """
-            vllm:num_requests_running{model_name="Qwen/Qwen3.8-Flash-Next"} 2
-            vllm:num_requests_waiting{model_name="Qwen/Qwen3.8-Flash-Next"} 1
-            vllm:kv_cache_usage_perc{model_name="Qwen/Qwen3.8-Flash-Next"} 0.44
-            vllm:prompt_tokens_total{model_name="Qwen/Qwen3.8-Flash-Next"} \(prompt)
-            vllm:generation_tokens_total{model_name="Qwen/Qwen3.8-Flash-Next"} \(generated)
-            """
-            return VLLMSnapshot.from(samples: PrometheusParser.parse(text), at: time)
+    // MARK: - Model servers
+
+    static let zgxServer = ModelServer(id: ModelServer.legacyID, name: "ZGX", baseURL: "http://zgx.local:8000")
+    static let ollamaServer = ModelServer(id: "ollama", name: "Ollama", baseURL: "http://localhost:11434")
+    static let teamServer = ModelServer(id: "team", name: "Team vLLM", baseURL: "https://llm.example.com", engine: .vllm,
+                                        auth: ModelServerAuth(kind: .cloudflareAccess,
+                                                              clientID: "5f1c0a9d2b7e4c63.access"))
+    static let studioServer = ModelServer(id: "studio", name: "LM Studio", baseURL: "http://localhost:1234",
+                                          enabled: false)
+
+    static var severalServersSettings: AppSettings {
+        var settings = settings
+        settings.modelServers = [zgxServer, ollamaServer, teamServer, studioServer]
+        return settings
+    }
+
+    static var twoServersSettings: AppSettings {
+        var settings = settings
+        settings.modelServers = [zgxServer, ollamaServer]
+        return settings
+    }
+
+    static func vllmStatus(now: Date) -> ModelServerStatus {
+        let name = "Qwen/Qwen3.8-Flash-Next"
+        let metrics = ModelServerMetrics(model: name, running: 2, waiting: 1, kvCacheUsage: 0.44,
+                                         promptTokensTotal: 61_406_100, generationTokensTotal: 2_845_215,
+                                         generationTokensCounter: 2_845_215)
+        let snapshot = ModelServerSnapshot(engine: .vllm, metricsPrefix: "vllm:",
+                                           models: [ServedModel(id: name, loaded: true, contextLength: 262_144,
+                                                                ownedBy: "vllm")],
+                                           metrics: metrics, takenAt: now)
+        return ModelServerStatus(snapshot: snapshot, generationTokensPerSecond: 43, promptTokensPerSecond: 1_220)
+    }
+
+    static func ollamaStatus(now: Date) -> ModelServerStatus {
+        let models = [
+            ServedModel(id: "qwen3-coder:30b", loaded: true, memoryBytes: 19_800_000_000, contextLength: 32_768,
+                        detail: "Q4_K_M"),
+            ServedModel(id: "nomic-embed-text:latest", loaded: true, memoryBytes: 610_000_000, detail: "F16"),
+            ServedModel(id: "llama3.3:70b", loaded: false, detail: "Q4_K_M"),
+            ServedModel(id: "gemma3:12b", loaded: false, detail: "Q4_K_M"),
+            ServedModel(id: "claude-sonnet-5:cloud", loaded: false, detail: "remote"),
+        ]
+        return ModelServerStatus(snapshot: ModelServerSnapshot(engine: .ollama, version: "0.12.6", models: models,
+                                                               takenAt: now))
+    }
+
+    static let accessRejected = RemoteError(.accessRejected(status: 403), endpoint: teamServer.displayName)
+
+    static func modelServerStates(now: Date) -> [String: ModelServers.State] {
+        var zgx = ModelServers.State(now: now)
+        zgx.status = vllmStatus(now: now)
+        zgx.availability = .online
+        zgx.lastSeen = now
+        zgx.throughput = throughput(now: now)
+        var ollama = ModelServers.State(now: now)
+        ollama.status = ollamaStatus(now: now)
+        ollama.availability = .online
+        ollama.lastSeen = now
+        var team = ModelServers.State(now: now)
+        team.availability = .blocked
+        team.error = accessRejected
+        return [zgxServer.id: zgx, ollamaServer.id: ollama, teamServer.id: team]
+    }
+
+    static func discovered(now: Date) -> [ModelServerCandidate] {
+        var server = ModelServerDiscovery.server(port: 8080)
+        server.name = ModelEngine.llamaCpp.displayName
+        let model = ServedModel(id: "Qwen3-Coder-30B-Q4_K_M.gguf", loaded: true, contextLength: 32_768)
+        let status = ModelServerStatus(snapshot: ModelServerSnapshot(engine: .llamaCpp, version: "b6715", models: [model],
+                                                                     takenAt: now))
+        return [ModelServerCandidate(server: server,
+                                     probe: ModelServerProbe(server: server, result: .success(status), endpoints: [],
+                                                             plainHTTPAllowed: true, at: now))]
+    }
+
+    static func editor(failed: Bool, now: Date) -> ModelServerEditor {
+        func report(_ server: ModelServer, _ route: ModelServerRoute, _ status: Int?, _ error: RemoteError.Kind?,
+                    _ milliseconds: Double) -> ModelServerRouteReport {
+            ModelServerRouteReport(route: route, url: (server.endpoint?.url(path: route.path)?.absoluteString ?? ""),
+                                   status: status, error: error.map { RemoteError($0, endpoint: server.displayName) },
+                                   latency: milliseconds / 1_000)
         }
-        return VLLMStatus.compute(previous: snapshot(generated: 2_845_000, prompt: 61_400_000, at: now.addingTimeInterval(-5)),
-                                  current: snapshot(generated: 2_845_215, prompt: 61_406_100, at: now))
+        if failed {
+            let editor = ModelServerEditor(teamServer, isNew: false)
+            editor.stored = ModelServers.StoredSecrets(clientSecret: true)
+            editor.headers = [ModelServerEditor.Header(name: "X-Team")]
+            editor.stored.headers = ["x-team"]
+            let endpoints = [report(teamServer, .metrics, 403, .accessRejected(status: 403), 212),
+                             report(teamServer, .openAIModels, 403, .accessRejected(status: 403), 187)]
+            editor.test = .done(ModelServerProbe(server: editor.server, result: .failure(accessRejected),
+                                                 endpoints: endpoints, plainHTTPAllowed: true, at: now))
+            editor.showsEndpoints = true
+            return editor
+        }
+        var server = ollamaServer
+        server.name = ""
+        server.baseURL = "localhost:11434/v1"
+        let editor = ModelServerEditor(server, isNew: true)
+        let tested = editor.server
+        let missing = RemoteError.Kind.http(status: 404)
+        let endpoints = [report(tested, .metrics, 404, missing, 3), report(tested, .openAIModels, 200, nil, 9),
+                         report(tested, .ollamaVersion, 200, nil, 4), report(tested, .ollamaTags, 200, nil, 11),
+                         report(tested, .ollamaRunning, 200, nil, 6), report(tested, .lmStudioModels, 404, missing, 3),
+                         report(tested, .llamaCppProps, 404, missing, 2), report(tested, .tgiInfo, 404, missing, 3)]
+        editor.test = .done(ModelServerProbe(server: tested, result: .success(ollamaStatus(now: now)),
+                                             endpoints: endpoints, plainHTTPAllowed: true, at: now))
+        editor.showsEndpoints = true
+        return editor
+    }
+
+    static func ollamaLocalModel(_ data: LocalModelData?) -> LocalModelData? {
+        guard var data else { return nil }
+        data.serverID = ollamaServer.id
+        data.memory = data.kvCache.map { bucket in
+            let bytes = (bucket.mean ?? 0) > 12 ? 20_410_000_000.0 : 610_000_000.0
+            return SampleBucket(series: ModelServerSeries.memoryBytes, resolution: bucket.resolution, start: bucket.start,
+                                n: bucket.n, sum: bytes * Double(bucket.n), min: bytes, max: bytes)
+        }
+        data.generation = []
+        data.kvCache = []
+        data.tokenDays = []
+        return data
     }
 
     static func claudeLimits(now: Date) -> ClaudeLimits? {
@@ -255,7 +364,71 @@ enum PreviewData {
                             model: "claude-sonnet-5", firstAt: at(3), lastAt: at(0.5), totals: totals(usd: 0.84, local: false)),
             SubagentSummary(agentID: "a3", agentType: "test-runner", description: "Run the pricing component tests",
                             model: "claude-sonnet-5", firstAt: at(1), lastAt: at(0.3), totals: totals(usd: 0.12, local: false)),
-        ])]
+        ], spans: liveSpans(now: now))]
+    }
+
+    private static func spans(now: Date, _ stretches: [(state: SessionState, from: Double, to: Double?)]) -> [StateSpan] {
+        stretches.map { stretch in
+            StateSpan(state: stretch.state, start: now.addingTimeInterval(-stretch.from * 60),
+                      end: stretch.to.map { now.addingTimeInterval(-$0 * 60) })
+        }
+    }
+
+    static func liveSpans(now: Date) -> [StateSpan] {
+        spans(now: now, [(.working, 42, 31), (.yourTurn, 31, 29.5), (.working, 29.5, 18), (.needsPermission, 18, 17.2),
+                         (.working, 17.2, 9), (.yourTurn, 9, 6), (.working, 6, nil)])
+    }
+
+    static func timelineSamples(now: Date) -> [[StateSpan]] {
+        let short = spans(now: now, [(.working, 2.1, 1.3), (.needsPermission, 1.3, 1.05), (.working, 1.05, 0.4),
+                                     (.yourTurn, 0.4, 0.1)])
+        var long: [(state: SessionState, from: Double, to: Double?)] = []
+        var cursor = 360.0
+        var step = 0
+        while cursor > 12 {
+            let working = 4 + Double((step * 7) % 23)
+            let waiting = step % 5 == 3 ? 46 : 0.4 + Double((step * 3) % 8)
+            long.append((.working, cursor, cursor - working))
+            cursor -= working
+            if step % 4 == 1 {
+                long.append((.needsPermission, cursor, cursor - 0.4))
+                long.append((.working, cursor - 0.4, cursor - 3))
+                cursor -= 3
+            }
+            if step == 6 {
+                long.append((.yourTurn, cursor, cursor - 0.75))
+                long.append((.idle, cursor - 0.75, cursor - 38))
+                cursor -= 58
+            } else {
+                long.append((.yourTurn, cursor, max(cursor - waiting, 12)))
+                cursor -= waiting
+            }
+            step += 1
+        }
+        long.append((.working, 12, 3))
+        long.append((.yourTurn, 3, nil))
+        return [short, liveSpans(now: now), spans(now: now, long)]
+    }
+
+    static let fibaCopy = ProjectRef(id: 8, root: "\(NSHomeDirectory())/Work/fiba-copy", name: "fiba-copy", kind: .repo)
+
+    static func projectEdits(now: Date) -> ProjectEditsPreview {
+        let home = NSHomeDirectory()
+        let refs = projectRefs
+        let archived = ProjectRef(id: 9, root: "\(home)/Project/archive/fiba-web", name: "fiba-web", kind: .repo)
+        let scratch = ProjectRef(id: 10, root: "\(home)/Project/fiba-spike", name: "fiba-spike", kind: .folder)
+        let suggestion = MergeSuggestion(id: "clone:github.com/acme/fiba:1,8", remote: "github.com/acme/fiba",
+                                         projects: [refs[0], fibaCopy])
+        return ProjectEditsPreview(
+            projects: refs + [fibaCopy],
+            merged: [MergedProject(project: archived, into: refs[0]), MergedProject(project: scratch, into: refs[0])],
+            folders: [PathAssignment(path: "\(home)/Design/fiba-assets", project: refs[0])],
+            sessions: [SessionAssignment(key: liveKey, title: "Build the pricing section", project: refs[0])],
+            suggestions: [suggestion],
+            usage: [refs[0].id: ProjectEdits.Usage(sessions: 163, totals: totals(usd: 1_284, local: false),
+                                                   firstActive: now.addingTimeInterval(-212 * 86_400)),
+                    fibaCopy.id: ProjectEdits.Usage(sessions: 41, totals: totals(usd: 96.4, local: false),
+                                                    firstActive: now.addingTimeInterval(-34 * 86_400))])
     }
 
     private struct Stream {
@@ -366,6 +539,12 @@ enum PreviewData {
         let fiba = summaries[0]
         let fibaDaily = series(points(month.filter { $0.project == 0 }) { $0.model }, lastDays: 30)
         let fibaSessions = sessions.filter { $0.project?.id == fiba.project?.id }
+        let unassigned = summaries.first { $0.project == nil }.map { summary in
+            ProjectDetailData(range: .month, summary: summary,
+                              daily: series(points(month.filter { $0.project == nil }) { $0.model }, lastDays: 30),
+                              sessions: SessionPage(sessions: sessions.filter { $0.project == nil },
+                                                    totalCount: summary.sessionCount))
+        }
         let todayBySource = Dictionary(grouping: entries.filter { $0.day == today }, by: \.source)
             .mapValues { $0.reduce(LedgerTotals.zero) { $0 + $1.totals } }
         return HistoryPreview(
@@ -388,6 +567,7 @@ enum PreviewData {
             projects: ProjectsData(range: .month, projects: summaries),
             projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
                                              sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)),
+            unassignedDetail: unassigned,
             limits: limits(now: now, entries: entries),
             localModel: localModel(now: now, entries: entries, days: days),
             contextWindows: [liveKey: ContextWindow(used: 172_400, limit: ContextWindow.standard),
@@ -445,7 +625,8 @@ enum PreviewData {
         for entry in local { bySource[entry.day, default: [:]][entry.source.rawValue, default: .zero] += entry.totals }
         let points = bySource.flatMap { day, sums in sums.map { DailySpendPoint(day: day, series: $0.key, totals: $0.value) } }
             .sorted { ($0.day, $0.series) < ($1.day, $1.series) }
-        return LocalModelData(range: range, interval: interval, generation: generation, kvCache: kvCache,
+        return LocalModelData(serverID: zgxServer.id, range: range, interval: interval, generation: generation,
+                              kvCache: kvCache,
                               tokenDays: tokenDays, saved: DailySpendSeries(days: window, points: points), lastSeen: now)
     }
 
@@ -615,6 +796,10 @@ enum PreviewData {
                            hours: 1.7, turns: 15, usd: 7.02, mix: [("claude-sonnet-5", 1)]),
             SessionRowSeed(title: "Profile the ingest coordinator", project: 2, branch: "v2-ledger", minutesAgo: 5_800,
                            hours: 0.9, turns: 6, usd: 3.30, mix: [("Qwen3.8-Flash-Next", 1)]),
+            SessionRowSeed(title: nil, source: .copilotIDE, project: nil, branch: nil, minutesAgo: 6_500, hours: 0.4,
+                           turns: 0, usd: 1.12, mix: [("claude-sonnet-5", 1)]),
+            SessionRowSeed(title: nil, source: .qwenCode, project: nil, branch: nil, minutesAgo: 7_200, hours: 1.3, turns: 4,
+                           usd: 2.05, mix: [("Qwen3.8-Flash-Next", 1)]),
         ]
         return rows.enumerated().map { index, row in
             let project = row.project.flatMap { projects.indices.contains($0) ? projects[$0] : nil }

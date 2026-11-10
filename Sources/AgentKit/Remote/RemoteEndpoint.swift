@@ -40,11 +40,12 @@ public struct RemoteEndpoint: Sendable, Equatable {
 
     static let credentialQueryNames: Set<String> = ["token", "access_token", "api_key", "apikey", "secret"]
 
-    public func request(path: String, credentials: RemoteCredentials, timeout: TimeInterval = 10) throws -> URLRequest {
+    public func request(path: String, credentials: RemoteCredentials, timeout: TimeInterval = 10,
+                        accept: String = "application/json") throws -> URLRequest {
         guard let url = url(path: path) else { throw RemoteError(.invalidURL, endpoint: name) }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpShouldHandleCookies = false
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("Hoply", forHTTPHeaderField: "User-Agent")
         if let raw = credentials.bearerToken {
             let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,35 +54,85 @@ public struct RemoteEndpoint: Sendable, Equatable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         for (field, value) in credentials.headers {
+            guard Self.isHeaderName(field) else { throw RemoteError(.invalidHeader(name: field), endpoint: name) }
             guard Self.isHeaderSafe(value) else { throw RemoteError(.invalidToken, endpoint: name) }
             request.setValue(value, forHTTPHeaderField: field)
         }
         return request
     }
 
+    static let refusedHeaderNames: Set<String> = ["host", "content-length", "connection", "transfer-encoding", "upgrade"]
+
+    public static func isHeaderName(_ name: String) -> Bool {
+        let symbols = Set("!#$%&'*+-.^_`|~")
+        return !name.isEmpty && !refusedHeaderNames.contains(name.lowercased())
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || symbols.contains($0)) }
+    }
+
     static func isHeaderSafe(_ value: String) -> Bool {
         value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value < 0x7F }
     }
 
-    public func classify(_ response: URLResponse, body: Data) -> Result<Data, RemoteError> {
+    public func classify(_ response: URLResponse, body: Data,
+                         auth: ModelServerAuthKind = .bearer) -> Result<Data, RemoteError> {
         guard let http = response as? HTTPURLResponse else { return .failure(RemoteError(.http(status: 0), endpoint: name)) }
         return classify(status: http.statusCode, contentType: http.value(forHTTPHeaderField: "Content-Type"),
-                        location: http.value(forHTTPHeaderField: "Location"), body: body)
+                        location: http.value(forHTTPHeaderField: "Location"), body: body, auth: auth,
+                        challenge: http.value(forHTTPHeaderField: "WWW-Authenticate"))
     }
 
-    public func classify(status: Int, contentType: String?, location: String?, body: Data) -> Result<Data, RemoteError> {
+    public func classify(status: Int, contentType: String?, location: String?, body: Data,
+                         auth: ModelServerAuthKind = .bearer, challenge: String? = nil) -> Result<Data, RemoteError> {
+        func fail(_ kind: RemoteError.Kind) -> Result<Data, RemoteError> { .failure(RemoteError(kind, endpoint: name)) }
+        let html = Self.isHTML(contentType: contentType, body: body)
+        let viaAccess = auth == .cloudflareAccess
         if (300..<400).contains(status) {
-            let target = location.flatMap { URL(string: $0, relativeTo: baseURL)?.host() }
-            return .failure(RemoteError(.redirected(status: status, host: target), endpoint: name))
+            let target = location.flatMap { URL(string: $0, relativeTo: baseURL) }
+            let host = target?.host()?.lowercased()
+            if let host, Self.isAccessHost(host) {
+                return fail(viaAccess ? .accessRejected(status: status) : .accessRequired(host: host))
+            }
+            if baseURL.scheme == "http", target?.scheme?.lowercased() == "https", host == self.host {
+                return fail(.httpsRequired)
+            }
+            return fail(.redirected(status: status, host: host))
         }
-        if Self.isHTML(contentType: contentType, body: body) {
-            return .failure(RemoteError(.htmlPage(status: status), endpoint: name))
+        if html, Self.mentionsAccess(body) {
+            return fail(viaAccess ? .accessRejected(status: status) : .accessRequired(host: nil))
         }
         if status == 401 || status == 403 {
-            return .failure(RemoteError(.tokenRejected(status: status, message: Self.errorMessage(body)), endpoint: name))
+            // Access answers a bad service token with a 403 page; JSON behind a passing token is the origin's own answer.
+            if viaAccess, status == 403 || html { return fail(.accessRejected(status: status)) }
+            switch auth {
+            case .basic:
+                return fail(.credentialsRejected(status: status))
+            case .none where !html || status == 401:
+                return fail(status == 401 ? .authRequired(scheme: Self.challengeScheme(challenge)) : .http(status: status))
+            case .none:
+                return fail(.htmlPage(status: status))
+            case .bearer, .cloudflareAccess, .headers:
+                // sparkDash-era callers classify a 403 page as a login page in front of the service.
+                if html, auth == .bearer, status == 403 { return fail(.htmlPage(status: status)) }
+                return fail(.tokenRejected(status: status, message: html ? nil : Self.errorMessage(body)))
+            }
         }
-        guard (200..<300).contains(status) else { return .failure(RemoteError(.http(status: status), endpoint: name)) }
+        if html { return fail(.htmlPage(status: status)) }
+        guard (200..<300).contains(status) else { return fail(.http(status: status)) }
         return .success(body)
+    }
+
+    static func isAccessHost(_ host: String) -> Bool {
+        host == "cloudflareaccess.com" || host.hasSuffix(".cloudflareaccess.com")
+    }
+
+    static func mentionsAccess(_ body: Data) -> Bool {
+        let text = String(decoding: body.prefix(8_192), as: UTF8.self).lowercased()
+        return text.contains("cloudflareaccess.com") || text.contains("cloudflare access")
+    }
+
+    static func challengeScheme(_ challenge: String?) -> String? {
+        let scheme = challenge?.split(whereSeparator: { $0 == " " || $0 == "," }).first.map { $0.lowercased() }
+        return scheme.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     static func isHTML(contentType: String?, body: Data) -> Bool {
@@ -92,7 +143,9 @@ public struct RemoteEndpoint: Sendable, Equatable {
 
     static func errorMessage(_ body: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
-        let message = (object["error"] as? String) ?? (object["message"] as? String)
+        let nested = (object["error"] as? [String: Any])?["message"] as? String
+        let message = (object["error"] as? String) ?? nested ?? (object["message"] as? String)
+            ?? (object["detail"] as? String)
         return message.map { String($0.prefix(200)) }.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
@@ -118,10 +171,23 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
         case invalidURL
         case missingToken
         case invalidToken
+        case missingSecret(what: String)
+        case invalidHeader(name: String)
         case tokenRejected(status: Int, message: String?)
+        case credentialsRejected(status: Int)
+        case authRequired(scheme: String?)
+        case accessRejected(status: Int)
+        case accessRequired(host: String?)
         case htmlPage(status: Int)
         case redirected(status: Int, host: String?)
+        case httpsRequired
         case http(status: Int)
+        case noModelServer
+        case insecureHTTPBlocked
+        case timedOut
+        case hostNotFound
+        case connectionRefused
+        case tlsFailure(String)
         case transport(String)
     }
 
@@ -133,17 +199,73 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
         self.endpoint = endpoint
     }
 
+    public init(_ error: URLError, endpoint: String) {
+        self.init(Kind(code: error.code.rawValue, description: error.localizedDescription), endpoint: endpoint)
+    }
+
     public var errorDescription: String? {
         switch kind {
         case .invalidURL: return "The \(endpoint) URL isn't a valid http(s) address"
         case .missingToken: return "No \(endpoint) token saved"
         case .invalidToken: return "The \(endpoint) token contains characters that can't be sent"
+        case .missingSecret(let what): return "No \(what) saved for \(endpoint)"
+        case .invalidHeader(let name): return "\"\(name)\" can't be sent as a header name"
         case .tokenRejected(let status, _): return "\(endpoint) rejected the token (HTTP \(status))"
+        case .credentialsRejected(let status): return "\(endpoint) rejected the user name or password (HTTP \(status))"
+        case .authRequired(let scheme):
+            return scheme == "basic" ? "\(endpoint) needs a user name and password" : "\(endpoint) needs an API key"
+        case .accessRejected: return "Cloudflare Access rejected the service token for \(endpoint)"
+        case .accessRequired: return "\(endpoint) is behind Cloudflare Access; add a service token"
         case .htmlPage: return "\(endpoint) returned a web page instead of data; check the URL"
         case .redirected(_, let host):
             return "\(endpoint) redirected to \(host ?? "another address"); check the URL, or a login page may be in front of it"
+        case .httpsRequired: return "\(endpoint) only answers over https; change the URL to https://"
         case .http(let status): return "\(endpoint) returned HTTP \(status)"
+        case .noModelServer: return "\(endpoint) answered, but no model server API was found there; check the URL and port"
+        case .insecureHTTPBlocked:
+            return "macOS blocks plain http to \(endpoint) because it isn't on the local network; use https://"
+        case .timedOut: return "\(endpoint) didn't answer in time"
+        case .hostNotFound: return "The \(endpoint) host name couldn't be found"
+        case .connectionRefused: return "Nothing is listening at the \(endpoint) address"
+        case .tlsFailure(let reason): return "No secure connection to \(endpoint): \(reason)"
         case .transport(let reason): return "\(endpoint) is unreachable: \(reason)"
+        }
+    }
+
+    public var isUnreachable: Bool {
+        switch kind {
+        case .timedOut, .hostNotFound, .connectionRefused, .transport: return true
+        case .http(let status): return (502...504).contains(status)
+        default: return false
+        }
+    }
+
+    public var isAuthFailure: Bool {
+        switch kind {
+        case .missingToken, .invalidToken, .missingSecret, .invalidHeader, .tokenRejected, .credentialsRejected,
+             .authRequired, .accessRejected, .accessRequired:
+            return true
+        default: return false
+        }
+    }
+}
+
+extension RemoteError.Kind {
+    public init(code: Int, description: String) {
+        switch code {
+        case URLError.Code.appTransportSecurityRequiresSecureConnection.rawValue: self = .insecureHTTPBlocked
+        case URLError.Code.timedOut.rawValue: self = .timedOut
+        case URLError.Code.cannotFindHost.rawValue, URLError.Code.dnsLookupFailed.rawValue: self = .hostNotFound
+        case URLError.Code.cannotConnectToHost.rawValue: self = .connectionRefused
+        case URLError.Code.serverCertificateUntrusted.rawValue, URLError.Code.serverCertificateHasUnknownRoot.rawValue:
+            self = .tlsFailure("its certificate isn't trusted (self-signed or a private CA)")
+        case URLError.Code.serverCertificateHasBadDate.rawValue, URLError.Code.serverCertificateNotYetValid.rawValue:
+            self = .tlsFailure("its certificate is expired or not valid yet")
+        case URLError.Code.clientCertificateRequired.rawValue, URLError.Code.clientCertificateRejected.rawValue:
+            self = .tlsFailure("it asks for a client certificate")
+        case URLError.Code.secureConnectionFailed.rawValue:
+            self = .tlsFailure("the TLS handshake failed; the port may speak plain http")
+        default: self = .transport(description)
         }
     }
 }

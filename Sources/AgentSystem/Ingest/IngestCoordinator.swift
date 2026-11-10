@@ -238,30 +238,43 @@ public actor IngestCoordinator {
 
     // MARK: - Telemetry
 
-    public func record(_ usage: [UsageRecord]) async {
+    public func record(_ usage: [UsageRecord], prompts: [PromptRecord] = []) async {
         var records = usage.filter { UsageAuthority.persistsTelemetry(from: $0.source) }
-        guard !records.isEmpty, !stopped else { return }
+        var prompts = prompts.filter { UsageAuthority.persistsTelemetry(from: $0.source) }
+        guard !(records.isEmpty && prompts.isEmpty), !stopped else { return }
         recording += 1
         for record in records {
             if let cwd = record.cwd { telemetryCwds[SessionKey(source: record.source, id: record.sessionID)] = cwd }
         }
+        for prompt in prompts {
+            if let cwd = prompt.cwd { telemetryCwds[prompt.session] = cwd }
+        }
+        func place(_ key: SessionKey, pid: Int32?, at time: Date) -> String? {
+            if let known = telemetryCwds[key] { return known }
+            guard let pid, let cwd = ProcessDirectory.cwd(of: pid, notStartedAfter: time) else { return nil }
+            telemetryCwds[key] = cwd
+            return cwd
+        }
         for index in records.indices where records[index].cwd == nil {
-            let key = SessionKey(source: records[index].source, id: records[index].sessionID)
-            if let known = telemetryCwds[key] {
-                records[index].cwd = known
-            } else if let pid = records[index].processID,
-                      let cwd = ProcessDirectory.cwd(of: pid, notStartedAfter: records[index].timestamp) {
-                records[index].cwd = cwd
-                telemetryCwds[key] = cwd
-            }
+            records[index].cwd = place(SessionKey(source: records[index].source, id: records[index].sessionID),
+                                       pid: records[index].processID, at: records[index].timestamp)
+        }
+        for index in prompts.indices where prompts[index].cwd == nil {
+            prompts[index].cwd = place(prompts[index].session, pid: prompts[index].processID,
+                                       at: prompts[index].timestamp)
         }
         do {
-            pendingChanges.formUnion(try await store.apply(TelemetryUsage.ledgerBatch(records)))
+            pendingChanges.formUnion(try await store.apply(TelemetryUsage.ledgerBatch(records, prompts: prompts)))
         } catch {
             progress.lastError = "Telemetry usage: \(error)"
         }
         recording -= 1
         resumeIdleWaiters()
+        emit(force: true)
+    }
+
+    public func noteChanged(_ sessions: Set<SessionKey>) {
+        pendingChanges.formUnion(sessions)
         emit(force: true)
     }
 

@@ -18,8 +18,9 @@ struct SessionsPage: View {
                 .fixedSize()
             }
             HistoryBanner()
+            ProjectEditBanner()
             HStack(alignment: .top, spacing: 12) {
-                Card(prominent: true, padding: 0) {
+                Card(prominent: true, padding: 0, clipsContent: true) {
                     VStack(spacing: 0) {
                         SessionTable(sessions: list?.sessions ?? [],
                                      selection: Binding(get: { history.selectedSession?.id },
@@ -45,6 +46,7 @@ struct SessionsPage: View {
 }
 
 struct SessionTable: View {
+    @Environment(AppModel.self) private var model
     let sessions: [SessionSummary]
     @Binding var selection: SessionSummary.ID?
 
@@ -110,6 +112,18 @@ struct SessionTable: View {
         .tableStyle(.inset)
         .scrollContentBackground(.hidden)
         .font(.system(size: 12))
+        .contextMenu(forSelectionType: SessionSummary.ID.self) { ids in
+            if ids.count == 1, let session = sessions.first(where: { ids.contains($0.id) }) {
+                let edits = model.projectEdits
+                ProjectMenu(projects: edits.targets(excluding: session.project),
+                            choose: { edits.assign(session.key, to: $0) }) {
+                    Text(session.project == nil ? "Assign to Project" : "Move to Project")
+                }
+                if edits.assignment(of: session.key) != nil {
+                    Button("Undo Project Assignment") { edits.unassign(session.key) }
+                }
+            }
+        }
         .overlay {
             if sessions.isEmpty { EmptyNote(text: "No sessions in this range") }
         }
@@ -174,6 +188,7 @@ struct Pager: View {
 struct SessionDetail: View {
     @Environment(AppModel.self) private var model
     let session: SessionSummary?
+    @State private var resumeFailed: SessionKey?
 
     var body: some View {
         if let session {
@@ -181,6 +196,7 @@ struct SessionDetail: View {
                 VStack(alignment: .leading, spacing: 12) {
                     header(session)
                     cost(session)
+                    SessionTimelineCard(spans: model.history.insights[session.key]?.spans ?? [])
                     insight(session)
                     if !session.models.isEmpty { models(session) }
                     changes(session)
@@ -209,7 +225,10 @@ struct SessionDetail: View {
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 3) {
                     if let project = session.project?.title ?? session.cwd.map({ ($0 as NSString).lastPathComponent }) {
-                        Label(project, systemImage: "folder")
+                        Label(model.projectEdits.assignment(of: session.key) == nil ? project : "\(project) · assigned by you",
+                              systemImage: "folder")
+                    } else {
+                        Label("Unassigned", systemImage: "questionmark.folder")
                     }
                     if let branch = session.branch, !branch.isEmpty {
                         Label(branch, systemImage: "arrow.triangle.branch")
@@ -223,6 +242,7 @@ struct SessionDetail: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                if model.history.isReady { SessionProjectControls(session: session) }
             }
         }
     }
@@ -346,8 +366,24 @@ struct SessionDetail: View {
         }
     }
 
+    private func canResume(_ session: SessionSummary) -> Bool {
+        guard ResumeScript.isSupported(session.key.source), session.cwd?.isEmpty == false else { return false }
+        return model.session(session.key).map { $0.state == .ended } ?? true
+    }
+
+    @ViewBuilder
     private func actions(_ session: SessionSummary) -> some View {
+        if resumeFailed == session.key {
+            Hint("Couldn't resume: the session's folder is gone, or the script couldn't be written.")
+        }
         HStack(spacing: 8) {
+            if canResume(session), let cwd = session.cwd {
+                Button {
+                    let started = ResumeLauncher.resume(source: session.key.source, sessionID: session.key.id, cwd: cwd)
+                    resumeFailed = started ? nil : session.key
+                } label: { Image(systemName: "play.fill") }
+                    .help("Resume in Terminal, in the session's folder")
+            }
             if let cwd = session.cwd, let editor = model.defaultEditor {
                 Button { model.openInEditor(cwd) } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
                     .help("Open in \(editor.name)")

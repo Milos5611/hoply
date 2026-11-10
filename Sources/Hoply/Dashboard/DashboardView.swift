@@ -10,6 +10,7 @@ struct DashboardView: View {
 
     var body: some View {
         let history = model.history
+        @Bindable var servers = model.modelServers
         let selection = Binding<DashboardPage?>(get: { history.page }, set: { page in
             if let page { history.select(page) }
         })
@@ -49,6 +50,9 @@ struct DashboardView: View {
                             .help(columns == .detailOnly ? "Show the sidebar" : "Hide the sidebar")
                         }
                     }
+            }
+            .sheet(item: $servers.editor) { editor in
+                ModelServerEditorSheet(editor: editor)
             }
         }
     }

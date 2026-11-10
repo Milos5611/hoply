@@ -24,6 +24,7 @@ struct SpendingData: Equatable {
 struct SessionInsight: Equatable {
     var context: ContextWindow?
     var subagents: [SubagentSummary] = []
+    var spans: [StateSpan] = []
 }
 
 struct ProjectsData: Equatable {
@@ -54,10 +55,12 @@ struct LimitsData: Equatable {
 }
 
 struct LocalModelData: Equatable {
+    var serverID: String?
     var range: LocalModelRange
     var interval: DateInterval
     var generation: [SampleBucket]
     var kvCache: [SampleBucket]
+    var memory: [SampleBucket] = []
     var tokenDays: [ModelTokenDay]
     var saved: DailySpendSeries
     var lastSeen: Date?
@@ -106,6 +109,7 @@ final class History {
     private(set) var limitsDays = 7
     private(set) var localModel: LocalModelData?
     private(set) var localModelRange: LocalModelRange = .day
+    private(set) var localModelServerID: String?
 
     static let pageSize = 50
     static let limitDayChoices = [7, 30]
@@ -125,12 +129,16 @@ final class History {
     @ObservationIgnored private var autoSelect = true
     @ObservationIgnored private var projectAutoSelect = true
     @ObservationIgnored private var pendingUsage: [UsageRecord] = []
+    @ObservationIgnored private var pendingPrompts: [PromptRecord] = []
     @ObservationIgnored private var recordTask: Task<Void, Never>?
+    @ObservationIgnored private var spanTask: Task<Void, Never>?
+    @ObservationIgnored private var isQuitting = false
+    @ObservationIgnored var onLoaded: ((DashboardPage) -> Void)?
     @ObservationIgnored private var sampleTask: Task<Void, Never>?
-    /// Counter resets asked for, and how many of them a later sample write has settled. A Store opened in
-    /// between re-seeds its baselines from the old server's buckets, so an unsettled reset is repeated on it.
-    @ObservationIgnored private var counterResets = 0
-    @ObservationIgnored private var settledCounterResets = 0
+    // Counter resets asked for per server, and how many a later sample write has settled. A Store opened in
+    // between re-seeds its baselines from the old connection's buckets, so an unsettled reset is repeated on it.
+    @ObservationIgnored private var counterResets: [String: Int] = [:]
+    @ObservationIgnored private var settledCounterResets: [String: Int] = [:]
     @ObservationIgnored private var localModelLoadedAt: Date?
     @ObservationIgnored private var requestedSession: SessionKey?
     @ObservationIgnored private var plan = AppSettings()
@@ -159,6 +167,7 @@ final class History {
                 guard let self, generation == self.openGeneration else { return }
                 status = .unavailable("History is off: \(Self.describe(error))")
                 pendingUsage = []
+                pendingPrompts = []
             }
         }
     }
@@ -170,9 +179,12 @@ final class History {
         consumer?.cancel()
         ingestTask?.cancel()
         if let old = ledger {
-            let previous = stopping
+            let previous = stopping, spans = spanTask
+            spanTask = nil
             stopping = Task {
                 await previous?.value
+                await spans?.value
+                try? await old.closeAllStateSpans()
                 await old.ingest.stop()
             }
         }
@@ -191,12 +203,17 @@ final class History {
             }
         }
         ingestTask = Task { await ledger.ingest.start() }
-        if settledCounterResets < counterResets { resetCounters(on: ledger) }
-        if !pendingUsage.isEmpty {
-            let held = pendingUsage
-            pendingUsage = []
-            record(held)
+        for (id, asked) in counterResets where settledCounterResets[id, default: 0] < asked {
+            resetCounters(on: ledger, server: id)
         }
+        if !pendingUsage.isEmpty || !pendingPrompts.isEmpty {
+            let held = pendingUsage, prompts = pendingPrompts
+            pendingUsage = []
+            pendingPrompts = []
+            record(held, prompts: prompts)
+        }
+        let sessions = liveSessions
+        writeSpans(on: ledger, touching: Set(sessions.map(\.key))) { try await ledger.trackStateSpans(of: sessions) }
         scheduleRefresh(after: .zero)
     }
 
@@ -226,19 +243,68 @@ final class History {
     /// Telemetry usage from `HubServer.onUsage`. OTLP can arrive while the ledger is still opening, so a
     /// bounded backlog waits for it. Batches are recorded in arrival order, because a record without a cwd
     /// takes its session's cwd from earlier records.
-    func record(_ usage: [UsageRecord]) {
-        guard !usage.isEmpty else { return }
+    func record(_ usage: [UsageRecord], prompts: [PromptRecord] = []) {
+        guard !usage.isEmpty || !prompts.isEmpty else { return }
         guard let ledger else {
             if status == .opening {
                 pendingUsage.append(contentsOf: usage.prefix(max(0, Self.pendingUsageLimit - pendingUsage.count)))
+                pendingPrompts.append(contentsOf: prompts.prefix(max(0, Self.pendingUsageLimit - pendingPrompts.count)))
             }
             return
         }
         let previous = recordTask
         recordTask = Task {
             await previous?.value
-            await ledger.record(usage)
+            await ledger.record(usage, prompts: prompts)
         }
+    }
+
+    func recordStateChanges(_ changes: [StateChange]) {
+        guard let ledger, !changes.isEmpty else { return }
+        writeSpans(on: ledger, touching: Set(changes.map(\.session.key))) { try await ledger.recordStateChanges(changes) }
+    }
+
+    func closeStateSpans(for keys: [SessionKey]) {
+        guard let ledger, !keys.isEmpty else { return }
+        let time = Date()
+        writeSpans(on: ledger, touching: Set(keys)) { try await ledger.closeStateSpans(for: keys, at: time) }
+    }
+
+    // Chained: a span is closed by the change that follows it, so the writes must land in the order they happened.
+    private func writeSpans(on ledger: Ledger, touching keys: Set<SessionKey>, _ write: @escaping () async throws -> Void) {
+        guard !isQuitting else { return }
+        let previous = spanTask
+        spanTask = Task {
+            await previous?.value
+            do {
+                try await write()
+            } catch {
+                note = "Recording session states failed: \(Self.describe(error))"
+                return
+            }
+            if isDashboardVisible, !keys.isDisjoint(with: shownSessions) { await refreshInsights() }
+        }
+    }
+
+    func closeStateSpans(within limit: Duration) async {
+        guard let ledger, !isQuitting else { return }
+        let pending = spanTask
+        isQuitting = true
+        let (finished, signal) = AsyncStream<Void>.makeStream()
+        Task {
+            await pending?.value
+            try? await ledger.closeAllStateSpans()
+            signal.yield()
+        }
+        Task {
+            try? await Task.sleep(for: limit)
+            signal.yield()
+        }
+        for await _ in finished { break }
+    }
+
+    func ledgerEdited() {
+        scheduleRefresh(after: .zero)
     }
 
     func pollCopilot() {
@@ -268,49 +334,45 @@ final class History {
         }
     }
 
-    /// The model server URL changed. Chained behind pending sample writes, so the old server's last reading
-    /// still lands on its baseline. With no ledger open, or one that is replaced before the new server's first
-    /// reading is stored, the reset is applied when the next ledger attaches.
-    func resetModelCounters() {
-        counterResets += 1
-        if let ledger { resetCounters(on: ledger) }
+    // Chained behind pending sample writes, so the old connection's last reading still lands on its baseline.
+    func resetModelCounters(server id: String) {
+        counterResets[id, default: 0] += 1
+        if let ledger { resetCounters(on: ledger, server: id) }
     }
 
-    private func resetCounters(on ledger: Ledger) {
+    private func resetCounters(on ledger: Ledger, server id: String) {
         let previous = sampleTask
         sampleTask = Task {
             await previous?.value
-            await ledger.resetModelCounters()
+            await ledger.resetModelCounters(server: id)
         }
     }
 
-    /// One successful model-server poll into the `samples` series. Dropped while no ledger is open: the Store
-    /// re-seeds counter baselines from what it stored, so a missed poll costs nothing but its gauge readings.
-    /// Writes are chained, because a counter reading that lands after a later one is skipped.
-    func recordModelSamples(_ status: VLLMStatus) {
+    // Writes are chained: a counter reading that lands after a later one is skipped.
+    func recordModelSamples(_ status: ModelServerStatus, server id: String) {
         guard let ledger else { return }
         let previous = sampleTask
-        let resets = counterResets
+        let resets = counterResets[id, default: 0]
         sampleTask = Task {
             await previous?.value
             do {
-                try await ledger.recordModelSamples(status)
+                try await ledger.recordModelSamples(status, server: id)
             } catch {
                 note = "Recording model samples failed: \(Self.describe(error))"
                 return
             }
-            settledCounterResets = max(settledCounterResets, resets)
-            if isDashboardVisible, page == .localModel,
+            settledCounterResets[id] = max(settledCounterResets[id, default: 0], resets)
+            if isDashboardVisible, page == .localModel, id == localModelServerID,
                Date().timeIntervalSince(localModelLoadedAt ?? .distantPast) >= 30 {
                 reload(.localModel)
             }
         }
     }
 
-    func recentModelSamples(since: Date) async -> [String: [SampleBucket]]? {
+    func recentModelSamples(server id: String, since: Date) async -> [String: [SampleBucket]]? {
         await waitForOpen()
         guard let ledger else { return nil }
-        return try? await ledger.recentModelSamples(since: since)
+        return try? await ledger.recentModelSamples(server: id, since: since)
     }
 
     private func waitForOpen() async {
@@ -415,6 +477,12 @@ final class History {
         reload(.localModel)
     }
 
+    func setLocalModelServer(_ id: String?) {
+        guard id != localModelServerID else { return }
+        localModelServerID = id
+        if isDashboardVisible { reload(.localModel) }
+    }
+
     func setProjectsRange(_ range: HistoryRange) {
         guard range != projectsRange else { return }
         projectsRange = range
@@ -459,22 +527,27 @@ final class History {
         Task { await refreshInsights() }
     }
 
+    private var shownSessions: Set<SessionKey> {
+        Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 })
+    }
+
     private func refreshInsights() async {
         guard let ledger else { return }
-        let keys = Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 })
+        let keys = shownSessions
         var loaded: [SessionKey: SessionInsight] = [:]
         do {
             let calls = try await ledger.lastMainCalls(for: Array(keys))
             for key in keys {
                 let live = liveSessions.first { $0.key == key }?.model
                 loaded[key] = SessionInsight(context: calls[key].flatMap { ContextWindow(lastCall: $0, liveModel: live) },
-                                             subagents: try await ledger.subagents(of: key))
+                                             subagents: try await ledger.subagents(of: key),
+                                             spans: try await ledger.stateSpans(of: key))
             }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
             return
         }
-        guard keys == Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 }) else { return }
+        guard keys == shownSessions else { return }
         if loaded != insights { insights = loaded }
     }
 
@@ -630,35 +703,31 @@ final class History {
             case .devServers, .cleanUp:
                 break
             case .localModel:
-                let range = localModelRange
+                let range = localModelRange, server = localModelServerID
                 let interval = range.interval(now: now)
-                let generationRate = try await ledger.samples(ModelServerSeries.generationTokensPerSecond,
-                                                              resolution: range.resolution, in: interval)
-                let kvCache = try await ledger.samples(ModelServerSeries.kvCachePercent, resolution: range.resolution,
-                                                       in: interval)
-                let tokenDays = try await ledger.modelTokensPerDay(days: range.dailyDays, now: now)
-                let saved = try await ledger.localModelSpend(days: range.dailyDays, split: .source, now: now)
-                let lastSeen = try await lastModelReading(ledger, now: now)
-                let data = LocalModelData(range: range, interval: interval, generation: generationRate,
-                                          kvCache: kvCache, tokenDays: tokenDays, saved: saved, lastSeen: lastSeen)
+                var data = LocalModelData(serverID: server, range: range, interval: interval, generation: [], kvCache: [],
+                                          tokenDays: [],
+                                          saved: try await ledger.localModelSpend(days: range.dailyDays, split: .source,
+                                                                                  now: now))
+                if let server {
+                    func series(_ name: String) async throws -> [SampleBucket] {
+                        try await ledger.modelSamples(name, server: server, resolution: range.resolution, in: interval)
+                    }
+                    data.generation = try await series(ModelServerSeries.generationTokensPerSecond)
+                    data.kvCache = try await series(ModelServerSeries.kvCachePercent)
+                    data.memory = try await series(ModelServerSeries.memoryBytes)
+                    data.tokenDays = try await ledger.modelTokensPerDay(server: server, days: range.dailyDays, now: now)
+                    data.lastSeen = try await ledger.modelServerLastSeen(server: server, now: now)
+                }
                 guard generation == pageGeneration[page] else { return }
                 localModelLoadedAt = now
                 if data != localModel { localModel = data }
             }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
+            return
         }
-    }
-
-    private func lastModelReading(_ ledger: Ledger, now: Date) async throws -> Date? {
-        let series = ModelServerSeries.running
-        let recent = try await ledger.samples(series, in: DateInterval(start: now.addingTimeInterval(-86_400), end: now))
-        var bucket = recent.last
-        if bucket == nil {
-            bucket = try await ledger.samples(series, resolution: 3_600,
-                                              in: DateInterval(start: now.addingTimeInterval(-90 * 86_400), end: now)).last
-        }
-        return bucket.map { min($0.startDate.addingTimeInterval(TimeInterval($0.resolution)), now) }
+        if page == .projects || page == .sessions { onLoaded?(page) }
     }
 
     private static func dayCount(since first: Date?, now: Date) -> Int {
@@ -684,6 +753,7 @@ struct HistoryPreview {
     var selectedSession: SessionSummary?
     var projects: ProjectsData
     var projectDetail: ProjectDetailData?
+    var unassignedDetail: ProjectDetailData?
     var limits: LimitsData?
     var localModel: LocalModelData?
     var contextWindows: [SessionKey: ContextWindow] = [:]
@@ -714,6 +784,7 @@ extension History {
         limitsDays = preview.limits?.days ?? 7
         localModel = preview.localModel
         localModelRange = preview.localModel?.range ?? .day
+        localModelServerID = preview.localModel?.serverID
         contextWindows = preview.contextWindows
         subagentCounts = preview.subagentCounts
         insights = preview.insights
@@ -722,8 +793,8 @@ extension History {
         self.page = page
     }
 
-    func showProjectDetail(_ preview: HistoryPreview) {
-        guard let detail = preview.projectDetail else { return }
+    func showProjectDetail(_ preview: HistoryPreview, unassigned: Bool = false) {
+        guard let detail = unassigned ? preview.unassignedDetail : preview.projectDetail else { return }
         show(preview, page: .projects)
         openedProject = OpenedProject(project: detail.summary.project)
         projectDetail = detail

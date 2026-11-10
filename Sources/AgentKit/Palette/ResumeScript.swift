@@ -30,6 +30,23 @@ public enum ResumeScript {
         return "hoply-resume-\(source.rawValue)-\(sessionID).\(fileExtension)"
     }
 
+    public static let staleAfter: TimeInterval = 7 * 86_400
+
+    public static func staleFileNames(_ files: [(name: String, modified: Date)], now: Date = Date(),
+                                      olderThan age: TimeInterval = staleAfter) -> [String] {
+        files.filter { isScriptName($0.name) && now.timeIntervalSince($0.modified) > age }.map(\.name).sorted()
+    }
+
+    public static func isScriptName(_ name: String) -> Bool {
+        guard name.hasSuffix("." + fileExtension) else { return false }
+        return AgentSource.allCases.contains { source in
+            let prefix = "hoply-resume-\(source.rawValue)-"
+            guard name.hasPrefix(prefix) else { return false }
+            let id = String(name.dropFirst(prefix.count).dropLast(fileExtension.count + 1))
+            return fileName(source: source, sessionID: id) == name
+        }
+    }
+
     public static func isPlausibleSessionID(_ id: String) -> Bool {
         guard (1...128).contains(id.utf8.count), let first = id.utf8.first, isAlphanumeric(first) else { return false }
         return id.utf8.allSatisfy { isAlphanumeric($0) || $0 == UInt8(ascii: "-") || $0 == UInt8(ascii: "_") }
@@ -42,7 +59,9 @@ public enum ResumeScript {
     private static func arguments(for source: AgentSource, sessionID: String) -> [String]? {
         switch source {
         case .claudeCode: return ["claude", "--resume", sessionID]
-        case .copilotCLI, .copilotIDE, .qwenCode: return nil
+        case .copilotCLI: return ["copilot", "--resume", sessionID]
+        case .qwenCode: return ["qwen", "--resume", sessionID]
+        case .copilotIDE: return nil
         }
     }
 

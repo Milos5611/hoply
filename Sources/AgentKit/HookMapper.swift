@@ -2,7 +2,8 @@ import Foundation
 
 public enum HookMapper {
     public static func events(source: AgentSource, eventName pathEventName: String?,
-                              json: [String: Any], now: Date = Date()) -> [AgentEvent] {
+                              json: [String: Any], agentPID: Int32? = nil,
+                              now: Date = Date()) -> [AgentEvent] {
         let rawName = pathEventName ?? string(json, ["hook_event_name", "hookEventName", "event"]) ?? ""
         let name = normalize(rawName)
         let sessionID = string(json, ["session_id", "sessionId"]) ?? "unknown"
@@ -16,7 +17,8 @@ public enum HookMapper {
 
         func make(_ kind: AgentEvent.Kind) -> AgentEvent {
             AgentEvent(key: key, kind: kind, time: now, cwd: cwd, model: model, fromHook: true,
-                       transcriptPath: transcriptPath, agentID: agentID, agentType: agentID == nil ? nil : agentType)
+                       transcriptPath: transcriptPath, agentID: agentID, agentType: agentID == nil ? nil : agentType,
+                       agentPID: agentPID)
         }
         let tool = string(json, ["tool_name", "toolName"])
 

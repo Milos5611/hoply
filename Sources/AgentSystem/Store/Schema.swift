@@ -1,7 +1,7 @@
 import Foundation
 
 public enum Schema {
-    public static let migrations: [String] = [v1, v2, v3]
+    public static let migrations: [String] = [v1, v2, v3, v4]
 
     static let v1 = """
     CREATE TABLE projects (
@@ -131,6 +131,23 @@ public enum Schema {
         description TEXT,
         PRIMARY KEY (source, session_id, agent_id)
     );
+    """
+
+    static let v4 = """
+    ALTER TABLE projects ADD COLUMN merged_into INTEGER REFERENCES projects(id);
+    ALTER TABLE sessions ADD COLUMN project_origin TEXT NOT NULL DEFAULT 'auto';
+    CREATE TABLE session_prompts (
+        dedupe_key TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        ts REAL NOT NULL
+    );
+    CREATE INDEX session_prompts_session ON session_prompts(source, session_id);
+    CREATE TABLE dismissed_suggestions (
+        key TEXT PRIMARY KEY,
+        dismissed_at REAL NOT NULL
+    );
+    CREATE INDEX state_spans_open ON state_spans(source, session_id) WHERE end_at IS NULL;
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {

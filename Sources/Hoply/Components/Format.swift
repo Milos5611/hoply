@@ -56,10 +56,6 @@ enum Format {
             .locale(Locale(identifier: "en_US")))
     }
 
-    static func engine(_ engine: String) -> String {
-        engine == "vllm" ? "vLLM" : engine
-    }
-
     static func servedModel(_ name: String) -> String {
         name.split(separator: "/").last.map(String.init) ?? name
     }
@@ -191,6 +187,15 @@ enum Format {
         let hours = minutes / 60
         if hours < 24 { return minutes % 60 == 0 ? "\(hours) h" : "\(hours) h \(minutes % 60) min" }
         return hours % 24 == 0 ? "\(hours / 24) d" : "\(hours / 24) d \(hours % 24) h"
+    }
+
+    static func timeSpent(_ seconds: TimeInterval) -> String {
+        let whole = max(Int(seconds.rounded()), 0)
+        if whole < 60 { return "\(whole) s" }
+        if whole < 600 { return whole % 60 == 0 ? "\(whole / 60) min" : "\(whole / 60) min \(whole % 60) s" }
+        let minutes = Int((seconds / 60).rounded())
+        if minutes < 60 { return "\(minutes) min" }
+        return minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min"
     }
 
     private static let utcDayFormatter: DateFormatter = {

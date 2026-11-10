@@ -39,6 +39,10 @@ public struct SessionBoard: Sendable {
         if subagent == nil, let cwd = event.cwd, !cwd.isEmpty { session.cwd = cwd }
         if subagent == nil, let model = event.model, !model.isEmpty { session.model = model }
         if event.fromHook { session.hasLiveState = true }
+        if event.fromHook, let pid = event.agentPID, pid != session.reportedPID {
+            session.reportedPID = pid
+            session.pidReportedAt = event.time
+        }
         if let subagent, session.state != .ended {
             Self.touch(&session, subagent: subagent, type: event.agentType, at: event.time)
         }

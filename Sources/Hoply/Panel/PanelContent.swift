@@ -61,20 +61,46 @@ struct StatStrip: View {
                     .foregroundStyle(model.attentionCount > 0 ? Color.orange : Color.primary.opacity(0.18))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            StatTile(label: localModelName, value: model.vllm?.generationTokensPerSecond.map { "\(Format.whole($0))" } ?? "–",
-                     unit: "tok/s", tag: localModelTag.text, tagColor: localModelTag.color) {
-                MiniBars(values: model.throughput.values, highlightLast: 1, tint: .blue)
-            }
+            LocalModelStatTile()
+        }
+    }
+}
+
+struct LocalModelStatTile: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let servers = model.settings.modelServers.filter(\.isActive)
+        let monitor = model.modelServers
+        let online = servers.compactMap { monitor.state(of: $0.id)?.online }
+        let figure = Self.figure(online)
+        let tag = tag(servers)
+        StatTile(label: servers.count == 1 ? servers[0].displayName : servers.count > 1 ? "Models" : "Local model",
+                 value: figure.value, unit: figure.unit, tag: tag.text, tagColor: tag.color) {
+            MiniBars(values: monitor.combinedThroughput, highlightLast: 1, tint: .blue)
         }
     }
 
-    private var localModelName: String {
-        model.settings.vllmName.isEmpty ? "Local model" : model.settings.vllmName
+    private static func figure(_ online: [ModelServerStatus]) -> ModelServerText.Figure {
+        let rated = online.filter { $0.capabilities.contains(.generationRate) }
+        if !rated.isEmpty {
+            let rates = rated.compactMap(\.generationTokensPerSecond)
+            return ModelServerText.Figure(value: rates.isEmpty ? "–" : "\(Format.whole(rates.reduce(0, +)))", unit: "tok/s")
+        }
+        if online.contains(where: { $0.capabilities.contains(.loadedModels) }) {
+            return ModelServerText.Figure(value: "\(online.reduce(0) { $0 + $1.snapshot.loadedModels.count })", unit: "loaded")
+        }
+        if online.count == 1, let only = ModelServerText.figure(online[0]) { return only }
+        return ModelServerText.Figure(value: "–", unit: "tok/s")
     }
 
-    private var localModelTag: (text: String, color: Color) {
-        if model.settings.vllmBaseURL.isEmpty { return ("Off", .secondary) }
-        return model.vllmOnline ? ("Live", .green) : ("Offline", .red)
+    private func tag(_ servers: [ModelServer]) -> (text: String, color: Color) {
+        guard !servers.isEmpty else { return ("Off", .secondary) }
+        let health = servers.map(model.modelServers.health)
+        if servers.count == 1 { return (health[0] == .connecting ? "…" : health[0].label, health[0].color) }
+        let live = health.count { $0 == .live }
+        let color: Color = live == servers.count ? .green : health.contains(.offline) && live == 0 ? .red : .orange
+        return ("\(live)/\(servers.count) live", color)
     }
 }
 

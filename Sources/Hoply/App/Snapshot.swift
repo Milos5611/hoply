@@ -26,7 +26,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_720),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_760),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 var allPriced = PreviewData.history(now: now)
@@ -53,11 +53,11 @@ enum Snapshot {
                     if page == .overview { preview.progress = PreviewData.backfilling }
                     model.history.show(preview, page: page)
                     let height: CGFloat = switch page {
-                    case .projects: 880
+                    case .projects: 980
                     case .sessions: 900
                     case .spending: 1_420
                     case .limits: 1_200
-                    case .localModel: 1_320
+                    case .localModel: 1_560
                     case .cleanUp: 1_180
                     default: 760
                     }
@@ -109,31 +109,99 @@ enum Snapshot {
                 offline.localModel?.generation.removeAll { $0.startDate > lastSeen }
                 offline.localModel?.kvCache.removeAll { $0.startDate > lastSeen }
                 offline.localModel?.lastSeen = lastSeen
-                model.showPreview(vllm: PreviewData.vllm(now: now), error: "Offline", lastSeen: lastSeen)
+                var down = PreviewData.modelServerStates(now: now)
+                down[PreviewData.zgxServer.id]?.availability = .offline
+                down[PreviewData.zgxServer.id]?.error = RemoteError(.timedOut, endpoint: PreviewData.zgxServer.displayName)
+                down[PreviewData.zgxServer.id]?.lastSeen = lastSeen
+                model.modelServers.show(down)
                 model.history.show(offline, page: .localModel)
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_320), model: model,
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_560), model: model,
                            appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-offline-\(name).png"))
 
                 var noServer = PreviewData.settings
-                noServer.vllmBaseURL = ""
+                noServer.modelServers = []
                 var unset = PreviewData.history(now: now)
+                unset.localModel?.serverID = nil
                 unset.localModel?.generation = []
                 unset.localModel?.kvCache = []
-                let unobserved = (unset.localModel?.tokenDays ?? []).map {
-                    ModelTokenDay(day: $0.day, generated: 0, prompt: 0, observed: false)
-                }
-                unset.localModel?.tokenDays = unobserved
+                unset.localModel?.tokenDays = []
                 model.showPreview(settings: noServer)
-                model.showPreview(vllm: nil, error: nil, lastSeen: nil)
+                model.modelServers.show([:], discovery: .found([]))
                 model.history.show(unset, page: .localModel)
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
                            appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-empty-\(name).png"))
+                try render(PanelSections().padding(12).frame(width: 448), model: model, appearance: looks,
+                           surface: popover, to: directory.appendingPathComponent("panel-model-servers-none-\(name).png"))
+
+                let states = PreviewData.modelServerStates(now: now)
+                model.showPreview(settings: PreviewData.twoServersSettings)
+                model.modelServers.show(states)
+                model.history.show(PreviewData.history(now: now))
+                try render(PanelSections().padding(12).frame(width: 448), model: model, appearance: looks,
+                           surface: popover, to: directory.appendingPathComponent("panel-model-servers-\(name).png"))
+
+                model.showPreview(settings: PreviewData.severalServersSettings)
+                model.modelServers.show(states, discovery: .found(PreviewData.discovered(now: now)))
+                try render(ModelServerSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                               .padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-model-servers-\(name).png"))
+                try render(PanelSections().padding(12).frame(width: 448), model: model, appearance: looks,
+                           surface: popover, to: directory.appendingPathComponent("panel-model-servers-several-\(name).png"))
+
+                var ollama = PreviewData.history(now: now)
+                ollama.localModel = PreviewData.ollamaLocalModel(ollama.localModel)
+                model.modelServers.show(states, selected: PreviewData.ollamaServer.id)
+                model.history.show(ollama, page: .localModel)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_500), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-ollama-\(name).png"))
+
+                var blocked = PreviewData.history(now: now)
+                blocked.localModel = PreviewData.ollamaLocalModel(blocked.localModel)
+                blocked.localModel?.serverID = PreviewData.teamServer.id
+                blocked.localModel?.memory = []
+                blocked.localModel?.lastSeen = nil
+                model.modelServers.show(states, selected: PreviewData.teamServer.id)
+                model.history.show(blocked, page: .localModel)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 900), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-local-model-blocked-\(name).png"))
+
+                for (state, failed) in [("ok", false), ("failed", true)] {
+                    try render(ModelServerEditorSheet(editor: PreviewData.editor(failed: failed, now: now)), model: model,
+                               appearance: looks,
+                               to: directory.appendingPathComponent("model-server-editor-\(state)-\(name).png"))
+                }
+
                 model.showPreview(settings: PreviewData.settings)
-                model.showPreview(vllm: PreviewData.vllm(now: now), error: nil, lastSeen: now)
+                model.modelServers.show(states)
 
                 model.history.showProjectDetail(PreviewData.history(now: now))
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1260), model: model, appearance: looks,
-                           to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_600), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))
+                let edits = PreviewData.projectEdits(now: now)
+                model.projectEdits.beginMerge(PreviewData.projectRefs[0], into: PreviewData.projectRefs[1])
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_720), model: model,
+                           appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-project-detail-merge-\(name).png"))
+                model.projectEdits.show(edits, error: ProjectEditText.describe(ProjectEditError.unknownProject(8)))
+                model.history.showProjectDetail(PreviewData.history(now: now), unassigned: true)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_280), model: model,
+                           appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-project-unassigned-\(name).png"))
+                model.projectEdits.show(edits)
+                model.history.show(PreviewData.history(now: now), page: .projects)
+                if let suggestion = edits.suggestions.first { model.projectEdits.beginMerge(suggestion) }
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_040), model: model,
+                           appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-projects-merge-\(name).png"))
+                model.projectEdits.show(edits)
+                try render(VStack(spacing: 12) {
+                    ForEach(Array(PreviewData.timelineSamples(now: now).enumerated()), id: \.offset) { _, spans in
+                        SessionTimelineCard(spans: spans)
+                    }
+                }.padding(16).frame(width: 322).background(DashboardBackground()),
+                           model: model, appearance: looks,
+                           to: directory.appendingPathComponent("session-timeline-\(name).png"))
             }
             print(directory.path)
         } catch {

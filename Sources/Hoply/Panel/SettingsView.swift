@@ -28,20 +28,7 @@ struct SettingsView: View {
 
                 NotificationSettings(draft: $draft)
 
-                Card {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SectionTitle("Local model")
-                        LabeledRow("Name") {
-                            TextField("Local model", text: $draft.vllmName)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        LabeledRow("Server URL") {
-                            TextField("http://<server-ip>:8000", text: $draft.vllmBaseURL)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        Hint("The base URL of the model server (vLLM or tensorfold), e.g. http://192.168.1.20:8000. Hoply reads <url>/metrics every 5 seconds while the panel or Dashboard is open, every 30 seconds otherwise, and keeps the history for the Local model page.")
-                    }
-                }
+                ModelServerSettings()
 
                 HistorySettings(patternsText: $patternsText, referenceModel: $draft.referenceModel,
                                 claudeConfigDir: $draft.claudeConfigDir, copilotHome: $draft.copilotHome)
@@ -140,7 +127,6 @@ struct SettingsView: View {
         if let port = Int(trimmed), (1024...65535).contains(port) {
             updated.port = port
         }
-        updated.vllmBaseURL = updated.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.localModelPatterns = patternsText.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -244,7 +230,7 @@ struct HistorySettings: View {
                     TextField("~/.copilot", text: $copilotHome)
                         .textFieldStyle(.roundedBorder)
                 }
-                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent. Reindex re-reads the transcripts and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
+                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds. Reindex re-reads the transcripts and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
             }
         }
     }

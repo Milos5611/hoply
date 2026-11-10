@@ -7,13 +7,23 @@ struct LocalModelPage: View {
 
     var body: some View {
         let history = model.history
+        let servers = model.settings.modelServers
+        let server = model.modelServers.selected(in: servers)
+        let state = server.flatMap { model.modelServers.state(of: $0.id) }
         let data = history.localModel
-        let configured = !model.settings.vllmBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasSamples = !(data?.generation.isEmpty ?? true) || !(data?.kvCache.isEmpty ?? true)
-        let observedDays = data?.tokenDays.contains(where: \.observed) ?? false
+        let own = data?.serverID == server?.id ? data : nil
+        let capabilities = state?.status?.capabilities ?? []
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PageHeader(title: "Local model", subtitle: "Your model server's speed and cache, and what its tokens saved vs the API") {
+                PageHeader(title: "Local model", subtitle: "Your model servers' speed and memory, and what their tokens saved vs the API") {
+                    if servers.count > 1, let server {
+                        Picker("Server", selection: Binding(get: { server.id }, set: { model.modelServers.select($0) })) {
+                            ForEach(servers) { Text($0.displayName).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .help("The server this page shows")
+                    }
                     Picker("Range", selection: Binding(get: { history.localModelRange },
                                                        set: { history.setLocalModelRange($0) })) {
                         ForEach(LocalModelRange.allCases) { Text($0.label).tag($0) }
@@ -23,8 +33,11 @@ struct LocalModelPage: View {
                     .fixedSize()
                 }
                 HistoryBanner()
-                if configured {
-                    LiveModelCard(lastSeen: model.vllmLastSeen ?? data?.lastSeen)
+                if let server {
+                    LiveModelCard(server: server, state: state, lastSeen: state?.lastSeen ?? own?.lastSeen)
+                    if let status = state?.status, !status.models.isEmpty {
+                        ModelsCard(status: status, live: state?.availability == .online)
+                    }
                 } else {
                     ModelServerSetupCard()
                 }
@@ -33,15 +46,32 @@ struct LocalModelPage: View {
                         EmptyNote(text: "Speed, cache and token history live in the usage ledger, which is off.")
                     }
                 } else {
-                    if configured || hasSamples {
-                        GenerationCard(data: data)
-                        KVCacheCard(data: data)
+                    if server != nil {
+                        if capabilities.contains(.generationRate) || own?.generation.isEmpty == false {
+                            SampleCard(title: "Generation speed", kind: .rate, tint: .blue, height: 220, data: own,
+                                       buckets: own?.generation)
+                        }
+                        if capabilities.contains(.kvCache) || own?.kvCache.isEmpty == false {
+                            SampleCard(title: "KV cache", kind: .percent, tint: .orange, height: 150, data: own,
+                                       buckets: own?.kvCache)
+                        }
+                        if capabilities.contains(.memory) || own?.memory.isEmpty == false {
+                            SampleCard(title: "Memory in use", kind: .bytes, tint: .purple, height: 150, data: own,
+                                       buckets: own?.memory)
+                        }
                     }
                     HStack(alignment: .top, spacing: 12) {
-                        if configured || observedDays {
-                            TokensPerDayCard(data: data)
+                        if capabilities.contains(.promptRate) || capabilities.contains(.generationRate)
+                            || own?.tokenDays.contains(where: \.observed) == true {
+                            TokensPerDayCard(data: own)
                         }
                         SavedVsAPICard(data: data)
+                    }
+                }
+                if !servers.isEmpty {
+                    DashboardCard(title: "Model servers",
+                                  subtitle: servers.count == 1 ? "1 server" : "\(servers.count) servers") {
+                        ModelServerList()
                     }
                 }
             }
@@ -53,28 +83,24 @@ struct LocalModelPage: View {
 enum LocalModelStyle {
     static let tint = SourceBadge.color(for: .qwenCode)
     static let promptTint = tint.mix(with: .white, by: 0.5)
-
-    static func host(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), let host = url.host() else { return trimmed }
-        return url.port.map { "\(host):\($0)" } ?? host
-    }
 }
 
 // MARK: - Live
 
 private struct LiveModelCard: View {
     @Environment(AppModel.self) private var model
+    let server: ModelServer
+    let state: ModelServers.State?
     let lastSeen: Date?
 
     var body: some View {
-        let online = model.vllmOnline ? model.vllm : nil
+        let health = model.modelServers.health(of: server)
         Card(prominent: true, padding: 16) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     IconTile(symbol: "cpu", tint: LocalModelStyle.tint, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(model.settings.vllmName.isEmpty ? "Local model" : model.settings.vllmName)
+                        Text(server.displayName)
                             .font(.system(size: 15, weight: .semibold))
                         Text(identity)
                             .font(.system(size: 12))
@@ -83,13 +109,23 @@ private struct LiveModelCard: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 12)
-                    StatusChip(text: status.text, color: status.color)
+                    StatusChip(text: health.detail, color: health.color)
+                    Button { model.beginEditingModelServer(server.id) } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Edit \(server.displayName)")
                 }
                 Divider()
-                if let online {
+                if let online = state?.online {
                     figures(online)
+                    ForEach(online.snapshot.hints, id: \.self) { hint in
+                        Label(hint.text, systemImage: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
-                    offline
+                    trouble(health)
                 }
             }
         }
@@ -97,62 +133,126 @@ private struct LiveModelCard: View {
 
     private var identity: String {
         var parts: [String] = []
-        if let snapshot = model.vllm?.snapshot {
-            if let name = snapshot.model { parts.append(Format.servedModel(name)) }
-            parts.append(Format.engine(snapshot.engine))
+        if let snapshot = state?.status?.snapshot {
+            if let name = snapshot.primaryModel { parts.append(Format.servedModel(name)) }
+            parts.append(snapshot.version.map { "\(snapshot.engine.displayName) \($0)" } ?? snapshot.engine.displayName)
+        } else if let engine = server.engine {
+            parts.append(engine.displayName)
         }
-        parts.append(LocalModelStyle.host(model.settings.vllmBaseURL))
+        parts.append(server.host)
         return parts.joined(separator: " · ")
     }
 
-    private var status: (text: String, color: Color) {
-        if model.vllmOnline { return ("Live", .green) }
-        if model.vllmError == nil { return ("Connecting…", .secondary) }
-        return model.vllmError == "Offline" ? ("Offline", .red) : ("Error", .red)
-    }
-
-    private func figures(_ status: VLLMStatus) -> some View {
+    @ViewBuilder
+    private func figures(_ status: ModelServerStatus) -> some View {
         let snapshot = status.snapshot
-        let peak = model.throughput.values.max() ?? 0
-        return HStack(alignment: .top, spacing: 16) {
-            LiveFigure(label: "Generating", value: Format.rate(status.generationTokensPerSecond), unit: "tok/s",
-                       detail: peak > 0 ? "peak \(Format.rate(peak)) in 10 min" : "idle in the last 10 min") {
-                MiniBars(values: model.throughput.values, highlightLast: 1, tint: .blue, maxBars: 20)
+        let metrics = snapshot.metrics
+        let capabilities = status.capabilities
+        let series = state?.throughput.values ?? []
+        let peak = series.max() ?? 0
+        let loaded = snapshot.loadedModels
+        let rated = capabilities.contains(.generationRate)
+        HStack(alignment: .top, spacing: 16) {
+            if rated {
+                LiveFigure(label: "Generating", value: Format.rate(status.generationTokensPerSecond), unit: "tok/s",
+                           detail: peak > 0 ? "peak \(Format.rate(peak)) in 10 min" : "idle in the last 10 min") {
+                    MiniBars(values: series, highlightLast: 1, tint: .blue, maxBars: 20)
+                }
             }
-            LiveFigure(label: "Prompt", value: status.promptTokensPerSecond.map(Format.compact) ?? "–", unit: "tok/s",
-                       detail: "\(Format.tokens(snapshot.promptTokensTotal)) since the server started") {
-                EmptyView()
+            if capabilities.contains(.promptRate) {
+                LiveFigure(label: "Prompt", value: status.promptTokensPerSecond.map(Format.compact) ?? "–", unit: "tok/s",
+                           detail: "\(Format.tokens(metrics.promptTokensTotal ?? 0)) since server start") {
+                    EmptyView()
+                }
             }
-            LiveFigure(label: "KV cache", value: snapshot.kvCacheUsage.map { Format.percent($0) } ?? "–", unit: nil,
-                       detail: "of the cache in use") {
-                if let usage = snapshot.kvCacheUsage {
+            if let usage = metrics.kvCacheUsage {
+                LiveFigure(label: "KV cache", value: Format.percent(usage), unit: nil, detail: "of the cache in use") {
                     ShareBar(fraction: usage, tint: usage >= 0.9 ? .red : .orange)
                 }
             }
-            LiveFigure(label: "Requests", value: "\(snapshot.running)", unit: "running",
-                       detail: snapshot.waiting == 0 ? "none waiting" : "\(snapshot.waiting) waiting") {
-                EmptyView()
+            if let running = metrics.running {
+                LiveFigure(label: "Requests", value: "\(running)", unit: "running",
+                           detail: metrics.waiting.map { $0 == 0 ? "none waiting" : "\($0) waiting" } ?? " ") {
+                    EmptyView()
+                }
+            } else if let waiting = metrics.waiting {
+                LiveFigure(label: "Requests", value: "\(waiting)", unit: "waiting", detail: " ") { EmptyView() }
             }
+            if !rated, capabilities.contains(.loadedModels) {
+                LiveFigure(label: "Loaded", value: "\(loaded.count)", unit: loaded.count == 1 ? "model" : "models",
+                           detail: loaded.isEmpty ? "none in memory right now"
+                                                  : loaded.map { Format.servedModel($0.id) }.joined(separator: ", ")) {
+                    EmptyView()
+                }
+            }
+            if let memory = snapshot.memoryBytes {
+                LiveFigure(label: "Memory", value: ModelServerText.memory(memory), unit: nil,
+                           detail: metrics.memoryBytes != nil ? "reported by the server" : "held by loaded models") {
+                    EmptyView()
+                }
+            }
+            if !rated, capabilities.contains(.models) {
+                LiveFigure(label: capabilities.contains(.loadedModels) ? "Installed" : "Served",
+                           value: "\(status.models.count)", unit: status.models.count == 1 ? "model" : "models",
+                           detail: "\(snapshot.engine.displayName) reports no throughput") {
+                    EmptyView()
+                }
+            }
+        }
+        if capabilities.isSubset(of: [.version]) {
+            Text("The server answers, but reports no models or live figures.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
         }
     }
 
-    private var offline: some View {
-        let host = LocalModelStyle.host(model.settings.vllmBaseURL)
-        let error = model.vllmError
+    private func trouble(_ health: ModelServerHealth) -> some View {
+        let host = server.host.isEmpty ? server.baseURL : server.host
+        let blocked = health == .signIn || health == .setup || health == .invalid
         return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: error == nil ? "antenna.radiowaves.left.and.right" : "wifi.slash")
+            Image(systemName: health.symbol)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(error == nil ? Color.secondary : Color.red)
+                .foregroundStyle(health.color)
+                .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
-                Text(error == nil ? "Waiting for the first answer from \(host)…"
-                                  : error == "Offline" ? "No answer from \(host)" : "\(host): \(error ?? "")")
+                Text(headline(health, host: host))
                     .font(.system(size: 13, weight: .medium))
-                Text(lastSeenText + " Hoply checks again every 5 seconds while this window is open.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(explanation(health))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            if health == .paused {
+                Button("Turn on") { model.setModelServerEnabled(server.id, true) }
+                    .buttonStyle(.borderedProminent)
+            } else if blocked {
+                Button("Edit server") { model.beginEditingModelServer(server.id) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private func headline(_ health: ModelServerHealth, host: String) -> String {
+        switch health {
+        case .paused: return "\(server.displayName) is off"
+        case .invalid: return "The URL isn't a valid http(s) address"
+        case .connecting: return "Waiting for the first answer from \(host)…"
+        case .offline: return state?.error?.errorDescription ?? "No answer from \(host)"
+        case .signIn, .setup: return state?.error?.errorDescription ?? "\(host) answers, but not with a model server API"
+        case .live: return ""
+        }
+    }
+
+    private func explanation(_ health: ModelServerHealth) -> String {
+        switch health {
+        case .paused: return "Hoply isn't polling it. \(lastSeenText)"
+        case .invalid: return "Edit the server and set its address, for example http://192.168.1.20:8000."
+        case .signIn: return "The server is up but refuses Hoply's sign-in, so this isn't counted as an outage. Check the sign-in details and test the connection."
+        case .setup: return "The server is reachable but Hoply can't read it, so this isn't counted as an outage. Test the connection to see which endpoints answer."
+        case .connecting, .offline, .live:
+            return lastSeenText + " Hoply checks again every 5 seconds while this window is open."
         }
     }
 
@@ -217,23 +317,66 @@ private struct LiveFigure<Accessory: View>: View {
 }
 
 private struct ModelServerSetupCard: View {
-    @Environment(AppModel.self) private var model
-
     var body: some View {
         Card(prominent: true, padding: 18) {
-            HStack(spacing: 14) {
-                IconTile(symbol: "cpu", tint: LocalModelStyle.tint, size: 42)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("No model server set")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Add your vLLM or tensorfold server's URL in Settings to see its speed, KV cache and tokens per day here. Hoply keeps the history in the usage ledger.")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    IconTile(symbol: "cpu", tint: LocalModelStyle.tint, size: 42)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("No model server yet")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Add the server your agents talk to: Ollama or LM Studio on this Mac, llama.cpp or vLLM on another machine, or one behind an API key, Cloudflare Access or Tailscale. Hoply shows what it reports (speed, cache, loaded models, memory) and keeps the history in the usage ledger.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Spacer(minLength: 12)
-                Button("Open Settings") { model.openSettings() }
-                    .buttonStyle(.borderedProminent)
+                ModelServerActions()
+                    .font(.system(size: 12.5))
+            }
+        }
+    }
+}
+
+private struct ModelsCard: View {
+    let status: ModelServerStatus
+    let live: Bool
+
+    var body: some View {
+        let models = status.models.sorted { ($0.loaded == true ? 0 : 1, $0.id) < ($1.loaded == true ? 0 : 1, $1.id) }
+        let loaded = status.snapshot.loadedModels.count
+        let count = models.count == 1 ? "1 model" : "\(models.count) models"
+        DashboardCard(title: "Models",
+                      subtitle: status.capabilities.contains(.loadedModels) ? "\(count) · \(loaded) loaded" : count) {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(models) { served in
+                    ServedModelRow(served: served)
+                }
+                Hint("Treat as local: the model costs $0 and its tokens count as saved vs the API. It is never set automatically, because a proxy can list cloud models too."
+                     + (live ? "" : " This is the list from the last answer."))
+            }
+            .font(.system(size: 12.5))
+        }
+    }
+}
+
+private struct SampleCard: View {
+    let title: String
+    let kind: SampleChart.Kind
+    let tint: Color
+    let height: CGFloat
+    let data: LocalModelData?
+    let buckets: [SampleBucket]?
+
+    var body: some View {
+        let range = data?.range ?? .day
+        DashboardCard(title: title,
+                      subtitle: "Last \(range.label) · average\(kind == .rate ? " and peak" : "") per \(range.resolutionLabel)") {
+            if let data, let buckets {
+                SampleChart(buckets: buckets, domain: data.interval, kind: kind, tint: tint)
+                    .frame(height: height)
+            } else {
+                EmptyNote(text: "Loading…").frame(height: height * 0.55)
             }
         }
     }
@@ -241,41 +384,8 @@ private struct ModelServerSetupCard: View {
 
 // MARK: - Speed and cache
 
-private struct GenerationCard: View {
-    let data: LocalModelData?
-
-    var body: some View {
-        let range = data?.range ?? .day
-        DashboardCard(title: "Generation speed",
-                      subtitle: "Last \(range.label) · average and peak per \(range.resolutionLabel)") {
-            if let data {
-                SampleChart(buckets: data.generation, domain: data.interval, kind: .rate, tint: .blue)
-                    .frame(height: 220)
-            } else {
-                EmptyNote(text: "Loading…").frame(height: 120)
-            }
-        }
-    }
-}
-
-private struct KVCacheCard: View {
-    let data: LocalModelData?
-
-    var body: some View {
-        let range = data?.range ?? .day
-        DashboardCard(title: "KV cache", subtitle: "Last \(range.label) · average per \(range.resolutionLabel)") {
-            if let data {
-                SampleChart(buckets: data.kvCache, domain: data.interval, kind: .percent, tint: .orange)
-                    .frame(height: 150)
-            } else {
-                EmptyNote(text: "Loading…").frame(height: 80)
-            }
-        }
-    }
-}
-
 struct SampleChart: View {
-    enum Kind { case rate, percent }
+    enum Kind { case rate, percent, bytes }
 
     struct Point: Identifiable {
         let start: Date
@@ -372,19 +482,28 @@ struct SampleChart: View {
                 AxisGridLine()
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
-                        Text(kind == .percent ? "\(Format.whole(number))%" : Format.compact(number).replacingOccurrences(of: ".0", with: ""))
+                        Text(axisLabel(number))
                     }
                 }
             }
         }
-        .accessibilityLabel(kind == .rate ? "Generation tokens per second over time" : "KV cache use over time")
+        .accessibilityLabel(kind == .rate ? "Generation tokens per second over time"
+                            : kind == .percent ? "KV cache use over time" : "Memory in use over time")
+    }
+
+    private func axisLabel(_ number: Double) -> String {
+        switch kind {
+        case .percent: return "\(Format.whole(number))%"
+        case .rate: return Format.compact(number).replacingOccurrences(of: ".0", with: "")
+        case .bytes: return number == 0 ? "0" : ModelServerText.memory(number)
+        }
     }
 
     private var legend: some View {
         HStack(spacing: 14) {
             HStack(spacing: 5) {
                 Capsule().fill(tint).frame(width: 14, height: 2)
-                Text(kind == .rate ? "Average tok/s" : "Average KV cache use")
+                Text(kind == .rate ? "Average tok/s" : kind == .percent ? "Average KV cache use" : "Average memory in use")
             }
             if kind == .rate {
                 HStack(spacing: 5) {
@@ -488,7 +607,11 @@ private struct SampleTooltip: View {
     }
 
     private func value(_ number: Double) -> String {
-        kind == .percent ? "\(Format.whole(number))%" : "\(Format.rate(number)) tok/s"
+        switch kind {
+        case .percent: return "\(Format.whole(number))%"
+        case .rate: return "\(Format.rate(number)) tok/s"
+        case .bytes: return ModelServerText.memory(number)
+        }
     }
 }
 

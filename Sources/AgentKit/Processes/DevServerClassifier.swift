@@ -68,11 +68,16 @@ public struct DevServerClassifier: Sendable {
         public var key: SessionKey
         public var pid: Int32?
         public var cwd: String?
+        public var reportedPID: Int32?
+        public var reportedAt: Date?
 
-        public init(key: SessionKey, pid: Int32? = nil, cwd: String? = nil) {
+        public init(key: SessionKey, pid: Int32? = nil, cwd: String? = nil, reportedPID: Int32? = nil,
+                    reportedAt: Date? = nil) {
             self.key = key
             self.pid = pid
             self.cwd = cwd
+            self.reportedPID = reportedPID
+            self.reportedAt = reportedAt
         }
     }
 
@@ -110,6 +115,7 @@ public struct DevServerClassifier: Sendable {
     public func servers(in snapshot: ProcessSnapshot, projects: [String: ProjectRef] = [:],
                         sessions: [Session] = []) -> [DevServer] {
         let lineage = ProcessLineage(snapshot)
+        let sessions = verified(sessions, lineage: lineage)
         var byPort: [Int: [ScannedProcess]] = [:]
         for process in snapshot.listening where isCandidate(process, projects: projects) {
             for port in ports(of: process) { byPort[port, default: []].append(process) }
@@ -143,6 +149,20 @@ public struct DevServerClassifier: Sendable {
         return servers.sorted { a, b in
             let left = a.projectName.lowercased(), right = b.projectName.lowercased()
             return left != right ? left < right : (a.port, a.process.pid) < (b.port, b.process.pid)
+        }
+    }
+
+    public func verified(_ sessions: [Session], in snapshot: ProcessSnapshot) -> [Session] {
+        verified(sessions, lineage: ProcessLineage(snapshot))
+    }
+
+    private func verified(_ sessions: [Session], lineage: ProcessLineage) -> [Session] {
+        sessions.map { session in
+            guard session.pid == nil, let reported = session.reportedPID, let at = session.reportedAt else { return session }
+            var session = session
+            session.pid = SessionProcess.agent(reportedPID: reported, source: session.key.source, reportedAt: at,
+                                               uid: uid, lineage: lineage)?.pid
+            return session
         }
     }
 

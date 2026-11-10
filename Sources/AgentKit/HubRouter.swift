@@ -5,12 +5,15 @@ public struct HubRouter: Sendable {
         public var response: HTTPResponse
         public var events: [AgentEvent]
         public var usage: [UsageRecord]
+        public var prompts: [PromptRecord]
         public var note: String?
 
-        public init(response: HTTPResponse, events: [AgentEvent], usage: [UsageRecord] = [], note: String?) {
+        public init(response: HTTPResponse, events: [AgentEvent], usage: [UsageRecord] = [],
+                    prompts: [PromptRecord] = [], note: String?) {
             self.response = response
             self.events = events
             self.usage = usage
+            self.prompts = prompts
             self.note = note
         }
     }
@@ -58,7 +61,8 @@ public struct HubRouter: Sendable {
             let records = try OTLPDecoder.decode(path: request.path, body: request.body,
                                                  encoding: isJSON ? .json : .protobuf)
             return Outcome(response: ok, events: TelemetryMapper.events(from: records, now: now),
-                           usage: TelemetryUsage.records(from: records), note: nil)
+                           usage: TelemetryUsage.records(from: records),
+                           prompts: TelemetryUsage.prompts(from: records), note: nil)
         } catch OTLPError.unknownSignal {
             return Outcome(response: .notFound, events: [], note: "Unknown OTLP path \(request.path)")
         } catch {
@@ -77,7 +81,15 @@ public struct HubRouter: Sendable {
             return Outcome(response: .badRequest("Expected a JSON object"), events: [],
                            note: "Hook \(source.rawValue) sent a non-JSON body")
         }
-        let events = HookMapper.events(source: source, eventName: eventName, json: json, now: now)
+        let events = HookMapper.events(source: source, eventName: eventName, json: json,
+                                       agentPID: Self.agentPID(request), now: now)
         return Outcome(response: .json(), events: events, note: nil)
+    }
+
+    public static let agentPIDHeader = "x-hoply-pid"
+
+    static func agentPID(_ request: HTTPRequest) -> Int32? {
+        guard let text = request.headers[agentPIDHeader], let pid = Int32(text), pid > 1 else { return nil }
+        return pid
     }
 }

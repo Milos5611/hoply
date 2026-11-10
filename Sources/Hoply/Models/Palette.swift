@@ -140,7 +140,8 @@ final class Palette {
         let liveKeys = Set(live.compactMap { PaletteItem.sessionKey(fromID: $0.item.id) })
         return live + recentSessions.filter { !liveKeys.contains($0.key) }.map { recent($0, model) }
             + recentProjects.map { project($0, model) } + model.devServers.servers.map { devServer($0, model) }
-            + DashboardPage.allCases.map { page($0, model) } + actions(model)
+            + DashboardPage.allCases.map { page($0, model) } + model.settings.modelServers.map { modelServer($0, model) }
+            + actions(model)
     }
 
     private func liveSessions(_ model: AppModel) -> [Entry] {
@@ -218,6 +219,21 @@ final class Palette {
               primary: Command(label: "Open") { [weak model] in model?.openDashboard(page) })
     }
 
+    private func modelServer(_ server: ModelServer, _ model: AppModel) -> Entry {
+        let state = model.modelServers.state(of: server.id)
+        let health = model.modelServers.health(of: server)
+        let item = PaletteItem(
+            id: PaletteItem.pageID("\(DashboardPage.localModel.rawValue):\(server.id)"), kind: .page,
+            title: server.displayName,
+            subtitle: ["Model server", server.host, ModelServerText.engine(server, state), health.detail]
+                .filter { !$0.isEmpty }.joined(separator: " · "),
+            keywords: ["local model", "model server", state?.status?.snapshot.primaryModel].compactMap { $0 },
+            attention: health == .live && (state?.status?.generationTokensPerSecond ?? 0) > 0 ? .live : .none)
+        return Entry(item: item, icon: .symbol(DashboardPage.localModel.symbol),
+                     primary: Command(label: "Open") { [weak model] in model?.showLocalModel(server: server.id) },
+                     secondary: Command(label: "Edit") { [weak model] in model?.beginEditingModelServer(server.id) })
+    }
+
     private func actions(_ model: AppModel) -> [Entry] {
         func action(_ name: String, _ title: String, _ subtitle: String, symbol: String, label: String = "Run",
                     keywords: [String] = [], run: @escaping (AppModel) -> Void) -> Entry {
@@ -244,6 +260,10 @@ final class Palette {
                 Task { await model.refreshClaudeLimits() }
             })
         }
+        actions.append(action("add-model-server", "Add Model Server…",
+                              "Ollama, LM Studio, llama.cpp, vLLM or any OpenAI-compatible server",
+                              symbol: "plus.circle", label: "Add",
+                              keywords: ["local model", "ollama", "vllm", "lm studio"]) { $0.beginAddingModelServer() })
         actions.append(action("cleanup", "Scan for Clean Up", "Find worktrees, caches and old transcripts to review",
                               symbol: DashboardPage.cleanUp.symbol, label: "Scan") { model in
             model.cleanup.refresh()

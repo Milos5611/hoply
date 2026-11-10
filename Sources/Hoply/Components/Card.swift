@@ -8,6 +8,7 @@ struct Card<Content: View>: View {
     var prominent = false
     var tint: Color?
     var padding: CGFloat = 13
+    var clipsContent = false
     @ViewBuilder var content: Content
 
     @Environment(\.colorScheme) private var colorScheme
@@ -15,15 +16,25 @@ struct Card<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        clipped
             .background {
                 shape.fill(base)
                     .shadow(color: .black.opacity(shadowOpacity), radius: 12, y: 4)
                 if let tint { shape.fill(tint.opacity(dark ? 0.16 : 0.08)) }
             }
             .overlay(shape.strokeBorder(border, lineWidth: contrast == .increased ? 1 : 0.5))
+    }
+
+    // Clipped before the background is added, so the card's shadow stays outside the clip.
+    @ViewBuilder private var clipped: some View {
+        let padded = content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if clipsContent {
+            padded.clipShape(shape)
+        } else {
+            padded
+        }
     }
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: CardMetrics.cornerRadius, style: .continuous) }

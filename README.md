@@ -63,6 +63,8 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"t1","cwd":"'$PWD'","pr
   | curl -s -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:4318/hooks/claude-code
 ```
 
+The installed hooks also send `X-Hoply-Pid: $PPID` (the agent's process id), which ties a session to the dev servers it started. Hoply uses it only after checking that the process is yours, was running before the hook fired and is the agent (or a shell under it).
+
 The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in settings and re-run `HOPLY_PORT=<port> scripts/install.sh`).
 
 **Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`. Its OTel is its only history, so Hoply stores it. To file the usage under the right project, optionally start Qwen with `OTEL_RESOURCE_ATTRIBUTES=hoply.cwd=$PWD`; without it Hoply asks Qwen's process (`process.pid`) for its working directory, and usage it can't place shows as "Unassigned".

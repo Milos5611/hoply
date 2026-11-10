@@ -11,7 +11,8 @@ curl -s -m 2 -o /dev/null "$URL/health" || { echo "Hoply is not listening on $UR
 
 post() {
   local status
-  status=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "$2" "$URL$1")
+  # Real hooks send their agent's pid; this shell is no agent, so Hoply reads the header and trusts nothing.
+  status=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "X-Hoply-Pid: $$" --data-binary "$2" "$URL$1")
   [ "$status" = "200" ] || echo "   ! $1 answered HTTP $status" >&2
 }
 step() { echo "→ $1"; sleep "$DELAY"; }
