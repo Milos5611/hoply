@@ -6,6 +6,8 @@
 #      HOPLY_HARDENED=1     hardened runtime + secure timestamp (required for notarization)
 #      HOPLY_UNIVERSAL=1    arm64 + x86_64 instead of this Mac's architecture
 #      HOPLY_VERSION, HOPLY_BUILD  CFBundleShortVersionString / CFBundleVersion of the bundle
+#      HOPLY_FEED_URL, HOPLY_ED_PUBLIC_KEY  Sparkle's SUFeedURL / SUPublicEDKey; both or neither (package.sh sets
+#        them for release builds). Without them the app never checks for updates.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,9 +21,27 @@ bin="$(swift build -c release --show-bin-path ${ARCHS[@]+"${ARCHS[@]}"})/Hoply"
 
 app=build/Hoply.app
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$bin" "$app/Contents/MacOS/Hoply"
 cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
+# The linker also records the build folder as an rpath; the bundle needs only @executable_path/../Frameworks.
+otool -l "$app/Contents/MacOS/Hoply" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH") } rpath && $1 == "path" { print $2 }' |
+  while read -r path; do
+    case "$path" in /*) install_name_tool -delete_rpath "$path" "$app/Contents/MacOS/Hoply" ;; esac
+  done
+
+# ditto keeps the framework's version symlinks. The XPC services are only for sandboxed apps (Sparkle's docs);
+# headers are dropped as Xcode's embed step would.
+sparkle="$app/Contents/Frameworks/Sparkle.framework"
+ditto "$(dirname "$bin")/Sparkle.framework" "$sparkle"
+for part in XPCServices Headers PrivateHeaders Modules; do rm -rf "${sparkle:?}/$part" "$sparkle/Versions/B/$part"; done
+
+if [ -n "${HOPLY_FEED_URL:-}${HOPLY_ED_PUBLIC_KEY:-}" ]; then
+  [ -n "${HOPLY_FEED_URL:-}" ] && [ -n "${HOPLY_ED_PUBLIC_KEY:-}" ] ||
+    { echo "Set both HOPLY_FEED_URL and HOPLY_ED_PUBLIC_KEY, or neither" >&2; exit 1; }
+  plutil -replace SUFeedURL -string "$HOPLY_FEED_URL" "$app/Contents/Info.plist"
+  plutil -replace SUPublicEDKey -string "$HOPLY_ED_PUBLIC_KEY" "$app/Contents/Info.plist"
+fi
 if [ -n "${HOPLY_VERSION:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $HOPLY_VERSION" "$app/Contents/Info.plist"
 fi
@@ -38,9 +58,17 @@ else
   echo "Hoply: actool not found (needs Xcode), building without an app icon" >&2
 fi
 
-if [ "${HOPLY_HARDENED:-0}" = 1 ]; then
-  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$app" >&2
-else
-  codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$app" >&2
-fi
+sign() {
+  if [ "${HOPLY_HARDENED:-0}" = 1 ]; then
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$1" >&2
+  else
+    codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$1" >&2
+  fi
+}
+# Inside out and never --deep, as Sparkle's docs require; the hardened runtime only loads a framework signed
+# by the same team, so Sparkle's own ad-hoc signature is replaced.
+sign "$sparkle/Versions/B/Autoupdate"
+sign "$sparkle/Versions/B/Updater.app"
+sign "$sparkle"
+sign "$app"
 echo "$app"

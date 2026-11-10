@@ -160,10 +160,15 @@ One-time setup:
    | `NOTARY_KEY_P8_BASE64` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` |
    | `NOTARY_KEY_ID` | the key's Key ID |
    | `NOTARY_ISSUER_ID` | the Issuer ID |
+   | `SPARKLE_PUBLIC_KEY` | the public key from step 5 |
+   | `SPARKLE_PRIVATE_KEY` | the contents of the exported private key file from step 5 |
 
-Release: `git tag v0.1.0 && git push origin v0.1.0`. The tag sets the version (`CFBundleShortVersionString`); the build number is the commit count. To build the same DMG locally: `HOPLY_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… scripts/package.sh`.
+5. Create the update signing key (Sparkle, EdDSA) once, after a `swift build` has fetched Sparkle: `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account hoply`. It stores the private key in your login Keychain and prints the public key. Export the private key with `generate_keys --account hoply -x hoply-sparkle.key`, paste its contents into the secret, then delete the file. Keep the Keychain item: losing the key means installed copies can no longer verify updates.
+6. The update feed is `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`, so the release assets must be public. A private repo needs another public host: set `HOPLY_FEED_URL` and `HOPLY_DOWNLOAD_URL` for `scripts/package.sh` and upload `build/appcast.xml` and the DMG there yourself.
 
-A tester installs from the DMG and connects their agents in Settings → Agents.
+Release: `git tag -a v0.1.0 -m "What changed"` and `git push origin v0.1.0`. The tag sets the version (`CFBundleShortVersionString`); the build number (`CFBundleVersion`, which Sparkle compares) is the commit count, so release from `main`. The tag message becomes the release notes in the update window. The workflow publishes the DMG and `appcast.xml`; it publishes nothing unless all secrets are set, because a build without the Sparkle keys never checks for updates again. To build the same DMG locally: `HOPLY_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… SPARKLE_PUBLIC_KEY=… scripts/package.sh` (it signs the update with the Keychain key unless `SPARKLE_PRIVATE_KEY` is set).
+
+A tester installs from the DMG and connects their agents in Settings → Agents. Release builds check for updates once a day (Settings → Updates turns that off) and show a new version at the bottom of the panel; "Check for Updates…" is also in the status item's right-click menu. Builds from `scripts/install.sh` or `swift run` never update themselves.
 
 ## Known gaps
 

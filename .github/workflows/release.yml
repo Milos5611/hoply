@@ -3,6 +3,8 @@ name: Release
 # Push a tag like v0.2.0 to build, test, sign, notarize and publish Hoply-0.2.0.dmg as a GitHub Release.
 # Run it by hand (Actions → Release → Run workflow) to get the DMG as a build artifact only.
 # Without the signing secrets the DMG is ad-hoc signed and not notarized, and no release is published.
+# With the Sparkle secrets the app checks for updates and appcast.xml is published with the DMG; a release
+# needs them, or its users would never hear of the next one. An annotated tag's message becomes the notes.
 on:
   push:
     tags: ["v*"]
@@ -22,6 +24,7 @@ jobs:
     env:
       HAS_SIGNING: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8_BASE64 != '' }}
+      HAS_SPARKLE: ${{ secrets.SPARKLE_PUBLIC_KEY != '' && secrets.SPARKLE_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -68,23 +71,51 @@ jobs:
             echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
           } >> "$GITHUB_ENV"
 
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # checkout can leave an annotated tag lightweight; fetch the tag object itself.
+          git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
+            git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" | sed '/^-----BEGIN /,$d' > "$RUNNER_TEMP/notes.md"
+            if [ -s "$RUNNER_TEMP/notes.md" ]; then echo "HOPLY_RELEASE_NOTES=$RUNNER_TEMP/notes.md" >> "$GITHUB_ENV"; fi
+          fi
+
       - name: Package
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export HOPLY_VERSION="${GITHUB_REF_NAME#v}"; fi
+          [ "$HAS_SPARKLE" = true ] || unset SPARKLE_PUBLIC_KEY SPARKLE_PRIVATE_KEY
           dmg="$(scripts/package.sh)"
           echo "DMG=$dmg" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Hoply
-          path: ${{ env.DMG }}
+          path: |
+            ${{ env.DMG }}
+            build/appcast.xml
           if-no-files-found: error
 
       - name: Publish the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+          && env.HAS_SPARKLE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$DMG" --title "Hoply ${GITHUB_REF_NAME#v}" --generate-notes
+        run: |
+          notes=()
+          if [ -n "${HOPLY_RELEASE_NOTES:-}" ]; then notes=(--notes-file "$HOPLY_RELEASE_NOTES"); fi
+          gh release create "$GITHUB_REF_NAME" "$DMG" build/appcast.xml --title "Hoply ${GITHUB_REF_NAME#v}" \
+            --generate-notes "${notes[@]}"
+
+      - name: Explain a skipped release
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') && !(env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+          && env.HAS_SPARKLE == 'true')
+        run: echo "::warning::No release published; it needs the Developer ID, notary and Sparkle secrets (README → Releasing)."
 
       - name: Remove the signing keychain
         if: always() && env.HAS_SIGNING == 'true'

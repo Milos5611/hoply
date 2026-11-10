@@ -20,7 +20,8 @@ esac
 
 install_app() {
   local app
-  app="$(HOPLY_SIGN_IDENTITY="$SIGN_IDENTITY" scripts/build-app.sh)"
+  # No feed: a local install never updates itself.
+  app="$(HOPLY_SIGN_IDENTITY="$SIGN_IDENTITY" HOPLY_FEED_URL= HOPLY_ED_PUBLIC_KEY= scripts/build-app.sh)"
   mkdir -p "$HOME/Applications"
   pkill -x Hoply 2>/dev/null || true
   rm -rf "$TARGET"

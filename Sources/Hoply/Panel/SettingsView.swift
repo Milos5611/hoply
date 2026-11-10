@@ -71,6 +71,8 @@ struct SettingsView: View {
                     }
                 }
 
+                UpdateSettings()
+
                 if let note = model.lastNote {
                     Hint("Last listener message: \(note)")
                         .padding(.horizontal, 4)
@@ -134,6 +136,44 @@ struct CommitField: View {
     private func save() {
         guard text != value else { return }
         text = commit(text)
+    }
+}
+
+struct UpdateSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let updates = model.updates
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionTitle("Updates")
+                LabeledRow("Version") {
+                    Text(updates.version)
+                        .monospacedDigit()
+                    Spacer(minLength: 0)
+                    if updates.isEnabled {
+                        Button(updates.pendingVersion.map { "Update to \($0)…" } ?? "Check for Updates…") {
+                            updates.checkForUpdates()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!updates.canCheck)
+                    }
+                }
+                if updates.isEnabled {
+                    SwitchRow("Check for updates automatically", isOn: Binding(
+                        get: { updates.automaticallyChecks },
+                        set: { updates.setAutomaticallyChecks($0) }
+                    ))
+                    Hint("Hoply checks once a day. A new version shows at the bottom of the panel; nothing installs until you choose it.")
+                } else if let error = updates.startError {
+                    Hint("Updates are off: \(error)")
+                } else if model.isBundledApp {
+                    Hint("This copy was built from source (scripts/install.sh) and doesn't update itself. Release DMGs do.")
+                } else {
+                    Hint("Updates work in release builds of the app, not with swift run.")
+                }
+            }
+        }
     }
 }
 

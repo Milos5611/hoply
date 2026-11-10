@@ -31,6 +31,7 @@ final class AppModel {
     let hotKey: HotKey
     let projectEdits: ProjectEdits
     let connections: AgentConnections
+    let updates: Updates
     @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
@@ -86,6 +87,7 @@ final class AppModel {
         hotKey = HotKey(live: live)
         projectEdits = ProjectEdits(history: history)
         connections = AgentConnections(live: live)
+        updates = Updates(live: live)
         guard live else {
             settings = AppSettings()
             palette.model = self
@@ -616,6 +618,7 @@ extension AppModel {
                            log: PreviewData.cleanupLog(now: now))
         model.projectEdits.show(PreviewData.projectEdits(now: now))
         model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
+        model.updates.showPreview(enabled: true, pendingVersion: nil)
         return model
     }
 

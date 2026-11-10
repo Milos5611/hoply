@@ -34,6 +34,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             self?.model.showingSettings = true
             self?.showPanel()
         }
+        model.updates.onWillShowUpdate = { [weak self] in
+            if self?.popover.isShown == true { self?.popover.performClose(nil) }
+        }
         popover.behavior = Self.holdOpen ? .applicationDefined : .transient
         popover.animates = true
         popover.delegate = self
@@ -92,12 +95,19 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func showMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.addItem(item("Open Hoply", #selector(openPanel)))
         menu.addItem(item("Open Dashboard", #selector(openDashboardFromMenu)))
         if model.settings.paletteEnabled {
             menu.addItem(item("Command Palette", #selector(openPalette)))
         }
         menu.addItem(item("Settings…", #selector(openSettings)))
+        if model.updates.isEnabled {
+            let title = model.updates.pendingVersion.map { "Update to Hoply \($0)…" } ?? "Check for Updates…"
+            let update = item(title, #selector(checkForUpdates))
+            update.isEnabled = model.updates.canCheck
+            menu.addItem(update)
+        }
         menu.addItem(.separator())
         menu.addItem(item("Quit Hoply", #selector(quit)))
         statusItem.menu = menu
@@ -127,6 +137,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     @objc private func openSettings() {
         model.showingSettings = true
         showPanel()
+    }
+
+    @objc private func checkForUpdates() {
+        model.updates.checkForUpdates()
     }
 
     @objc private func quit() {

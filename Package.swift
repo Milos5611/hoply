@@ -17,6 +17,9 @@ let package = Package(
         .library(name: "AgentKit", targets: ["AgentKit"]),
         .library(name: "AgentSystem", targets: ["AgentSystem"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
+    ],
     targets: [
         // Platform-neutral core: decoding, state, parsing. No UI, no new I/O.
         .target(name: "AgentKit"),
@@ -29,12 +32,14 @@ let package = Package(
         // The macOS menu bar app.
         .executableTarget(
             name: "Hoply",
-            dependencies: ["AgentKit", "AgentSystem"],
+            dependencies: ["AgentKit", "AgentSystem", .product(name: "Sparkle", package: "Sparkle")],
             exclude: ["Info.plist", "Hoply.icon"],
             swiftSettings: [.defaultIsolation(MainActor.self)],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
-                              "-Xlinker", "__info_plist", "-Xlinker", infoPlist]),
+                              "-Xlinker", "__info_plist", "-Xlinker", infoPlist,
+                              // Hoply.app/Contents/Frameworks/Sparkle.framework; swift run finds it through @loader_path.
+                              "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             ]
         ),
         .testTarget(

@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hoply reads status and metrics from the model servers you add (Ollama, LM Studio, llama.cpp, vLLM and others).</string>
 	<key>NSAppTransportSecurity</key>

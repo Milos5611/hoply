@@ -26,7 +26,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_080),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_260),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 for (state, statuses, notices) in [("update", PreviewData.connectionsToUpdate, [:]),
@@ -38,6 +38,17 @@ enum Snapshot {
                                to: directory.appendingPathComponent("panel-settings-agents-\(state)-\(name).png"))
                 }
                 model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
+                model.updates.showPreview(enabled: true, pendingVersion: PreviewData.updateVersion)
+                try render(VStack(spacing: 10) { PanelFooter(); UpdateSettings().padding(.horizontal, 12) }
+                               .toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                               .padding(.bottom, 12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-update-\(name).png"))
+                model.updates.showPreview(enabled: false, pendingVersion: nil)
+                try render(UpdateSettings().controlSize(.small).font(.system(size: 12.5)).padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-updates-off-\(name).png"))
+                model.updates.showPreview(enabled: true, pendingVersion: nil)
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
                 model.history.show(allPriced)
