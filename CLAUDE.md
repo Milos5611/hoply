@@ -8,7 +8,7 @@ Hoply is a macOS 26+ menu bar app (SwiftPM tools 6.2, Swift 6 language mode, no 
 
 ## Roadmap
 
-What is left of v2 is in `.claude/memory/v2-plan.md`: the live check of Model servers (which replaced M1 Cloudflare Access) and the deferred items, open decisions, dead code to remove, and facts about the ZGX and Copilot. Everything else (M0, M2–M8, the glass pass, Model servers, the deferred items) is built and described in this file; the per-milestone outcomes are in that file's git history. Read it before working on what remains, stay inside the item at hand, and update its status line as things land.
+v2 is built and described in this file (its plan, `.claude/memory/v2-plan.md`, is retired; the per-milestone outcomes are in git history). What is left is in `.claude/memory/v3-plan.md`: M0 live checks carried over from v2, M1 connecting agents from the app, M2 Sparkle updates, M3 the first release (Developer ID DMG; the Mac App Store is ruled out), M4 every mainstream model provider, plus housekeeping and facts about the ZGX, Copilot, Claude Code hooks and distribution. Read it before working on what remains, stay inside the item at hand, and update its status line as things land.
 
 ## Commands
 
@@ -188,7 +188,7 @@ Rules (easy to break):
 
 ## Working in this repo
 
-- **Subagents:** use `swift-core-dev` for AgentKit, the v2 `AgentSystem` target, `scripts/` and tests. Use `macos-ui-dev` for the `Hoply` app target (panel, Dashboard, palette, components). When you delegate, name the v2 milestone and tell the subagent to read `.claude/memory/v2-plan.md`.
+- **Subagents:** use `swift-core-dev` for AgentKit, the `AgentSystem` target, `scripts/` and tests. Use `macos-ui-dev` for the `Hoply` app target (panel, Dashboard, palette, components). When you delegate, name the v3 milestone and tell the subagent to read `.claude/memory/v3-plan.md`.
 - **Skills:** project skills go in `.claude/skills/<name>/SKILL.md`. There are none yet; add one only when the knowledge is reusable and not already in this file.
 - **Comments:** default to none. No doc comments; a one-line `//` only where a reader would otherwise simplify the code into a bug.
 - **Never commit or push on the user's behalf.** Leave changes in the working tree and report them; the user reviews and commits. Creating a new branch is the most git writing allowed.

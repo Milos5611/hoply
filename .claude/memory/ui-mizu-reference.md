@@ -8,7 +8,7 @@ metadata:
   modified: 2026-11-09T15:11:04.828Z
 ---
 
-On 2026-11-09, after M0 shipped with no visual change, the user said the panel was "far from the glass and how usemizu is looks like". So the panel visuals were pulled ahead of M1 (M0.5 in [[v2-plan]]).
+On 2026-11-09, after M0 shipped with no visual change, the user said the panel was "far from the glass and how usemizu is looks like". So the panel visuals were pulled ahead of M1 (M0.5 of the v2 plan, now retired; current plan: [[v3-plan]]).
 
 **Why:** the user is building Hoply to look at least as good as Mizu (usemizu.com). They evaluate each step by how the panel looks, not only by the milestone checklist.
 

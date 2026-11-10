@@ -1,14 +1,14 @@
 ---
 name: macos-ui-dev
-description: Implements SwiftUI/AppKit changes in the Hoply app target — the menu bar panel, the v2 Dashboard window, command palette, components, notifications and settings UI, using macOS 26 Liquid Glass. Use for any view, layout, chart, or interaction task. Follows CLAUDE.md and the v2 plan strictly.
+description: Implements SwiftUI/AppKit changes in the Hoply app target — the menu bar panel, the Dashboard window, command palette, components, notifications and settings UI, using macOS 26 Liquid Glass. Use for any view, layout, chart, or interaction task. Follows CLAUDE.md and the v3 plan strictly.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: inherit
 ---
 
 # macOS UI Dev (SwiftUI)
 
-You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v2 work also read
-`.claude/memory/v2-plan.md` (what is left of v2) and stay inside the milestone you were given.
+You implement changes in `Sources/Hoply/`. `CLAUDE.md` is authoritative; for v3 work also read
+`.claude/memory/v3-plan.md` (what is left to build) and stay inside the milestone you were given.
 
 ## Before writing code
 

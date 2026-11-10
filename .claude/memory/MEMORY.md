@@ -1,4 +1,4 @@
-- [Hoply v2 plan](v2-plan.md) — M0, M2–M8 and glass committed and checked live; Model servers (replaces M1) and deferred items committed in 99dfa53; Approve from Hoply + dead-code removal uncommitted; all awaiting live check (2026-11-10); GPU stats dropped; ZGX/Copilot facts
+- [Hoply v3 plan](v3-plan.md) — what is left: M0 v2 live checks, M1 in-app Connect, M2 Sparkle, M3 first release (Developer ID DMG, no Mac App Store), M4 every mainstream model provider; v2 retired 2026-11-10; ZGX/Copilot/Claude hooks/distribution facts
 - [No deletes](no-deletes.md) — never delete project files; avoid `rm` in shell commands, overwrite instead
 - [Comments only on complex parts](comments-only-complex.md) — default to none; only where code would otherwise be "simplified" into a bug; no doc comments; check the diff (and every subagent's) before reporting
 - [Mizu is the UI bar](ui-mizu-reference.md) — user compares the panel with Mizu's real screenshots; check UI with --snapshot before reporting

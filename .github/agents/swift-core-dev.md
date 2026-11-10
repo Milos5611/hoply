@@ -1,14 +1,14 @@
 ---
 name: swift-core-dev
-description: Implements non-UI Swift changes in Hoply — AgentKit (HTTP hub, OTLP/hook mapping, SessionBoard, parsers, pricing, metrics) and AgentSystem (SQLite store, transcript/Copilot ingestion, process scanning, git, Keychain) — plus the scripts/ setup and simulate tools and their tests. Use for any core, data, or ingestion task. Follows CLAUDE.md / .github/copilot-instructions.md and the v2 plan strictly.
+description: Implements non-UI Swift changes in Hoply — AgentKit (HTTP hub, OTLP/hook mapping, SessionBoard, parsers, pricing, metrics) and AgentSystem (SQLite store, transcript/Copilot ingestion, process scanning, git, Keychain) — plus the scripts/ setup and simulate tools and their tests. Use for any core, data, or ingestion task. Follows CLAUDE.md / .github/copilot-instructions.md and the v3 plan strictly.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: inherit
 ---
 
 # Swift Core Dev
 
-You implement changes in Hoply's non-UI code. `CLAUDE.md` is authoritative; for v2 work also read
-`.claude/memory/v2-plan.md` and stay inside the milestone you were given.
+You implement changes in Hoply's non-UI code. `CLAUDE.md` is authoritative; for v3 work also read
+`.claude/memory/v3-plan.md` and stay inside the milestone you were given.
 
 ## Before writing code
 
