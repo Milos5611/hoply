@@ -25,6 +25,7 @@ HOPLY_OPEN=panel swift run Hoply                              # open a surface a
 swift run Hoply --snapshot build/snapshots                    # render sample data to PNGs: panel (light, dark, full height, settings, full settings) + Dashboard pages + Limits empty state + Local model offline and no-server states + Clean up page, report and review sheet + palette (empty, query, actions, no results) and its settings card
 scripts/simulate.sh                                           # with the app running: post fake hook/OTLP traffic (DELAY=0 for no pauses); its Qwen/Copilot IDE usage becomes permanent ledger rows (sim-* sessions)
 scripts/install.sh [--uninstall]                              # release build → ~/Applications/Hoply.app, open it, connect Claude Code + Copilot CLI
+scripts/package.sh                                            # universal release DMG in build/; Developer ID signed + notarized when HOPLY_SIGN_IDENTITY and NOTARY_KEY_* are set (README → Releasing)
 HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh            # sign with a stable self-signed cert instead of ad-hoc
 curl -s http://127.0.0.1:4318/health
 ```
@@ -179,7 +180,7 @@ Rules (easy to break):
 
 ## Setup scripts
 
-`scripts/install.sh` is the only setup entry point. It builds and installs the `.app`, then connects each agent it finds:
+`scripts/install.sh` is the only setup entry point. It builds the `.app` through `scripts/build-app.sh` (shared with `scripts/package.sh` and the `release.yml` workflow, so a local install and a release bundle are assembled the same way), installs it, then connects each agent it finds:
 - **Claude Code:** hooks plus OTel log env in `~/.claude/settings.json`, backed up first. `PermissionRequest` gets its own command (approve header, long timeout, stdout kept; see Approval rules). Hook commands carry a `# hoply` marker, and the env keys are matched by value, so re-runs and `--uninstall` touch only Hoply's own entries.
 - **Copilot CLI:** `~/.copilot/hooks/hoply.json`. `--uninstall` renames that file rather than deleting it.
 

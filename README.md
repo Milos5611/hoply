@@ -141,6 +141,30 @@ Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by 
 - Copilot CLI is not supported: its `permissionRequest` hook runs before its own allow rules and its prompt, so holding it would stall every tool call.
 - The Allow button on a notification asks macOS to unlock first.
 
+## Releasing
+
+`.github/workflows/release.yml` builds, tests and packages a universal (Apple silicon + Intel) `Hoply-<version>.dmg` on a macOS 26 runner. Pushing a tag `v<version>` signs it with a Developer ID, notarizes it and publishes it as a GitHub Release; running the workflow by hand only uploads the DMG as a build artifact. Without the secrets below the DMG is ad-hoc signed, which proves the build but is blocked by Gatekeeper on other Macs.
+
+One-time setup:
+
+1. Join the Apple Developer Program (https://developer.apple.com/programs/enroll/, 99 USD a year; an individual account is enough).
+2. Create a **Developer ID Application** certificate: Xcode → Settings → Accounts → your team → Manage Certificates → + → Developer ID Application. Then Keychain Access → My Certificates → that certificate → Export as `.p12` with a password.
+3. Create an App Store Connect API key for notarization: https://appstoreconnect.apple.com/access/integrations/api → Team Keys → + (access: Developer). Download the `.p8` (only possible once) and note its Key ID and the Issuer ID above the list.
+4. Add the repository secrets (GitHub → Settings → Secrets and variables → Actions):
+
+   | Secret | Value |
+   |---|---|
+   | `DEVELOPER_ID_P12_BASE64` | `base64 -i DeveloperID.p12 \| pbcopy` |
+   | `DEVELOPER_ID_P12_PASSWORD` | the `.p12` export password |
+   | `KEYCHAIN_PASSWORD` | any random string, e.g. `openssl rand -base64 24` |
+   | `NOTARY_KEY_P8_BASE64` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` |
+   | `NOTARY_KEY_ID` | the key's Key ID |
+   | `NOTARY_ISSUER_ID` | the Issuer ID |
+
+Release: `git tag v0.1.0 && git push origin v0.1.0`. The tag sets the version (`CFBundleShortVersionString`); the build number is the commit count. To build the same DMG locally: `HOPLY_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… scripts/package.sh`.
+
+A tester installs from the DMG, but the agents still need connecting: today that is `scripts/install.sh` from a checkout.
+
 ## Known gaps
 
 - `api.anthropic.com/api/oauth/usage` is the undocumented endpoint Claude Code's `/usage` uses; it can change without notice.

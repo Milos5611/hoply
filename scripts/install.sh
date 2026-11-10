@@ -110,22 +110,8 @@ disconnect_copilot() {
 }
 
 install_app() {
-  swift build -c release --product Hoply
-  local bin app=build/Hoply.app target="$HOME/Applications/Hoply.app"
-  bin="$(swift build -c release --show-bin-path)/Hoply"
-  rm -rf "$app"
-  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  cp "$bin" "$app/Contents/MacOS/Hoply"
-  cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
-  # Hoply.icon (Icon Composer) → Assets.car (Liquid Glass) + Hoply.icns; actool ships with Xcode.
-  if xcrun --find actool >/dev/null 2>&1; then
-    xcrun actool Sources/Hoply/Hoply.icon --compile "$app/Contents/Resources" --platform macosx \
-      --minimum-deployment-target 26.0 --app-icon Hoply \
-      --output-partial-info-plist "$(mktemp -t hoply-icon)" --output-format human-readable-text >/dev/null
-  else
-    echo "Hoply: actool not found (needs Xcode), building without an app icon" >&2
-  fi
-  codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$app"
+  local app target="$HOME/Applications/Hoply.app"
+  app="$(HOPLY_SIGN_IDENTITY="$SIGN_IDENTITY" scripts/build-app.sh)"
   mkdir -p "$HOME/Applications"
   pkill -x Hoply 2>/dev/null || true
   rm -rf "$target"
