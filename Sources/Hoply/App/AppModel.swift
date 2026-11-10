@@ -29,6 +29,9 @@ final class AppModel {
     let history = History()
     let devServers: DevServers
     let cleanup: Cleanup
+    let palette: Palette
+    let hotKey: HotKey
+    @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
     @ObservationIgnored var settingsOpener: (() -> Void)?
@@ -88,11 +91,17 @@ final class AppModel {
         isLive = live
         devServers = DevServers(live: live)
         cleanup = Cleanup(history: history, live: live)
+        palette = Palette(live: live)
+        hotKey = HotKey(live: live)
         guard live else {
             settings = AppSettings()
+            palette.model = self
             return
         }
         settings = AppSettings.load()
+        palette.model = self
+        hotKey.onPress = { [weak self] in self?.togglePalette() }
+        hotKey.update(enabled: settings.paletteEnabled, combo: settings.paletteHotKey)
         policy.preferences = NotificationPreferences(settings: settings)
         history.setPlan(settings)
         notifier.onOpen = { [weak self] target in self?.open(target) }
@@ -229,6 +238,28 @@ final class AppModel {
 
     func openSettings() {
         settingsOpener?()
+    }
+
+    func openPanel() {
+        panelOpener?()
+    }
+
+    func togglePalette() {
+        guard settings.paletteEnabled else { return }
+        paletteToggler?()
+    }
+
+    func setPaletteEnabled(_ enabled: Bool) {
+        var updated = settings
+        updated.paletteEnabled = enabled
+        apply(updated)
+    }
+
+    func setPaletteHotKey(_ combo: HotKeyCombo) {
+        guard combo.isValid else { return }
+        var updated = settings
+        updated.paletteHotKey = combo
+        apply(updated)
     }
 
     private func tick() {
@@ -517,6 +548,7 @@ final class AppModel {
         updated.save()
         policy.preferences = NotificationPreferences(settings: updated)
         history.setPlan(updated)
+        hotKey.update(enabled: updated.paletteEnabled, combo: updated.paletteHotKey)
         if updated.port != old.port {
             server.start(port: UInt16(clamping: updated.port))
         }
@@ -612,6 +644,7 @@ extension AppModel {
         model.projectsByCwd = PreviewData.projectsByCwd
         model.gitStats = PreviewData.gitStats
         model.editors = PreviewData.editors
+        model.hotKey.show(status: .registered(PreviewData.settings.paletteHotKey))
         model.devServers.show(PreviewData.devServers(now: now))
         model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
                            log: PreviewData.cleanupLog(now: now))

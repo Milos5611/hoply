@@ -7,6 +7,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let dashboard: DashboardWindowController
+    private let palette: PaletteWindowController
 
     /// `.transient` closes the panel the moment Hoply resigns active, so Spotlight or the screen-capture
     /// toolbar makes it vanish mid-recording. `HOPLY_HOLD_OPEN=1` keeps it up until the status item is
@@ -19,7 +20,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     init(model: AppModel) {
         self.model = model
         dashboard = DashboardWindowController(model: model)
+        palette = PaletteWindowController(model: model)
         super.init()
+        model.paletteToggler = { [weak self] in self?.togglePalette() }
         model.dashboardOpener = { [weak self] page in self?.openDashboard(page) }
         model.panelOpener = { [weak self] in
             self?.model.showingSettings = false
@@ -59,6 +62,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.contentViewController?.view.window?.makeKey()
     }
 
+    func togglePalette() {
+        if popover.isShown { popover.performClose(nil) }
+        palette.toggle()
+    }
+
     func openDashboard(_ page: DashboardPage? = nil) {
         if popover.isShown { popover.performClose(nil) }
         dashboard.show(page)
@@ -84,6 +92,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         let menu = NSMenu()
         menu.addItem(item("Open Hoply", #selector(openPanel)))
         menu.addItem(item("Open Dashboard", #selector(openDashboardFromMenu)))
+        if model.settings.paletteEnabled {
+            menu.addItem(item("Command Palette", #selector(openPalette)))
+        }
         menu.addItem(item("Settings…", #selector(openSettings)))
         menu.addItem(.separator())
         menu.addItem(item("Quit Hoply", #selector(quit)))
@@ -105,6 +116,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     @objc private func openDashboardFromMenu() {
         openDashboard()
+    }
+
+    @objc private func openPalette() {
+        palette.show()
     }
 
     @objc private func openSettings() {

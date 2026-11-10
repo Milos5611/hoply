@@ -50,6 +50,8 @@ struct SettingsView: View {
 
                 CopilotPlanSettings(allowanceText: $allowanceText, usdText: $usdText)
 
+                PaletteSettings()
+
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionTitle("Behaviour")

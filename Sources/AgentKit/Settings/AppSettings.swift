@@ -23,6 +23,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var energyPricePerKWh = 0.0
     public var priceAliases: [String: String] = [:]
     public var cleanupIncludesNodeModules = false
+    public var paletteEnabled = true
+    public var paletteHotKey = HotKeyCombo.optionSpace
 
     public init() {}
 
@@ -53,6 +55,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         priceAliases = container.lenient([String: String].self, .priceAliases) ?? defaults.priceAliases
         cleanupIncludesNodeModules = container.lenient(Bool.self, .cleanupIncludesNodeModules)
             ?? defaults.cleanupIncludesNodeModules
+        paletteEnabled = container.lenient(Bool.self, .paletteEnabled) ?? defaults.paletteEnabled
+        paletteHotKey = container.lenient(HotKeyCombo.self, .paletteHotKey).flatMap { $0.isValid ? $0 : nil }
+            ?? defaults.paletteHotKey
     }
 
     public static func decode(_ data: Data?) -> AppSettings {

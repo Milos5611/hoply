@@ -121,6 +121,13 @@ The Dashboard's Clean up page lists what Hoply thinks is safe to remove, and wha
 
 Files go to the Trash, so Finder's Put Back works.
 
+## Command palette
+
+⌥Space opens a search field over whatever app is in front: live and recent sessions, projects, dev servers, Dashboard pages and actions. Type `>` to list actions only. Return runs the highlighted row and ⌘Return its second action; things you pick often rank higher.
+
+- **Resume:** Return on a finished Claude Code session writes a small `.command` script (`cd <folder>` then `claude --resume <id>`) to `~/Library/Application Support/Hoply/Resume/` and opens it in Terminal. Other agents open in the Dashboard instead.
+- **Shortcut:** change it or turn the palette off in Settings → Command palette, which also shows whether the shortcut has fired. If ⌥Space does nothing, macOS or another app owns it; use ⌃⌥Space or record another combination. The panel's search button and the menu bar icon's right-click menu open the palette too.
+
 ## Known gaps
 
 - `api.anthropic.com/api/oauth/usage` is the undocumented endpoint Claude Code's `/usage` uses; it can change without notice.

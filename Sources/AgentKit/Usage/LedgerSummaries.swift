@@ -138,6 +138,41 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var id: String { "\(key.source.rawValue):\(key.id)" }
 }
 
+public struct RecentSession: Sendable, Equatable, Identifiable {
+    public var key: SessionKey
+    public var project: ProjectRef?
+    public var title: String?
+    public var cwd: String
+    public var branch: String?
+    public var lastAt: Date
+
+    public init(key: SessionKey, project: ProjectRef? = nil, title: String? = nil, cwd: String, branch: String? = nil,
+                lastAt: Date) {
+        self.key = key
+        self.project = project
+        self.title = title
+        self.cwd = cwd
+        self.branch = branch
+        self.lastAt = lastAt
+    }
+
+    public var id: String { "\(key.source.rawValue):\(key.id)" }
+}
+
+public struct RecentProject: Sendable, Equatable, Identifiable {
+    public var project: ProjectRef
+    public var lastActive: Date
+    public var sessionCount: Int
+
+    public init(project: ProjectRef, lastActive: Date, sessionCount: Int) {
+        self.project = project
+        self.lastActive = lastActive
+        self.sessionCount = sessionCount
+    }
+
+    public var id: Int64 { project.id }
+}
+
 public struct SessionPage: Sendable, Equatable {
     public var sessions: [SessionSummary]
     public var totalCount: Int

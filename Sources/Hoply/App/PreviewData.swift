@@ -225,6 +225,25 @@ enum PreviewData {
          Editor(id: "com.apple.dt.Xcode", name: "Xcode", url: URL(fileURLWithPath: "/Applications/Xcode.app"))]
     }
 
+    static func paletteSessions(now: Date) -> [RecentSession] {
+        history(now: now).sessions.sessions.compactMap { session in
+            session.lastAt.map {
+                RecentSession(key: session.key, project: session.project, title: session.title, cwd: session.cwd ?? "",
+                              branch: session.branch, lastAt: $0)
+            }
+        }
+    }
+
+    static func paletteProjects(now: Date) -> [RecentProject] {
+        let sessions = paletteSessions(now: now)
+        return projectRefs.compactMap { project in
+            let own = sessions.filter { $0.project == project }
+            return own.map(\.lastAt).max().map {
+                RecentProject(project: project, lastActive: $0, sessionCount: own.count * 3 + 1)
+            }
+        }
+    }
+
     private static let liveKey = SessionKey(source: .claudeCode, id: "pricing")
 
     private static func insights(now: Date) -> [SessionKey: SessionInsight] {

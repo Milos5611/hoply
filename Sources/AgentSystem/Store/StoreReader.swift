@@ -75,6 +75,38 @@ public actor StoreReader {
         return found.first
     }
 
+    public func recentSessions(limit: Int, sources: Set<AgentSource>? = nil) throws -> [RecentSession] {
+        let wanted = (sources ?? Set(AgentSource.allCases)).map(\.rawValue).sorted()
+        return try db.query("""
+            SELECT s.source, s.id, s.title, s.cwd, s.branch, s.last_at, p.id, p.root, p.name, p.display_name, p.kind
+            FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+            WHERE s.last_at IS NOT NULL AND s.cwd IS NOT NULL AND s.cwd != ''
+                  AND s.source IN (SELECT value FROM json_each(?))
+            ORDER BY s.last_at DESC, s.source, s.id
+            LIMIT ?
+            """, [Self.jsonArray(wanted), max(limit, 0)]) { row -> RecentSession? in
+            guard let source = AgentSource(rawValue: row.text(0)) else { return nil }
+            return RecentSession(key: SessionKey(source: source, id: row.text(1)), project: Self.project(row, from: 6),
+                                 title: row.optionalText(2), cwd: row.text(3), branch: row.optionalText(4),
+                                 lastAt: Date(timeIntervalSince1970: row.double(5)))
+        }.compactMap { $0 }
+    }
+
+    public func recentProjects(limit: Int) throws -> [RecentProject] {
+        try db.query("""
+            SELECT p.id, p.root, p.name, p.display_name, p.kind, MAX(s.last_at), COUNT(*)
+            FROM sessions s JOIN projects p ON p.id = s.project_id
+            WHERE s.last_at IS NOT NULL
+            GROUP BY p.id
+            ORDER BY MAX(s.last_at) DESC, p.id
+            LIMIT ?
+            """, [max(limit, 0)]) { row -> RecentProject? in
+            Self.project(row, from: 0).map {
+                RecentProject(project: $0, lastActive: Date(timeIntervalSince1970: row.double(5)), sessionCount: row.int(6))
+            }
+        }.compactMap { $0 }
+    }
+
     public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, localOnly: Bool = false,
                            now: Date = Date(), calendar: Calendar = .current) throws -> DailySpendSeries {
         let count = max(days, 1)

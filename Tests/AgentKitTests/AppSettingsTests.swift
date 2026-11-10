@@ -132,4 +132,38 @@ final class AppSettingsTests: XCTestCase {
         settings.cleanupIncludesNodeModules = true
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
+
+    func testPaletteKeysDecodeLeniently() throws {
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertTrue(older.paletteEnabled)
+        XCTAssertEqual(older.paletteHotKey, .optionSpace)
+        XCTAssertEqual(older.port, 4400, "older keys survive")
+
+        for wrong in [#""paletteHotKey":"⌥Space""#, #""paletteHotKey":{"keyCode":49}"#,
+                      #""paletteHotKey":{"keyCode":49,"modifiers":0}"#, #""paletteHotKey":{"keyCode":"49","modifiers":2048}"#,
+                      #""paletteHotKey":{"keyCode":900,"modifiers":2048}"#] {
+            let settings = AppSettings.decode(Data("{\(wrong),\"paletteEnabled\":\"no\",\"vllmName\":\"ZGX\"}".utf8))
+            XCTAssertEqual(settings.paletteHotKey, .optionSpace, wrong)
+            XCTAssertTrue(settings.paletteEnabled)
+            XCTAssertEqual(settings.vllmName, "ZGX")
+        }
+
+        var changed = AppSettings()
+        changed.paletteEnabled = false
+        changed.paletteHotKey = .controlOptionSpace
+        XCTAssertEqual(AppSettings.decode(changed.encoded()), changed)
+
+        let object = { (settings: AppSettings) -> [String: Any] in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(settings.encoded())) as? [String: Any])
+        }
+        let (base, edited) = (try object(AppSettings()), try object(changed))
+        XCTAssertEqual(base["paletteHotKey"] as? NSDictionary, ["keyCode": 49, "modifiers": 2048])
+        XCTAssertNotEqual(base["paletteHotKey"] as? NSDictionary, edited["paletteHotKey"] as? NSDictionary)
+        XCTAssertEqual(try object(AppSettings())["paletteHotKey"] as? NSDictionary, base["paletteHotKey"] as? NSDictionary)
+        var merged = base
+        merged["paletteHotKey"] = edited["paletteHotKey"]
+        let result = AppSettings.decode(try JSONSerialization.data(withJSONObject: merged))
+        XCTAssertEqual(result.paletteHotKey, .controlOptionSpace)
+        XCTAssertTrue(result.paletteEnabled)
+    }
 }

@@ -24,7 +24,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_520),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_720),
                            model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 var allPriced = PreviewData.history(now: now)
@@ -33,6 +33,18 @@ enum Snapshot {
                 try render(PricingSettings(aliases: .constant([:])).font(.system(size: 12.5)).padding(12).frame(width: 448),
                            model: model, appearance: looks,
                            to: directory.appendingPathComponent("panel-settings-pricing-empty-\(name).png"))
+
+                try render(PaletteSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                               .padding(12).frame(width: 448),
+                           model: model, appearance: looks,
+                           to: directory.appendingPathComponent("panel-settings-palette-\(name).png"))
+                for (state, query) in [("empty", ""), ("query", "fib"), ("actions", ">"), ("no-results", "zzqx")] {
+                    model.palette.show(query: query, sessions: PreviewData.paletteSessions(now: now),
+                                       projects: PreviewData.paletteProjects(now: now))
+                    try render(PaletteView(plainBackground: true).padding(PaletteWindowController.margin),
+                               model: model, appearance: looks,
+                               to: directory.appendingPathComponent("palette-\(state)-\(name).png"))
+                }
 
                 for page in DashboardPage.allCases {
                     var preview = PreviewData.history(now: now)

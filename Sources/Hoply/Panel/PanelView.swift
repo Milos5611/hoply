@@ -32,6 +32,11 @@ struct PanelHeader: View {
             Text("Hoply")
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
+            if model.settings.paletteEnabled {
+                HeaderIconButton(symbol: "magnifyingglass", help: paletteHelp) {
+                    model.togglePalette()
+                }
+            }
             HeaderIconButton(symbol: "macwindow", help: "Open Dashboard") {
                 model.openDashboard()
             }
@@ -46,6 +51,11 @@ struct PanelHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 10)
+    }
+
+    private var paletteHelp: String {
+        guard case .registered(let combo) = model.hotKey.status else { return "Command Palette" }
+        return "Command Palette (\(combo.displayString))"
     }
 
     private var bellHelp: String {

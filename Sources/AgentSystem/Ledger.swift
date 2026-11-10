@@ -192,4 +192,12 @@ public struct Ledger: Sendable {
     public func pricedModels() async -> [String] {
         await store.pricing.pricedModelIDs
     }
+
+    public func recentSessions(limit: Int, sources: Set<AgentSource>? = nil) async throws -> [RecentSession] {
+        try await reader.recentSessions(limit: limit, sources: sources)
+    }
+
+    public func recentProjects(limit: Int) async throws -> [RecentProject] {
+        try await reader.recentProjects(limit: limit)
+    }
 }
