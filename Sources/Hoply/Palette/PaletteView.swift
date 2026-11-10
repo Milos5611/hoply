@@ -12,7 +12,7 @@ struct PaletteView: View {
     @FocusState private var searching: Bool
     @State private var hovered: String?
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 16, style: .continuous) }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 20, style: .continuous) }
 
     var body: some View {
         let palette = model.palette
@@ -47,7 +47,7 @@ struct PaletteView: View {
                 .font(.system(size: 15))
                 .focused($searching)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 18)
         .frame(height: 50)
     }
 
@@ -129,7 +129,7 @@ struct PaletteRow: View {
             icon(entry.icon)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let subtitle = entry.item.subtitle, !subtitle.isEmpty {
@@ -161,16 +161,15 @@ struct PaletteRow: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 42)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(isHovered ? 0.05 : 0)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.primary.opacity(isSelected ? 0.09 : isHovered ? 0.045 : 0)))
     }
 
     private var title: AttributedString {
         var text = AttributedString(row.entry.item.title)
         for range in row.result.titleStringRanges {
             guard let matched = Range(range, in: text) else { continue }
-            text[matched].font = .system(size: 13, weight: .bold)
-            text[matched].foregroundColor = .accentColor
+            text[matched].font = .system(size: 13.5, weight: .bold)
         }
         return text
     }

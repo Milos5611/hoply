@@ -6,6 +6,7 @@ struct DashboardView: View {
     /// `--snapshot` can't draw the sidebar's material, vibrant text or selection (the window server
     /// composites them), so snapshots use a plain stand-in for the sidebar.
     var plainSidebar = false
+    @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
         let history = model.history
@@ -16,11 +17,13 @@ struct DashboardView: View {
             HStack(spacing: 0) {
                 PlainSidebar(selection: selection)
                     .frame(width: 210)
-                Divider()
+                    .padding(8)
                 detail(history.page)
             }
+            .background(DashboardBackground())
+            .environment(\.dashboardStandIn, true)
         } else {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columns) {
                 List(selection: selection) {
                     Section("History") {
                         ForEach(DashboardPage.allCases) { page in
@@ -36,6 +39,16 @@ struct DashboardView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 280)
             } detail: {
                 detail(history.page)
+                    .background { DashboardBackground().ignoresSafeArea() }
+                    // Without an item on every page the window has no toolbar on some: no glass bar, no page title.
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            Button { columns = columns == .detailOnly ? .all : .detailOnly } label: {
+                                Label("Toggle Sidebar", systemImage: "sidebar.leading")
+                            }
+                            .help(columns == .detailOnly ? "Show the sidebar" : "Hide the sidebar")
+                        }
+                    }
             }
         }
     }
@@ -82,7 +95,7 @@ private struct PlainSidebar: View {
         }
         .padding(.horizontal, 10)
         .padding(.top, 18)
-        .background(Color.primary.opacity(0.03))
+        .background(Card(padding: 0) { Color.clear })
     }
 }
 

@@ -11,7 +11,9 @@ enum Snapshot {
             for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                 let model = AppModel.preview(now: now)
                 let looks = NSAppearance(named: appearance)
-                try render(PanelView(), model: model, appearance: looks,
+                // Stands in for the popover's surface, which only the window server can draw.
+                let popover = Color(white: name == "light" ? 0.925 : 0.16)
+                try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-\(name).png"))
 
                 var backfilling = PreviewData.history(now: now)
@@ -19,24 +21,24 @@ enum Snapshot {
                 model.history.show(backfilling)
                 try render(VStack(spacing: 0) { PanelHeader(); PanelSections().padding(.horizontal, 12); PanelFooter() }
                                .frame(width: 448),
-                           model: model, appearance: looks,
+                           model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-full-\(name).png"))
                 model.showingSettings = true
-                try render(PanelView(), model: model, appearance: looks,
+                try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
                 try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 1_720),
-                           model: model, appearance: looks,
+                           model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
                 model.history.show(allPriced)
                 try render(PricingSettings(aliases: .constant([:])).font(.system(size: 12.5)).padding(12).frame(width: 448),
-                           model: model, appearance: looks,
+                           model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-pricing-empty-\(name).png"))
 
                 try render(PaletteSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
                                .padding(12).frame(width: 448),
-                           model: model, appearance: looks,
+                           model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-palette-\(name).png"))
                 for (state, query) in [("empty", ""), ("query", "fib"), ("actions", ">"), ("no-results", "zzqx")] {
                     model.palette.show(query: query, sessions: PreviewData.paletteSessions(now: now),
@@ -69,7 +71,7 @@ enum Snapshot {
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
                            appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-stop-\(name).png"))
                 try render(VStack(spacing: 0) { PanelSections().padding(.horizontal, 12); PanelFooter() }.frame(width: 448),
-                           model: model, appearance: looks,
+                           model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-dev-servers-stop-\(name).png"))
                 model.devServers.show(DevServerScan(snapshot: ProcessSnapshot(takenAt: now, processes: [])))
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
@@ -139,10 +141,11 @@ enum Snapshot {
         }
     }
 
-    private static func render(_ view: some View, model: AppModel, appearance: NSAppearance?, to file: URL) throws {
+    private static func render(_ view: some View, model: AppModel, appearance: NSAppearance?,
+                               surface: Color = Color(nsColor: .windowBackgroundColor), to file: URL) throws {
         let host = NSHostingView(rootView: view
             .environment(model)
-            .background(Color(nsColor: .windowBackgroundColor)))
+            .background(surface))
         let frame = NSRect(origin: .zero, size: host.fittingSize)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.appearance = appearance

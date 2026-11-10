@@ -49,7 +49,7 @@ struct StatStrip: View {
         HStack(spacing: 10) {
             StatTile(label: "Agents", value: "\(model.activeCount)",
                      tag: model.workingCount > 0 ? "Live" : nil, tagColor: .green,
-                     prominent: model.workingCount > 0) {
+                     prominent: model.workingCount > 0 && model.attentionCount == 0) {
                 MiniBars(values: model.activity.values, highlightLast: 3, tint: .orange)
             }
             StatTile(label: "Need you", value: "\(model.attentionCount)",
@@ -62,8 +62,7 @@ struct StatStrip: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             StatTile(label: localModelName, value: model.vllm?.generationTokensPerSecond.map { "\(Format.whole($0))" } ?? "–",
-                     unit: "tok/s", tag: localModelTag.text, tagColor: localModelTag.color,
-                     prominent: model.vllmOnline) {
+                     unit: "tok/s", tag: localModelTag.text, tagColor: localModelTag.color) {
                 MiniBars(values: model.throughput.values, highlightLast: 1, tint: .blue)
             }
         }
@@ -86,7 +85,7 @@ struct WaitingCard: View {
     var body: some View {
         let sessions = grouping.waiting
         let acting = sessions.count { grouping.status(of: $0).needsAction }
-        Card(prominent: true, tint: .orange) {
+        Card(tint: .orange) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
                     Image(systemName: "hand.raised.fill")
@@ -113,7 +112,7 @@ struct ProjectCard: View {
     var body: some View {
         let muted = group.path.map(model.isMuted) ?? false
         let servers = model.devServers.headerServers(inGroup: group.id, sessions: model.sessions)
-        Card(prominent: group.isWorking) {
+        Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     icon

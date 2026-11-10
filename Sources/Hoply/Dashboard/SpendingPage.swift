@@ -10,16 +10,17 @@ struct SpendingPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeader(title: "Spending", subtitle: "What your agents' tokens would cost on the API") {
-                    HStack(spacing: 10) {
-                        Picker("Split", selection: Binding(get: { history.spendingSplit },
-                                                           set: { history.setSpending(split: $0) })) {
-                            Text("By model").tag(SpendSeriesSplit.model)
-                            Text("By source").tag(SpendSeriesSplit.source)
-                        }
-                        Picker("Range", selection: Binding(get: { history.spendingRange },
-                                                           set: { history.setSpending(range: $0) })) {
-                            ForEach(HistoryRange.spendingRanges) { Text($0.label).tag($0) }
-                        }
+                    Picker("Split", selection: Binding(get: { history.spendingSplit },
+                                                       set: { history.setSpending(split: $0) })) {
+                        Text("By model").tag(SpendSeriesSplit.model)
+                        Text("By source").tag(SpendSeriesSplit.source)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Picker("Range", selection: Binding(get: { history.spendingRange },
+                                                       set: { history.setSpending(range: $0) })) {
+                        ForEach(HistoryRange.spendingRanges) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()

@@ -14,8 +14,9 @@ struct IconTile: View {
             .font(.system(size: size * 0.46, weight: .semibold))
             .foregroundStyle(tint)
             .frame(width: size, height: size)
-            .background(shape.fill(colorScheme == .dark ? Color.white.opacity(0.10) : .white))
-            .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .background(shape.fill(colorScheme == .dark ? Color.white.opacity(0.10) : .white)
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.05), radius: 1.5, y: 0.5))
+            .overlay(shape.strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06), lineWidth: 0.5))
     }
 }
 

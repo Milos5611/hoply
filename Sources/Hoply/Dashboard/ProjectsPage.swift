@@ -111,9 +111,9 @@ struct ProjectTile: View {
                         .frame(maxHeight: .infinity, alignment: .bottom)
                 }
             }
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .overlay(RoundedRectangle(cornerRadius: CardMetrics.cornerRadius, style: .continuous)
                 .strokeBorder(Color.accentColor.opacity(hovering ? 0.55 : 0), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: CardMetrics.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -196,7 +196,7 @@ struct UnassignedTile: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: CardMetrics.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help("Show unassigned usage")
@@ -291,6 +291,7 @@ struct ModelLine: View {
 
 struct ProjectDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dashboardStandIn) private var standIn
     let opened: OpenedProject
     let detail: ProjectDetailData?
 
@@ -323,19 +324,32 @@ struct ProjectDetailView: View {
             }
             .padding(24)
         }
+        .navigationTitle(summary.title)
+        .toolbar {
+            if !standIn {
+                ToolbarItem(placement: .navigation) {
+                    Button { model.history.closeProject() } label: {
+                        Label("Projects", systemImage: "chevron.left")
+                    }
+                    .help("Back to all projects")
+                }
+                ToolbarItem(placement: .primaryAction) { ProjectRangePicker() }
+            }
+        }
     }
 
     private func header(_ summary: ProjectSummary) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button { model.history.closeProject() } label: {
-                    Label("Projects", systemImage: "chevron.left")
-                        .font(.system(size: 12.5, weight: .medium))
+            if standIn {
+                HStack {
+                    Button { model.history.closeProject() } label: {
+                        Label("Projects", systemImage: "chevron.left")
+                            .font(.system(size: 12.5, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    ProjectRangePicker()
                 }
-                .buttonStyle(.borderless)
-                .help("Back to all projects")
-                Spacer()
-                ProjectRangePicker()
             }
             HStack(alignment: .center, spacing: 14) {
                 ProjectIcon(project: summary.project, size: 46)

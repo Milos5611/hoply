@@ -23,6 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
 
-        statusItem = StatusItemController(model: AppModel())
+        let controller = StatusItemController(model: AppModel())
+        statusItem = controller
+        if let surface = ProcessInfo.processInfo.environment["HOPLY_OPEN"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                switch surface {
+                case "panel": controller.showPanel()
+                case "dashboard": controller.openDashboard()
+                case "palette": controller.togglePalette()
+                default: break
+                }
+            }
+        }
     }
 }

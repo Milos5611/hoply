@@ -1,24 +1,59 @@
 import AgentKit
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var dashboardStandIn = false
+}
+
 struct PageHeader<Controls: View>: View {
     let title: String
     var subtitle: String?
     @ViewBuilder var controls: Controls
 
+    @Environment(\.dashboardStandIn) private var standIn
+
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 22, weight: .bold))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+        if standIn {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 22, weight: .bold))
+                    caption
                 }
+                Spacer(minLength: 12)
+                controls
             }
-            Spacer(minLength: 12)
-            controls
+        } else {
+            caption
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .navigationTitle(title)
+                .toolbar {
+                    ToolbarItemGroup(placement: .primaryAction) { controls }
+                }
+        }
+    }
+
+    private var caption: some View {
+        Text(subtitle ?? "")
+            .font(.system(size: 12.5))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
+struct DashboardBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        if contrast == .increased {
+            Color(nsColor: .windowBackgroundColor)
+        } else if colorScheme == .dark {
+            LinearGradient(colors: [Color(red: 0.11, green: 0.125, blue: 0.16), Color(red: 0.115, green: 0.115, blue: 0.125)],
+                           startPoint: .topLeading, endPoint: UnitPoint(x: 0.7, y: 0.8))
+        } else {
+            LinearGradient(colors: [Color(red: 0.90, green: 0.925, blue: 0.965), Color(red: 0.95, green: 0.953, blue: 0.96)],
+                           startPoint: .topLeading, endPoint: UnitPoint(x: 0.7, y: 0.8))
         }
     }
 }

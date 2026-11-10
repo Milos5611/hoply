@@ -48,9 +48,10 @@ struct PanelHeader: View {
                 model.showingSettings.toggle()
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 
     private var paletteHelp: String {
@@ -69,15 +70,19 @@ struct HeaderIconButton: View {
     let help: String
     let action: () -> Void
 
+    @State private var hovering = false
+
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+                .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+                .contentShape(Circle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .foregroundStyle(.primary)
+        .onHover { hovering = $0 }
         .help(help)
     }
 }
@@ -121,7 +126,7 @@ struct PanelFooter: View {
             .foregroundStyle(.secondary)
             .help("Quit Hoply")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 18)
         .padding(.vertical, 10)
     }
 

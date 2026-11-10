@@ -122,7 +122,7 @@ struct SessionRow: View {
     private var age: String { Format.age(since: session.stateSince) }
 
     private var ageColor: Color {
-        status.recedes ? .secondary : StatePill.color(for: status, failed: failed)
+        status.needsAction || failed ? StatePill.color(for: status, failed: failed) : .secondary
     }
 
     private var stateHelp: String {

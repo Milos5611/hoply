@@ -53,7 +53,8 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: controller)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.toolbarStyle = .unified
-        window.title = "Hoply"
+        // navigationTitle reaches the window only when it changes, so the first page's title is set here.
+        window.title = model.history.page.title
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.setContentSize(NSSize(width: 1120, height: 740))
