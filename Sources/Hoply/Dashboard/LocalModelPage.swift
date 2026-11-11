@@ -82,7 +82,11 @@ struct LocalModelPage: View {
 
 enum LocalModelStyle {
     static let tint = SourceBadge.color(for: .qwenCode)
-    static let promptTint = tint.mix(with: .white, by: 0.5)
+    static let promptTint: Color = if #available(macOS 15, *) {
+        tint.mix(with: .white, by: 0.5)
+    } else {
+        Color(nsColor: NSColor(tint).blended(withFraction: 0.5, of: .white) ?? NSColor(tint))
+    }
 }
 
 // MARK: - Live

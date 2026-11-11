@@ -131,8 +131,9 @@ final class AgentConnectorTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("is not valid JSON"), message)
 
-        for action in [connector.connect, connector.disconnect] {
-            XCTAssertThrowsError(try action(.claudeCode)) { error in
+        let actions: [() throws -> Void] = [{ try connector.connect(.claudeCode) }, { try connector.disconnect(.claudeCode) }]
+        for action in actions {
+            XCTAssertThrowsError(try action()) { error in
                 XCTAssertEqual((error as? AgentConnectorError)?.kind, .unreadable)
                 XCTAssertTrue(error.localizedDescription.contains("fix it first"), error.localizedDescription)
             }

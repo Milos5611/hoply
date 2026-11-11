@@ -1,6 +1,6 @@
 import Foundation
 import Security
-import Synchronization
+import os
 
 public protocol SecretStore: Sendable {
     func secret(service: String, account: String) throws -> String?
@@ -67,7 +67,7 @@ public final class InMemorySecretStore: SecretStore {
         var account: String
     }
 
-    private let items = Mutex<[Key: String]>([:])
+    private let items = OSAllocatedUnfairLock<[Key: String]>(initialState: [:])
 
     public init(_ secrets: [(service: String, account: String, secret: String)] = []) {
         for entry in secrets {

@@ -24,9 +24,10 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Framewor
 cp "$bin" "$app/Contents/MacOS/Hoply"
 cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
 
+# otool lists a universal binary's rpaths once per architecture; /usr/lib/swift is the OS's Swift runtime.
 otool -l "$app/Contents/MacOS/Hoply" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH") } rpath && $1 == "path" { print $2 }' |
-  while read -r path; do
-    case "$path" in /*) install_name_tool -delete_rpath "$path" "$app/Contents/MacOS/Hoply" ;; esac
+  sort -u | while read -r path; do
+    case "$path" in /usr/lib/swift) ;; /*) install_name_tool -delete_rpath "$path" "$app/Contents/MacOS/Hoply" ;; esac
   done
 
 sparkle="$app/Contents/Frameworks/Sparkle.framework"
@@ -49,7 +50,7 @@ fi
 # Hoply.icon (Icon Composer) → Assets.car (Liquid Glass) + Hoply.icns; actool ships with Xcode.
 if xcrun --find actool >/dev/null 2>&1; then
   xcrun actool Sources/Hoply/Hoply.icon --compile "$app/Contents/Resources" --platform macosx \
-    --minimum-deployment-target 26.0 --app-icon Hoply \
+    --minimum-deployment-target 14.0 --app-icon Hoply \
     --output-partial-info-plist "$(mktemp -t hoply-icon)" --output-format human-readable-text >/dev/null
 else
   echo "Hoply: actool not found (needs Xcode), building without an app icon" >&2

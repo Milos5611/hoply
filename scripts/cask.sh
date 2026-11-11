@@ -17,6 +17,8 @@ info=Sources/Hoply/Info.plist
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")"
 minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$info")"
 case "$minimum" in
+  14 | 14.*) macos=sonoma ;;
+  15 | 15.*) macos=sequoia ;;
   26 | 26.*) macos=tahoe ;;
   *) echo "LSMinimumSystemVersion $minimum: add its Homebrew symbol (MacOSVersion::SYMBOLS) here" >&2; exit 1 ;;
 esac

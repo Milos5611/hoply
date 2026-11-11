@@ -110,10 +110,15 @@ private struct PaletteSurface: ViewModifier {
                 .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 .clipShape(shape)
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.18), radius: 14, y: 6)
-        } else {
+        } else if #available(macOS 26, *) {
             content
                 .clipShape(shape)
                 .glassEffect(.regular, in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .clipShape(shape)
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.18), radius: 14, y: 6)
         }
     }
 }

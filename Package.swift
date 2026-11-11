@@ -11,7 +11,7 @@ let infoPlist = URL(fileURLWithPath: #filePath)
 
 let package = Package(
     name: "Hoply",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Hoply", targets: ["Hoply"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
@@ -39,7 +39,11 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
                               "-Xlinker", "__info_plist", "-Xlinker", infoPlist,
                               // Hoply.app/Contents/Frameworks/Sparkle.framework; swift run finds it through @loader_path.
-                              "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
+                              "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                              // SwiftPM records the deployment target as the SDK version, and AppKit picks the
+                              // Liquid Glass design from it: 14.0 there would give macOS 26+ the old look.
+                              "-Xlinker", "-platform_version", "-Xlinker", "macos",
+                              "-Xlinker", "14.0", "-Xlinker", "26.0"]),
             ]
         ),
         .testTarget(

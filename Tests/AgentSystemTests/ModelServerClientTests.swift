@@ -2,19 +2,19 @@
 import AgentKit
 import Foundation
 import Network
-import Synchronization
+import os
 import XCTest
 
 private final class RoutedServer: Sendable {
     private final class Shared: Sendable {
-        let requests = Mutex<[String]>([])
-        let routes: Mutex<[String: String]>
+        let requests = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let routes: OSAllocatedUnfairLock<[String: String]>
 
-        init(_ routes: [String: String]) { self.routes = Mutex(routes) }
+        init(_ routes: [String: String]) { self.routes = OSAllocatedUnfairLock(initialState: routes) }
     }
 
     private final class Once: Sendable {
-        private let done = Mutex(false)
+        private let done = OSAllocatedUnfairLock(initialState: false)
 
         func claim() -> Bool {
             done.withLock { done in

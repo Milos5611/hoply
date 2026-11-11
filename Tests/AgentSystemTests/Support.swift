@@ -55,7 +55,7 @@ final class SpawnedProcess {
         for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
             posix_spawn_file_actions_addopen(&actions, descriptor, "/dev/null", O_RDWR, 0)
         }
-        if let directory { posix_spawn_file_actions_addchdir(&actions, directory) }
+        if let directory { posix_spawn_file_actions_addchdir_np(&actions, directory) }
         let argv: [UnsafeMutablePointer<CChar>?] = ([path] + arguments).map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var child: pid_t = 0

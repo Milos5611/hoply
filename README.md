@@ -20,8 +20,9 @@ run several agents at once and would rather not keep checking terminals. Everyth
 - **Download** the DMG from [hoply.dev/download](https://hoply.dev/download), open it and drag Hoply to Applications.
 - **Or use Homebrew:** `brew install --cask milos5611/hoply/hoply`
 
-You need macOS 26 Tahoe or newer, on Apple silicon or Intel (it's one universal app). Release builds are signed with a
-Developer ID and notarized by Apple, so macOS asks only its usual one-time question for an app from the internet.
+You need macOS 14 Sonoma or newer, on Apple silicon or Intel (it's one universal app); the Liquid Glass look needs
+macOS 26 Tahoe. Release builds are signed with a Developer ID and notarized by Apple, so macOS asks only its usual
+one-time question for an app from the internet.
 Hoply is free during early access.
 
 **Updates.** Hoply checks for a new version once a day and shows it at the bottom of the panel. Nothing installs

@@ -68,7 +68,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.title = request.title
         content.body = request.body
         content.threadIdentifier = request.threadID
-        content.interruptionLevel = request.interruption == .active ? .active : .passive
+        // Passive requests stay silent but keep the banner: macOS mutes .passive, which hides it entirely.
+        content.interruptionLevel = .active
         content.sound = request.playsSound ? .default : nil
         var userInfo: [String: String] = [NotificationTarget.kindKey: request.kind.rawValue]
         if let session = request.session {

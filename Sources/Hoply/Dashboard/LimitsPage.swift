@@ -508,16 +508,7 @@ struct LimitChart: View {
                 }
             }
             ForEach(kinds, id: \.self) { kind in
-                let color = LimitsStyle.color(kind)
-                let list = points[kind] ?? []
-                AreaPlot(list, x: .value("Time", \.ts), y: .value("Utilization", \.utilization),
-                         series: .value("Window", \.window), stacking: .unstacked)
-                    .foregroundStyle(LinearGradient(colors: [color.opacity(0.16), color.opacity(0.01)],
-                                                    startPoint: .top, endPoint: .bottom))
-                LinePlot(list, x: .value("Time", \.ts), y: .value("Utilization", \.utilization),
-                         series: .value("Window", \.window))
-                    .foregroundStyle(color)
-                    .lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                LimitWindowPlot(points: points[kind] ?? [], color: LimitsStyle.color(kind))
             }
             if let selection {
                 RuleMark(x: .value("Time", selection))
@@ -591,6 +582,46 @@ struct LimitChart: View {
             return LimitTooltip.Row(kind: kind, name: names[kind] ?? kind.displayName, utilization: point.utilization)
         }
     }
+}
+
+private struct LimitWindowPlot: ChartContent {
+    let points: [LimitChart.Point]
+    let color: Color
+
+    // Not `if #available` in a builder: with the macOS 27 SDK that fails to compile at a macOS 15+ target.
+    var body: AnyChartContent {
+        if #available(macOS 15, *) { return AnyChartContent(plots) }
+        return AnyChartContent(marks)
+    }
+
+    @available(macOS 15, *)
+    @ChartContentBuilder private var plots: some ChartContent {
+        AreaPlot(points, x: .value("Time", \.ts), y: .value("Utilization", \.utilization),
+                 series: .value("Window", \.window), stacking: .unstacked)
+            .foregroundStyle(fill)
+        LinePlot(points, x: .value("Time", \.ts), y: .value("Utilization", \.utilization),
+                 series: .value("Window", \.window))
+            .foregroundStyle(color)
+            .lineStyle(line)
+    }
+
+    private var marks: some ChartContent {
+        ForEach(points) { point in
+            AreaMark(x: .value("Time", point.ts), y: .value("Utilization", point.utilization),
+                     series: .value("Window", point.window), stacking: .unstacked)
+                .foregroundStyle(fill)
+            LineMark(x: .value("Time", point.ts), y: .value("Utilization", point.utilization),
+                     series: .value("Window", point.window))
+                .foregroundStyle(color)
+                .lineStyle(line)
+        }
+    }
+
+    private var fill: LinearGradient {
+        LinearGradient(colors: [color.opacity(0.16), color.opacity(0.01)], startPoint: .top, endPoint: .bottom)
+    }
+
+    private var line: StrokeStyle { StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round) }
 }
 
 struct LimitTooltip: View {
