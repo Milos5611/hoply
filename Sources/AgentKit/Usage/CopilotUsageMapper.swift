@@ -64,7 +64,7 @@ public enum CopilotUsageMapper {
     public static let titleRank = 2
 
     public static func batch(events: [CopilotUsageEvent], sessions: [String: CopilotSession]) -> LedgerBatch {
-        let usage = events.compactMap { usage($0, session: sessions[$0.sessionID]) }
+        let usage = events.compactMap { Self.usage($0, session: sessions[$0.sessionID]) }
         let bySession = Dictionary(grouping: usage, by: \.sessionID)
         // Copilot does not enforce its foreign keys; an event without a session row still gets a ledger session.
         let updates = bySession.keys.sorted().map { id in
