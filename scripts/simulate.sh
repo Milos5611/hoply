@@ -37,6 +37,13 @@ CLAUDE_CWD="$HOME/Project/fiba"
 # Real Claude Code hooks always send transcript_path; this one doesn't exist, so the ledger ignores it.
 CLAUDE_TRANSCRIPT="${TMPDIR:-/tmp}/hoply-sim/sim-claude.jsonl"
 COPILOT_CWD="$HOME/Project/yasm-backend"
+CODEX_CWD="$HOME/Project/hoply"
+# Codex's rollouts are its ledger; this path is outside ~/.codex/sessions, so nothing is read from it.
+CODEX_TRANSCRIPT="${TMPDIR:-/tmp}/hoply-sim/rollout-sim-codex.jsonl"
+
+codex_hook() { # event name, extra JSON fields (start with a comma)
+  post /hooks/codex-cli "{\"hook_event_name\":\"$1\",\"session_id\":\"sim-codex\",\"transcript_path\":\"$CODEX_TRANSCRIPT\",\"cwd\":\"$CODEX_CWD\",\"model\":\"gpt-6.1-sol\",\"permission_mode\":\"default\"${2:-}}"
+}
 
 post /hooks/claude-code "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"source\":\"startup\",\"model\":\"claude-opus-5\"}"
 post /hooks/claude-code "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"prompt\":\"Refactor the auth middleware to use refresh tokens\"}"
@@ -47,6 +54,13 @@ step "Claude Code is working (Bash)"
 post /hooks/copilot-cli/sessionStart "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"source\":\"new\",\"initialPrompt\":\"Add pagination to the orders endpoint\"}"
 post /hooks/copilot-cli/preToolUse "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"toolName\":\"bash\",\"toolArgs\":\"{}\"}"
 step "Copilot CLI is working"
+
+codex_hook SessionStart ',"source":"startup"'
+codex_hook UserPromptSubmit ',"turn_id":"sim-t1","prompt":"Add a Codex card to the Limits page"'
+codex_hook PreToolUse ',"turn_id":"sim-t1","tool_name":"Bash","tool_use_id":"sim-c1","tool_input":{"command":"swift build"}'
+step "Codex CLI is working (Bash)"
+codex_hook PermissionRequest ',"turn_id":"sim-t1","tool_name":"Bash","tool_input":{"command":"swift test"}'
+step "Codex CLI asks for permission (never held: Codex shows its own prompt)"
 
 # Qwen Code and Copilot IDE have no local history: their OTel is the ledger. hoply.cwd (set by the user through
 # OTEL_RESOURCE_ATTRIBUTES) names the project; without it Hoply asks the process.pid for its cwd.
@@ -86,6 +100,10 @@ step "Claude Code got its answer"
 
 post /hooks/copilot-cli/agentStop "{\"sessionId\":\"sim-copilot\",\"timestamp\":$(date +%s)000,\"cwd\":\"$COPILOT_CWD\",\"stopReason\":\"end_turn\"}"
 step "Copilot CLI finished its turn"
+
+codex_hook PostToolUse ',"turn_id":"sim-t1","tool_name":"Bash","tool_use_id":"sim-c2"'
+codex_hook Stop ',"turn_id":"sim-t1","last_assistant_message":"Added the card; swift test passes.","stop_hook_active":false'
+step "Codex CLI finished its turn"
 
 post /hooks/claude-code "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"tool_name\":\"Bash\"}"
 post /hooks/claude-code "{\"hook_event_name\":\"Stop\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"last_assistant_message\":\"Middleware now refreshes tokens; all 214 tests pass.\"}"

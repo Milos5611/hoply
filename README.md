@@ -1,9 +1,10 @@
 # Hoply
 
-A macOS menu bar app that shows what your AI coding agents are doing: Claude Code, GitHub Copilot (CLI and JetBrains), Qwen Code on your local model, and the vLLM server behind it. It is one Swift app with a small listener built in, so there is no separate daemon to run.
+A macOS menu bar app that shows what your AI coding agents are doing: Claude Code, OpenAI Codex CLI, GitHub Copilot (CLI and JetBrains), Qwen Code on your local model, and the vLLM server behind it. It is one Swift app with a small listener built in, so there is no separate daemon to run.
 
 ```
 Claude Code ── hooks + OTel logs ──┐
+Codex CLI ── hooks ────────────────┤
 Copilot CLI ── hooks (+ OTel) ─────┤
 Copilot in JetBrains ── OTel ──────┼──▶ Hoply (127.0.0.1:4318) ──▶ menu bar panel
 Qwen Code ── OTel ─────────────────┘      │
@@ -16,6 +17,7 @@ Claude 5-hour / weekly limits ◀── polls ──┘
 | Source | How it reports | What you see |
 |---|---|---|
 | Claude Code | hooks (state) + OpenTelemetry logs (tokens, cost) | working / needs permission / your turn, task title, last tool, tokens, cost |
+| Codex CLI | hooks (state); its session files under `~/.codex/sessions` (tokens) | working / needs permission / your turn, last tool, tokens, API-equivalent cost |
 | Copilot CLI | hooks (state), optional OpenTelemetry (tokens) | working / needs permission / your turn, task title, last tool |
 | Copilot in JetBrains | OpenTelemetry only (Copilot hooks aren't supported in JetBrains or Visual Studio) | working / idle, tokens |
 | Qwen Code | OpenTelemetry | working / idle, prompt title, tokens |
@@ -29,12 +31,13 @@ Your chat UI talks to vLLM directly, so its activity shows up in the vLLM card.
 Requires macOS 26+ and Xcode 26+ (Swift 6.2 toolchain).
 
 ```bash
-scripts/install.sh              # build Hoply.app into ~/Applications, connect Claude Code + Copilot CLI, open it
+scripts/install.sh              # build Hoply.app into ~/Applications, connect Claude Code, Codex CLI and Copilot CLI, open it
 scripts/install.sh --uninstall  # disconnect the agents again
 ```
 
-That's all. `install.sh` connects whichever of Claude Code and Copilot CLI it finds (it runs `Hoply --connect`; no `jq` needed):
+That's all. `install.sh` connects whichever of Claude Code, Codex CLI and Copilot CLI it finds (it runs `Hoply --connect`; no `jq` needed):
 - **Claude Code:** hooks and OTel log export, written to `~/.claude/settings.json` (backed up first). Restart running sessions afterwards.
+- **Codex CLI:** hooks added to `~/.codex/hooks.json` (or `$CODEX_HOME`; backed up first, your own hooks stay). Codex runs a hook only after you trust it: open Codex, run `/hooks` and trust Hoply's hooks, then restart running sessions. After a port change, Update rewrites them and Codex asks again.
 - **Copilot CLI:** hooks in `~/.copilot/hooks/hoply.json`.
 
 Re-running it is safe. Installed from the DMG instead? Settings → Agents connects, updates and disconnects the same hooks; it also says when they need an update, for example after you change the port.
@@ -77,10 +80,10 @@ Sources/AgentKit/      platform-neutral core
   HTTP.swift           HTTP/1.1 parser (Content-Length and chunked)
   HubRouter.swift      routes /v1/{logs,traces,metrics} and /hooks/<source>/<event>
   OTLPDecoder.swift    OTLP JSON + protobuf (hand-rolled wire reader, no dependencies)
-  HookMapper.swift     Claude Code / Copilot CLI hook payloads → events
+  HookMapper.swift     Claude Code / Codex CLI / Copilot CLI hook payloads → events
   TelemetryMapper.swift  Claude, Qwen, Copilot (GenAI conventions) telemetry → events
   SessionBoard.swift   session state machine
-  VLLM.swift           Prometheus text parser (snapshots and rates live in ModelServers/)
+  PrometheusParser.swift  Prometheus text parser (snapshots and rates live in ModelServers/)
   ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
   Settings/            AppSettings with lenient per-key decoding
   Usage/               usage records, Claude transcript parser, Copilot store and OTel usage mappers, ledger value types
@@ -101,6 +104,7 @@ scripts/               install.sh (build, install, connect agents), simulate.sh 
 Hoply keeps its own usage ledger in `~/Library/Application Support/Hoply/hoply.sqlite`, with one source per agent so nothing is counted twice:
 
 - **Claude Code:** the transcripts under `~/.claude/projects` (read-only), including subagents, so it has history from before Hoply was installed and works with OTel off. Claude Code deletes transcripts after about 30 days; the ledger never deletes rows, so it outlives them.
+- **Codex CLI:** its session files under `~/.codex/sessions` and `~/.codex/archived_sessions` (or `$CODEX_HOME`), read-only, so it also has history from before Hoply was installed. A call's tokens are the growth of the session's running total, and a forked session's copy of its parent's calls is counted once. Prices are API-equivalent: a ChatGPT plan doesn't bill per token, and the files don't say whether a call ran in a faster, dearer tier.
 - **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds. Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses Copilot's figure as the cost and also shows AIU and premium requests.
 - **Copilot in JetBrains and Qwen Code:** the OpenTelemetry they send to Hoply, stored as it arrives. Re-sent batches are recognized by their ids and counted once.
 
@@ -138,7 +142,7 @@ Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by 
 - The terminal prompt stays up the whole time, and whichever answers first wins. If you answer in the terminal, the buttons go away once Claude Code moves on or cancels the hook.
 - With the setting off, or with Hoply not running, the hook returns nothing and Claude Code's own prompt decides as before.
 - Questions (`AskUserQuestion`) and plan approval (`ExitPlanMode`) are never offered: they need your answer, not a yes.
-- Copilot CLI is not supported: its `permissionRequest` hook runs before its own allow rules and its prompt, so holding it would stall every tool call.
+- Copilot CLI and Codex CLI are not supported: their permission hooks run before their own rules and prompt, so holding one would stall every tool call.
 - The Allow button on a notification asks macOS to unlock first.
 
 ## Releasing
@@ -176,4 +180,6 @@ A tester installs from the DMG and connects their agents in Settings → Agents.
 - Copilot CLI's OTel service name and encoding aren't documented in detail. If its tokens appear as a separate "Copilot IDE" row, adjust `TelemetryMapper.source(of:)`.
 - JetBrains Copilot and Qwen Code have no hooks here, so they can't show "needs permission" or "your turn", only working and idle.
 - OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP and no compression.
+- Codex CLI's session files are an internal format that changes between versions; Hoply is tested against files from Codex 0.98 and 0.144. Codex's OpenTelemetry (`[otel]` in `config.toml`, `otlp-http` with `protocol = "json"` and the endpoint `http://127.0.0.1:4318/v1/logs`) is optional and only adds live token counts; Hoply never writes `config.toml`.
+- Cursor runs the hooks in `~/.claude/settings.json` too; Hoply ignores those calls (they carry `cursor_version`) rather than showing them as Claude Code sessions.
 - Claude Code's own `cost-state` totals include calls it never writes to the transcript (title generation, web search, and in subagent-heavy sessions much more), so per-session ledger totals are usually a few percent below it.

@@ -10,7 +10,8 @@ public struct ClaudeTranscriptIngester: Sendable {
     public let configDirectory: String
 
     public static var defaultConfigDirectory: String {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
+        AgentConnector.defaultClaudeConfigDirectory(environment: ProcessInfo.processInfo.environment,
+                                                    home: FileManager.default.homeDirectoryForCurrentUser.path)
     }
 
     public init(configDirectory: String = ClaudeTranscriptIngester.defaultConfigDirectory) {

@@ -34,7 +34,7 @@ enum PreviewData {
         let tests = key(.qwenCode, "tests")
         let pricing = key(.claudeCode, "pricing")
         let docs = key(.claudeCode, "docs")
-        let hero = key(.claudeCode, "hero")
+        let hero = key(.codexCLI, "hero")
         let store = key(.copilotCLI, "store")
         let schema = key(.claudeCode, "schema")
         let notes = key(.claudeCode, "notes")
@@ -78,7 +78,7 @@ enum PreviewData {
             AgentEvent(key: docs, kind: .sessionStarted, time: at(8), cwd: "\(home)/Project/hoply",
                        model: "claude-opus-5", fromHook: true),
             AgentEvent(key: hero, kind: .promptSubmitted("Polish the landing page hero animation"),
-                       time: at(18), cwd: "\(home)/Project/fiba.worktrees/landing-hero", model: "claude-sonnet-5",
+                       time: at(18), cwd: "\(home)/Project/fiba.worktrees/landing-hero", model: "gpt-6.1-sol",
                        fromHook: true),
             AgentEvent(key: hero, kind: .toolStarted("Bash"), time: at(0.4), fromHook: true),
             AgentEvent(key: store, kind: .promptSubmitted("Speed up the Copilot store reader"),
@@ -464,6 +464,8 @@ enum PreviewData {
                projects: [(2, 0.6), (nil, 0.4)]),
         Stream(model: "claude-opus-5", source: .copilotCLI, scale: 3.2, every: 3,
                projects: [(0, 0.6), (3, 0.35), (5, 0.05)]),
+        Stream(model: "gpt-6.1-sol", source: .codexCLI, scale: 2.1, every: 2,
+               projects: [(0, 0.5), (1, 0.3), (4, 0.2)]),
         Stream(model: "claude-sonnet-5", source: .copilotIDE, scale: 0.8, every: 2,
                projects: [(1, 0.5), (nil, 0.5)]),
         Stream(model: "Qwen3.8-Flash-Next", source: .claudeCode, scale: 0.7, local: true, every: 2,
@@ -567,7 +569,7 @@ enum PreviewData {
                 SessionKey(source: .claudeCode, id: "auth"): totals(usd: 4.12, local: false),
                 SessionKey(source: .claudeCode, id: "pricing"): totals(usd: 11.80, local: false),
                 SessionKey(source: .claudeCode, id: "docs"): totals(usd: 0.86, local: false),
-                SessionKey(source: .claudeCode, id: "hero"): totals(usd: 2.35, local: false),
+                SessionKey(source: .codexCLI, id: "hero"): totals(usd: 2.35, local: false, source: .codexCLI),
                 SessionKey(source: .copilotCLI, id: "orders"): totals(usd: 1.83, local: false, source: .copilotCLI),
                 SessionKey(source: .copilotCLI, id: "store"): totals(usd: 4.07, local: false, source: .copilotCLI),
                 SessionKey(source: .qwenCode, id: "tests"): totals(usd: 1.94, local: true, source: .qwenCode),
@@ -777,8 +779,8 @@ enum PreviewData {
                            usd: 1.94, mix: [("Qwen3.8-Flash-Next", 1)]),
             SessionRowSeed(title: "Update the README for v2", project: 2, branch: "main", minutesAgo: 8, hours: 0.4,
                            turns: 3, usd: 0.86, mix: [("claude-opus-5", 1)]),
-            SessionRowSeed(title: "Polish the landing page hero animation", project: 0, branch: "landing-hero",
-                           minutesAgo: 9, hours: 0.3, turns: 6, usd: 2.35, mix: [("claude-sonnet-5", 1)]),
+            SessionRowSeed(title: "Polish the landing page hero animation", source: .codexCLI, project: 0,
+                           branch: "landing-hero", minutesAgo: 9, hours: 0.3, turns: 6, usd: 2.35, mix: [("gpt-6.1-sol", 1)]),
             SessionRowSeed(title: "Store and Claude history", project: 2, branch: "v2-ledger", minutesAgo: 95, hours: 3.1,
                            turns: 41, usd: 38.40, mix: [("claude-opus-5", 0.91), ("claude-haiku-4-5", 0.09)]),
             SessionRowSeed(title: "Pagination for the orders endpoint", project: 1, branch: "orders-paging",

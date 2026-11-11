@@ -15,7 +15,8 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(table.match("claude-sonnet-5-5-thinking")?.id, "claude-sonnet-5-5", "longest prefix wins")
         XCTAssertNil(table.match("claude-opus-5-6"), "a newer minor version must not price as claude-opus-5")
         XCTAssertNil(table.match("claude-opus-4-5"))
-        XCTAssertNil(table.match("gpt-5"))
+        XCTAssertNil(table.match("gpt-9"))
+        XCTAssertNil(table.match("gpt-5.6"), "a model family without its tier is not priced as gpt-5")
     }
 
     func testClaudeCallPrice() {
@@ -109,8 +110,28 @@ final class PricingTests: XCTestCase {
     }
 
     func testBundledTableDecodes() {
-        XCTAssertEqual(BundledPricing.document.models.count, 14)
+        XCTAssertEqual(BundledPricing.document.models.count, 33)
         XCTAssertEqual(BundledPricing.document.webSearchPerThousand, 10)
+    }
+
+    func testOpenAIPrices() throws {
+        let table = PricingTable.bundled()
+        // The first call of the Codex exec fixture: 13,630 input of which 10,496 cached, 131 output (25 reasoning).
+        let call = TokenCounts(input: 3_134, output: 131, reasoning: 25, cacheRead: 10_496)
+        let priced = table.price(model: "gpt-5.6-terra", tokens: call, speed: nil)
+        let expected = (3_134 * 2.0 + 131 * 12.0 + 10_496 * 0.2) / 1_000_000
+        XCTAssertEqual(try XCTUnwrap(priced.costUSD), expected, accuracy: 1e-12)
+        XCTAssertEqual(priced.apiEquivUSD, priced.costUSD)
+
+        // Above 272K prompt tokens the whole call is billed at 2x input and cache, 1.5x output.
+        let long = TokenCounts(input: 100_000, output: 1_000, cacheRead: 200_000)
+        let longCost = try XCTUnwrap(table.price(model: "gpt-6.1-sol", tokens: long, speed: nil).costUSD)
+        XCTAssertEqual(longCost, (100_000 * 4.0 + 1_000 * 15.0 + 200_000 * 0.2) / 1_000_000, accuracy: 1e-12)
+
+        XCTAssertEqual(table.match("gpt-5.4-mini")?.id, "gpt-5.4-mini")
+        XCTAssertEqual(table.match("gpt-5-mini")?.id, "gpt-5-mini")
+        XCTAssertEqual(table.match("gpt-5.2-codex")?.id, "gpt-5.2-codex")
+        XCTAssertNil(table.price(model: "codex-mini-latest", tokens: call, speed: nil).costUSD)
     }
 
     /// A real session (Opus main thread with 1h cache writes plus a Haiku subagent with 5m writes), stripped to
@@ -166,6 +187,11 @@ final class ModelNameTests: XCTestCase {
         XCTAssertEqual(ModelName.display("Qwen3.8-Flash-Next"), "Qwen3.8-Flash-Next")
         XCTAssertEqual(ModelName.display("openrouter/qwen3-coder"), "qwen3-coder")
         XCTAssertEqual(ModelName.display(""), "Unknown model")
+        XCTAssertEqual(ModelName.display("gpt-6.1-sol"), "GPT-6.1 Sol")
+        XCTAssertEqual(ModelName.display("gpt-5.2-codex"), "GPT-5.2 Codex")
+        XCTAssertEqual(ModelName.display("openai/gpt-5-mini"), "GPT-5 Mini")
+        XCTAssertEqual(ModelName.display("gpt-4o"), "GPT-4o")
+        XCTAssertEqual(ModelName.display("gpt-oss"), "gpt-oss")
     }
 
     func testFamilies() {

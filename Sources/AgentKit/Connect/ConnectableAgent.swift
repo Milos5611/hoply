@@ -3,6 +3,7 @@ import Foundation
 public enum ConnectableAgent: String, CaseIterable, Codable, Identifiable, Sendable {
     case claudeCode = "claude-code"
     case copilotCLI = "copilot-cli"
+    case codexCLI = "codex-cli"
 
     public var id: String { rawValue }
 
@@ -10,6 +11,7 @@ public enum ConnectableAgent: String, CaseIterable, Codable, Identifiable, Senda
         switch self {
         case .claudeCode: return .claudeCode
         case .copilotCLI: return .copilotCLI
+        case .codexCLI: return .codexCLI
         }
     }
 

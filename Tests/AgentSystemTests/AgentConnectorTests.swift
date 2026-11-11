@@ -7,7 +7,7 @@ final class AgentConnectorTests: XCTestCase {
     private let fixedNow: @Sendable () -> Date = { Date(timeIntervalSince1970: 1_794_330_000) }
 
     private func connector(_ temp: TempDirectory, port: Int = 4318) -> AgentConnector {
-        AgentConnector(claudeConfigDirectory: temp.path("claude"), copilotHome: temp.path("copilot"), port: port,
+        AgentConnector(claudeConfigDirectory: temp.path("claude"), copilotHome: temp.path("copilot"), codexHome: temp.path("codex"), port: port,
                        now: fixedNow)
     }
 
@@ -43,11 +43,15 @@ final class AgentConnectorTests: XCTestCase {
         XCTAssertFalse(connector.isInstalled(.claudeCode))
         try temp.mkdir("claude")
         try temp.mkdir("copilot")
-        XCTAssertEqual(connector.statuses(), [.claudeCode: .notConnected, .copilotCLI: .notConnected])
+        XCTAssertEqual(connector.statuses(), [.claudeCode: .notConnected, .copilotCLI: .notConnected,
+                                              .codexCLI: .notInstalled])
+        try temp.mkdir("codex")
         try connector.connect(.claudeCode)
         try connector.connect(.copilotCLI)
-        XCTAssertEqual(connector.statuses(), [.claudeCode: .connected, .copilotCLI: .connected])
-        XCTAssertEqual(self.connector(temp, port: 4319).statuses(), [.claudeCode: .outdated, .copilotCLI: .outdated])
+        try connector.connect(.codexCLI)
+        XCTAssertEqual(connector.statuses(), [.claudeCode: .connected, .copilotCLI: .connected, .codexCLI: .connected])
+        XCTAssertEqual(self.connector(temp, port: 4319).statuses(),
+                       [.claudeCode: .outdated, .copilotCLI: .outdated, .codexCLI: .outdated])
     }
 
     func testConnectBacksUpThenWritesAndKeepsPermissions() throws {
@@ -203,6 +207,32 @@ final class AgentConnectorTests: XCTestCase {
         XCTAssertEqual(files(in: temp.path("copilot/hooks"), prefix: "").count, 2)
     }
 
+    func testCodexConnectKeepsTheUsersHooksFile() throws {
+        let temp = try TempDirectory()
+        let path = try temp.write("codex/hooks.json", """
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done", "timeout": 3}]}]}}
+            """)
+        let original = try parsed(path)
+        let connector = connector(temp)
+        XCTAssertEqual(connector.codexHooksPath, temp.path("codex/hooks.json"))
+        XCTAssertEqual(connector.status(of: .codexCLI), .notConnected)
+
+        let outcome = try connector.connect(.codexCLI)
+        XCTAssertTrue(outcome.changed)
+        XCTAssertNotNil(outcome.backupPath)
+        XCTAssertEqual(connector.status(of: .codexCLI), .connected)
+        let stop = try XCTUnwrap((try parsed(path)["hooks"] as? [String: Any])?["Stop"] as? [Any])
+        XCTAssertEqual(stop.count, 2, "the user's group stays first")
+
+        XCTAssertTrue(try connector.disconnect(.codexCLI).changed)
+        XCTAssertTrue(SettingsJSON.same(try parsed(path), original))
+        XCTAssertEqual(files(in: temp.path("codex"), prefix: "hooks.json.hoply-backup-").count, 2)
+
+        try temp.write("codex/hooks.json", "{ not json")
+        XCTAssertThrowsError(try connector.connect(.codexCLI))
+        if case .unreadable = connector.status(of: .codexCLI) {} else { XCTFail("invalid JSON reads as unreadable") }
+    }
+
     func testDirectoriesFromSettings() {
         let environment = ["CLAUDE_CONFIG_DIR": "/scratch/claude", "COPILOT_HOME": "~/scratch-copilot"]
         var settings = AppSettings()
@@ -225,6 +255,11 @@ final class AgentConnectorTests: XCTestCase {
         XCTAssertEqual(bare.copilotHome, FileManager.default.homeDirectoryForCurrentUser.path + "/.copilot")
         XCTAssertEqual(AgentConnector.defaultClaudeConfigDirectory(environment: [:], home: "/h"), "/h/.claude")
         XCTAssertEqual(AgentConnector.defaultCopilotHome(environment: ["COPILOT_HOME": ""], home: "/h"), "/h/.copilot")
+        XCTAssertEqual(AgentConnector.defaultCodexHome(environment: [:], home: "/h"), "/h/.codex")
+        XCTAssertEqual(AgentConnector.defaultCodexHome(environment: ["CODEX_HOME": "/scratch/codex"], home: "/h"),
+                       "/scratch/codex")
+        settings.codexHome = "/work/codex"
+        XCTAssertEqual(AgentConnector(settings: settings, environment: environment).codexHooksPath, "/work/codex/hooks.json")
     }
 
     private func hooksStatus(_ path: String) -> ConnectionStatus? {

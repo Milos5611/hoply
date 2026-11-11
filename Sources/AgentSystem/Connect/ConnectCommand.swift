@@ -2,7 +2,7 @@ import AgentKit
 import Foundation
 
 public enum ConnectCommand {
-    public static let usage = "Usage: Hoply --connect|--disconnect [claude-code] [copilot-cli]"
+    public static let usage = "Usage: Hoply --connect|--disconnect [claude-code] [copilot-cli] [codex-cli]"
 
     public static func isRequested(_ arguments: [String]) -> Bool {
         arguments.contains("--connect") || arguments.contains("--disconnect")
@@ -53,6 +53,9 @@ public enum ConnectCommand {
             copilotHome: AgentConnector.directory(
                 environment["COPILOT_HOME"] ?? "",
                 default: AgentConnector.directory(settings.copilotHome, default: home + "/.copilot")),
+            codexHome: AgentConnector.directory(
+                environment["CODEX_HOME"] ?? "",
+                default: AgentConnector.directory(settings.codexHome, default: home + "/.codex")),
             port: port, now: now)
 
         var failed = false
@@ -80,7 +83,12 @@ public enum ConnectCommand {
         }
         let detail = [path] + (outcome.backupPath.map { ["backup: \($0)"] } ?? [])
             + (outcome.renamedPath.map { ["renamed to \(($0 as NSString).lastPathComponent)"] } ?? [])
-        let restart = connecting && outcome.agent == .claudeCode ? "; restart running sessions" : ""
+        let restart: String
+        switch outcome.agent {
+        case .claudeCode where connecting: restart = "; restart running sessions"
+        case .codexCLI where connecting: restart = "; run /hooks in Codex to trust them, then restart running sessions"
+        default: restart = ""
+        }
         let verb = connecting ? "connected to \(endpoint)" : "disconnected"
         return "\(name): \(verb)\(restart) (\(detail.joined(separator: ", ")))"
     }

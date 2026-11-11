@@ -5,15 +5,7 @@ public enum AgentSource: String, Codable, CaseIterable, Sendable {
     case copilotCLI = "copilot-cli"
     case copilotIDE = "copilot-ide"
     case qwenCode = "qwen-code"
-
-    public var displayName: String {
-        switch self {
-        case .claudeCode: return "Claude Code"
-        case .copilotCLI: return "Copilot CLI"
-        case .copilotIDE: return "Copilot IDE"
-        case .qwenCode: return "Qwen Code"
-        }
-    }
+    case codexCLI = "codex-cli"
 }
 
 public enum SessionState: String, Codable, Sendable {

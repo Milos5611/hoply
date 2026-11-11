@@ -4,15 +4,12 @@ public enum UsageLedger: String, Sendable, CaseIterable {
     case transcripts
     case copilotStore
     case telemetry
+    case codexRollouts
 }
 
 public enum UsageAuthority {
     public static func ledger(for source: AgentSource) -> UsageLedger {
-        switch source {
-        case .claudeCode: return .transcripts
-        case .copilotCLI: return .copilotStore
-        case .copilotIDE, .qwenCode: return .telemetry
-        }
+        source.info.ledger
     }
 
     public static func persistsTelemetry(from source: AgentSource) -> Bool {

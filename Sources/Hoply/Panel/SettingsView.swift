@@ -267,7 +267,13 @@ struct HistorySettings: View {
                         return model.settings.copilotHome
                     }
                 }
-                Hint("Usage comes from Claude Code's transcripts, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds. Reindex re-reads the transcripts and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
+                LabeledRow("Codex dir") {
+                    CommitField("~/.codex", value: model.settings.codexHome) { text in
+                        model.update { $0.codexHome = text.trimmingCharacters(in: .whitespaces) }
+                        return model.settings.codexHome
+                    }
+                }
+                Hint("Usage comes from Claude Code's transcripts, Codex CLI's session files, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds. Reindex re-reads the transcripts, Codex sessions and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
             }
         }
     }

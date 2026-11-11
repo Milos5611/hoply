@@ -126,6 +126,11 @@ final class AgentConnections {
             let detail = outcome.backupPath.map { "The previous file was backed up to \(Format.path($0))." }
                 ?? outcome.renamedPath.map { "The hooks file was renamed to \(Format.path($0))." }
             let verb = connecting ? "load" : "drop"
+            // Codex runs a hook only after the user has reviewed and trusted it.
+            if agent == .codexCLI, connecting {
+                return Notice(text: "Run /hooks in Codex and trust Hoply's hooks, then restart running sessions.",
+                              detail: detail)
+            }
             return Notice(text: "Restart running \(agent.displayName) sessions to \(verb) the hooks.", detail: detail)
         }
     }

@@ -290,7 +290,8 @@ final class CopilotHooksFileTests: XCTestCase {
     }
 
     func testConnectableAgents() {
-        XCTAssertEqual(ConnectableAgent.allCases.map(\.rawValue), ["claude-code", "copilot-cli"])
+        XCTAssertEqual(ConnectableAgent.allCases.map(\.rawValue), ["claude-code", "copilot-cli", "codex-cli"])
+        XCTAssertEqual(ConnectableAgent(source: .codexCLI), .codexCLI)
         XCTAssertEqual(ConnectableAgent(source: .copilotCLI), .copilotCLI)
         XCTAssertNil(ConnectableAgent(source: .qwenCode))
         XCTAssertEqual(ConnectableAgent.claudeCode.displayName, "Claude Code")

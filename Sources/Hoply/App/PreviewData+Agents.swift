@@ -5,7 +5,7 @@ extension PreviewData {
     static let updateVersion = "0.2.0"
 
     static let connectionStatuses: [ConnectableAgent: ConnectionStatus] = [
-        .claudeCode: .connected, .copilotCLI: .notInstalled,
+        .claudeCode: .connected, .copilotCLI: .notInstalled, .codexCLI: .notConnected,
     ]
 
     static var connectionNotices: [ConnectableAgent: AgentConnections.Notice] {
@@ -15,12 +15,12 @@ extension PreviewData {
     }
 
     static let connectionsToUpdate: [ConnectableAgent: ConnectionStatus] = [
-        .claudeCode: .outdated, .copilotCLI: .notConnected,
+        .claudeCode: .outdated, .copilotCLI: .notConnected, .codexCLI: .connected,
     ]
 
     static let connectionsUnreadable: [ConnectableAgent: ConnectionStatus] = [
         .claudeCode: .unreadable("~/.claude/settings.json is not valid JSON (Unexpected character '}' around line 14, column 3.); fix it first."),
-        .copilotCLI: .connected,
+        .copilotCLI: .connected, .codexCLI: .notInstalled,
     ]
 
     static var connectionFailure: [ConnectableAgent: AgentConnections.Notice] {
@@ -28,6 +28,6 @@ extension PreviewData {
     }
 
     static let connectionsNone: [ConnectableAgent: ConnectionStatus] = [
-        .claudeCode: .notConnected, .copilotCLI: .notConnected,
+        .claudeCode: .notConnected, .copilotCLI: .notConnected, .codexCLI: .notConnected,
     ]
 }

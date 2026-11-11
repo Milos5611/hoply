@@ -5,6 +5,7 @@ public struct LedgerConfiguration: Sendable, Equatable {
     public var databasePath: String
     public var claudeConfigDirectory: String
     public var copilotHome: String
+    public var codexHome: String?
     public var pricingOverridesURL: URL?
     public var localModelPatterns: [String]
     public var referenceModel: String
@@ -20,8 +21,10 @@ public struct LedgerConfiguration: Sendable, Equatable {
                 localModelPatterns: [String] = PricingTable.defaultLocalModelPatterns,
                 referenceModel: String = PricingTable.defaultReferenceModel,
                 watchForChanges: Bool = true, rescanInterval: Duration = .seconds(60),
-                copilotPollInterval: Duration = .seconds(10), priceAliases: [String: String] = [:]) {
+                copilotPollInterval: Duration = .seconds(10), priceAliases: [String: String] = [:],
+                codexHome: String? = nil) {
         self.priceAliases = priceAliases
+        self.codexHome = codexHome
         self.databasePath = databasePath
         self.claudeConfigDirectory = claudeConfigDirectory
         self.copilotHome = copilotHome
@@ -42,7 +45,8 @@ public struct LedgerConfiguration: Sendable, Equatable {
                                                    default: ClaudeTranscriptIngester.defaultConfigDirectory),
                   copilotHome: directory(settings.copilotHome, default: CopilotStoreIngester.defaultHome),
                   localModelPatterns: settings.localModelPatterns, referenceModel: settings.referenceModel,
-                  priceAliases: settings.priceAliases)
+                  priceAliases: settings.priceAliases,
+                  codexHome: directory(settings.codexHome, default: CodexRolloutIngester.defaultHome))
     }
 }
 
@@ -63,6 +67,7 @@ public struct Ledger: Sendable {
         ingest = IngestCoordinator(store: store,
                                    claude: ClaudeTranscriptIngester(configDirectory: configuration.claudeConfigDirectory),
                                    copilot: CopilotStoreIngester(home: configuration.copilotHome),
+                                   codex: configuration.codexHome.map { CodexRolloutIngester(home: $0) },
                                    watch: configuration.watchForChanges, rescanInterval: configuration.rescanInterval,
                                    copilotPollInterval: configuration.copilotPollInterval)
     }

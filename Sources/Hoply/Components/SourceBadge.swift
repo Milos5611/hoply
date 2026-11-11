@@ -11,20 +11,11 @@ struct SourceBadge: View {
     }
 
     static func symbol(for source: AgentSource) -> String {
-        switch source {
-        case .claudeCode: return "asterisk"
-        case .copilotCLI: return "terminal"
-        case .copilotIDE: return "curlybraces"
-        case .qwenCode: return "cpu"
-        }
+        source.info.symbol
     }
 
     static func color(for source: AgentSource) -> Color {
-        switch source {
-        case .claudeCode: return Color(red: 0.85, green: 0.47, blue: 0.34)
-        case .copilotCLI: return Color(red: 0.43, green: 0.33, blue: 0.84)
-        case .copilotIDE: return Color(red: 0.30, green: 0.42, blue: 0.86)
-        case .qwenCode: return Color(red: 0.20, green: 0.60, blue: 0.55)
-        }
+        let tint = source.info.tint
+        return Color(red: tint.red, green: tint.green, blue: tint.blue)
     }
 }

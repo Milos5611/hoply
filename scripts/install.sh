@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Usage: scripts/install.sh [--uninstall]
-#   Builds Hoply.app into ~/Applications, connects Claude Code and Copilot CLI (`Hoply --connect`), and opens it.
-#   --uninstall disconnects both agents (`Hoply --disconnect`); the app stays in ~/Applications.
+#   Builds Hoply.app into ~/Applications, connects Claude Code, Codex CLI and Copilot CLI (`Hoply --connect`), and opens it.
+#   --uninstall disconnects them (`Hoply --disconnect`); the app stays in ~/Applications.
 # Env: HOPLY_PORT (default: the app's saved port, else 4318), CLAUDE_CONFIG_DIR (default ~/.claude),
-#      COPILOT_HOME (default ~/.copilot), HOPLY_SIGN_IDENTITY (codesign identity name; default "-" = ad-hoc)
+#      CODEX_HOME (default ~/.codex), COPILOT_HOME (default ~/.copilot),
+#      HOPLY_SIGN_IDENTITY (codesign identity name; default "-" = ad-hoc)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

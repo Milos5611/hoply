@@ -57,9 +57,9 @@ public struct ProcessLineage: Sendable {
         let tokens = ([process.executable].compactMap { $0 } + process.arguments.prefix(2)).map { $0.lowercased() }
         let names = Set(tokens.map { ($0 as NSString).lastPathComponent })
         func mentions(_ fragment: String) -> Bool { tokens.contains { $0.contains(fragment) } }
-        if names.contains("claude") || mentions("/claude-code/") || mentions("/claude/versions/") { return .claudeCode }
-        if names.contains("copilot") || mentions("/@github/copilot/") { return .copilotCLI }
-        if names.contains("qwen") || mentions("/@qwen-code/") { return .qwenCode }
-        return nil
+        return AgentSource.allCases.first { source in
+            let info = source.info
+            return !names.isDisjoint(with: info.processNames) || info.processPathFragments.contains(where: mentions)
+        }
     }
 }

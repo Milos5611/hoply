@@ -12,7 +12,8 @@ final class ConnectCommandTests: XCTestCase {
 
     private func run(_ arguments: [String], temp: TempDirectory, environment extra: [String: String] = [:],
                      settings: AppSettings = AppSettings()) -> Run {
-        var environment = ["CLAUDE_CONFIG_DIR": temp.path("claude"), "COPILOT_HOME": temp.path("copilot")]
+        var environment = ["CLAUDE_CONFIG_DIR": temp.path("claude"), "COPILOT_HOME": temp.path("copilot"),
+                           "CODEX_HOME": temp.path("codex")]
         environment.merge(extra) { $1 }
         var output: [String] = []
         var errors: [String] = []
@@ -23,7 +24,7 @@ final class ConnectCommandTests: XCTestCase {
     }
 
     private func connector(_ temp: TempDirectory, port: Int = 4318) -> AgentConnector {
-        AgentConnector(claudeConfigDirectory: temp.path("claude"), copilotHome: temp.path("copilot"), port: port)
+        AgentConnector(claudeConfigDirectory: temp.path("claude"), copilotHome: temp.path("copilot"), codexHome: temp.path("codex"), port: port)
     }
 
     func testRequestDetection() {
@@ -60,6 +61,7 @@ final class ConnectCommandTests: XCTestCase {
         XCTAssertEqual(result.output, [
             "Claude Code: connected to http://127.0.0.1:4318; restart running sessions (\(temp.path("claude/settings.json")))",
             "Copilot CLI: not found, skipped",
+            "Codex CLI: not found, skipped",
         ])
         XCTAssertEqual(connector(temp).status(of: .claudeCode), .connected)
         XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path("copilot")))
@@ -69,11 +71,12 @@ final class ConnectCommandTests: XCTestCase {
 
         let disconnect = run(["--disconnect"], temp: temp)
         XCTAssertEqual(disconnect.code, 0)
-        XCTAssertEqual(disconnect.output.count, 2)
+        XCTAssertEqual(disconnect.output.count, 3)
         XCTAssertTrue(disconnect.output[0].hasPrefix(
             "Claude Code: disconnected (\(temp.path("claude/settings.json")), backup: \(temp.path("claude/settings.json")).hoply-backup-"),
                       disconnect.output[0])
         XCTAssertEqual(disconnect.output[1], "Copilot CLI: not found, skipped")
+        XCTAssertEqual(disconnect.output[2], "Codex CLI: not found, skipped")
         XCTAssertEqual(connector(temp).status(of: .claudeCode), .notConnected)
     }
 
@@ -134,7 +137,7 @@ final class ConnectCommandTests: XCTestCase {
         XCTAssertEqual(result.errors.count, 1)
         XCTAssertTrue(result.errors[0].hasPrefix("Claude Code: "), result.errors[0])
         XCTAssertTrue(result.errors[0].contains("is not valid JSON"), result.errors[0])
-        XCTAssertEqual(result.output.count, 1)
+        XCTAssertEqual(result.output, [result.output[0], "Codex CLI: not found, skipped"])
         XCTAssertTrue(result.output[0].hasPrefix("Copilot CLI: connected"))
         XCTAssertEqual(try String(contentsOfFile: temp.path("claude/settings.json"), encoding: .utf8), "{ not json")
     }

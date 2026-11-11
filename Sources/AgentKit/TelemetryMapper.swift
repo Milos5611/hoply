@@ -16,6 +16,7 @@ public enum TelemetryMapper {
         let name = record.name.lowercased()
         if service.contains("claude") || name.hasPrefix("claude_code") { return .claudeCode }
         if service.contains("qwen") || name.hasPrefix("qwen-code") || name.hasPrefix("qwen_code") { return .qwenCode }
+        if service.hasPrefix("codex") || name.hasPrefix("codex.") { return .codexCLI }
         if service.contains("copilot") || name.contains("copilot") {
             return service.contains("cli") ? .copilotCLI : .copilotIDE
         }
@@ -40,6 +41,7 @@ public enum TelemetryMapper {
         case .claudeCode: kind = claudeKind(record)
         case .qwenCode: kind = qwenKind(record)
         case .copilotCLI, .copilotIDE: kind = genAIKind(record)
+        case .codexCLI: kind = codexKind(record)
         }
         return AgentEvent(key: key, kind: kind, time: time, model: model, fromHook: false)
     }
@@ -82,6 +84,24 @@ public enum TelemetryMapper {
             return .error(record["error"]?.string ?? record["error.message"]?.string)
         }
         return .activity
+    }
+
+    static func codexKind(_ record: TelemetryRecord) -> AgentEvent.Kind {
+        switch record.name.lowercased() {
+        case "codex.sse_event":
+            guard record["event.kind"]?.string == "response.completed" else { return .activity }
+            // `input_token_count` includes the cached tokens, as in the Responses API's `usage`.
+            let input = record["input_token_count"]?.int ?? 0
+            let cached = record["cached_token_count"]?.int ?? 0
+            return .usage(.init(inputTokens: max(input - cached, 0), outputTokens: record["output_token_count"]?.int ?? 0,
+                                cacheTokens: cached))
+        case "codex.user_prompt":
+            return .promptSubmitted(record["prompt"]?.string)
+        case "codex.tool_result":
+            return .toolFinished(record["tool_name"]?.string)
+        default:
+            return .activity
+        }
     }
 
     static func genAIKind(_ record: TelemetryRecord) -> AgentEvent.Kind {

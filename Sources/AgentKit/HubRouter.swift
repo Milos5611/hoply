@@ -83,6 +83,10 @@ public struct HubRouter: Sendable {
             return Outcome(response: .badRequest("Expected a JSON object"), events: [],
                            note: "Hook \(source.rawValue) sent a non-JSON body")
         }
+        // Cursor runs the hooks in ~/.claude/settings.json by default; its sessions are not Claude Code's.
+        if source == .claudeCode, json["cursor_version"] != nil {
+            return Outcome(response: .json(), events: [], note: nil)
+        }
         let events = HookMapper.events(source: source, eventName: eventName, json: json,
                                        agentPID: Self.agentPID(request), now: now)
         let approval = PermissionApproval.request(source: source, eventName: eventName, json: json,

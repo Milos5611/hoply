@@ -8,7 +8,7 @@ public enum ModelName {
     public static func display(_ id: String) -> String {
         let trimmed = id.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "Unknown model" }
-        guard let parts = claudeParts(trimmed) else { return lastPathComponent(trimmed) }
+        guard let parts = claudeParts(trimmed) else { return openAIName(trimmed) ?? lastPathComponent(trimmed) }
         let name = parts.family.prefix(1).uppercased() + parts.family.dropFirst()
         return parts.version.isEmpty ? name : "\(name) \(parts.version)"
     }
@@ -29,6 +29,16 @@ public enum ModelName {
         guard let family = tokens.first, family.allSatisfy(\.isLetter) else { return nil }
         let version = tokens.dropFirst().filter { $0.allSatisfy(\.isNumber) }.joined(separator: ".")
         return (family, version)
+    }
+
+    private static func openAIName(_ id: String) -> String? {
+        let name = lastPathComponent(id).lowercased()
+        guard name.hasPrefix("gpt-") else { return nil }
+        let tokens = name.dropFirst("gpt-".count).split(separator: "-").map(String.init)
+        guard let version = tokens.first, version.first?.isNumber == true,
+              version.allSatisfy({ $0.isNumber || $0 == "." || $0.isLetter }) else { return nil }
+        let rest = tokens.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        return (["GPT-" + version] + rest).joined(separator: " ")
     }
 
     static func claudeVersion(_ id: String) -> (family: String, version: [Int])? {

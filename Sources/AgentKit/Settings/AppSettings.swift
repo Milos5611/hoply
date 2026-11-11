@@ -9,6 +9,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var referenceModel = PricingTable.defaultReferenceModel
     public var claudeConfigDir = ""
     public var copilotHome = ""
+    public var codexHome = ""
     public var quietHoursEnabled = false
     public var quietHoursStart = 22 * 60
     public var quietHoursEnd = 8 * 60
@@ -48,6 +49,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         referenceModel = container.lenient(String.self, .referenceModel) ?? defaults.referenceModel
         claudeConfigDir = container.lenient(String.self, .claudeConfigDir) ?? defaults.claudeConfigDir
         copilotHome = container.lenient(String.self, .copilotHome) ?? defaults.copilotHome
+        codexHome = container.lenient(String.self, .codexHome) ?? defaults.codexHome
         quietHoursEnabled = container.lenient(Bool.self, .quietHoursEnabled) ?? defaults.quietHoursEnabled
         quietHoursStart = container.lenient(Int.self, .quietHoursStart) ?? defaults.quietHoursStart
         quietHoursEnd = container.lenient(Int.self, .quietHoursEnd) ?? defaults.quietHoursEnd

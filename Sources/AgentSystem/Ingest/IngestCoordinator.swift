@@ -14,12 +14,14 @@ public actor IngestCoordinator {
     private let store: Store
     private let claude: ClaudeTranscriptIngester
     private let copilot: CopilotStoreIngester?
+    private let codex: CodexRolloutIngester?
     private let watch: Bool
     private let rescanInterval: Duration
     private let copilotPollInterval: Duration
     private let copilotBatchSize: Int
     private let chunkBytes: Int
     private var cursors: [String: FileCursor] = [:]
+    private var codexStates: [String: CodexRolloutState] = [:]
     private var pending: [String] = []
     private var backfillRemaining: Set<String> = []
     private var pendingChanges: Set<SessionKey> = []
@@ -41,11 +43,13 @@ public actor IngestCoordinator {
     private var telemetryCwds: [SessionKey: String] = [:]
 
     public init(store: Store, claude: ClaudeTranscriptIngester = ClaudeTranscriptIngester(),
-                copilot: CopilotStoreIngester? = nil, watch: Bool = true, rescanInterval: Duration = .seconds(60),
+                copilot: CopilotStoreIngester? = nil, codex: CodexRolloutIngester? = nil, watch: Bool = true,
+                rescanInterval: Duration = .seconds(60),
                 copilotPollInterval: Duration = .seconds(10), copilotBatchSize: Int = 500, chunkBytes: Int = 4 << 20) {
         self.store = store
         self.claude = claude
         self.copilot = copilot
+        self.codex = codex
         self.watch = watch
         self.rescanInterval = rescanInterval
         self.copilotPollInterval = copilotPollInterval
@@ -67,7 +71,7 @@ public actor IngestCoordinator {
         stopped = false
         let generation = runGeneration
         do {
-            cursors = try await store.cursors(source: .claudeCode)
+            cursors = try await fileCursors()
             if let copilot { copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath] }
         } catch {
             progress.lastError = "Could not read ingest cursors: \(error)"
@@ -123,7 +127,7 @@ public actor IngestCoordinator {
 
     public func tailTranscript(atPath path: String) async {
         let canonical = ClaudeTranscriptIngester.canonical(path)
-        guard !stopped, claude.isTranscript(canonical) else { return }
+        guard !stopped, isLedgerFile(canonical) else { return }
         pending.removeAll { $0 == canonical }
         pending.insert(canonical, at: 0)
         await drain()
@@ -132,7 +136,7 @@ public actor IngestCoordinator {
     public func rescan() async {
         guard !stopped else { return }
         if watch, watcher?.isRunning != true { startWatcher() }
-        for file in claude.discover() where needsWork(file) { enqueue(file.path) }
+        for file in discover() where needsWork(file) { enqueue(file.path) }
         await drain()
     }
 
@@ -144,7 +148,9 @@ public actor IngestCoordinator {
         var reset = false
         do {
             try await store.resetCursors(source: .claudeCode)
-            cursors = try await store.cursors(source: .claudeCode)
+            if codex != nil { try await store.resetCursors(source: .codexCLI) }
+            cursors = try await fileCursors()
+            codexStates = [:]
             if let copilot {
                 try await store.resetCursors(source: .copilotCLI)
                 copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath]
@@ -282,7 +288,7 @@ public actor IngestCoordinator {
 
     private func backfill() async {
         guard !stopped else { return }
-        let work = claude.discover().filter(needsWork)
+        let work = discover().filter(needsWork)
         backfillRemaining = Set(work.map(\.path))
         progress = IngestProgress(filesDone: 0, filesTotal: work.count, bytesDone: 0,
                                   bytesTotal: work.reduce(0) { $0 + unreadBytes($1) }, isBackfilling: !work.isEmpty,
@@ -319,22 +325,34 @@ public actor IngestCoordinator {
 
     private func process(_ path: String) async {
         let inBackfill = backfillRemaining.contains(path)
+        let isRollout = codex?.isRollout(path) ?? false
         var cursor = cursors[path]
         do {
             while true {
                 guard let chunk = try FileTailer.read(path: path, from: cursor, maxBytes: chunkBytes) else { break }
                 if chunk.lines.isEmpty, chunk.cursor == cursor { break }
-                var batch = ClaudeTranscriptIngester.batch(lines: chunk.lines, path: path, startOffset: chunk.startOffset)
-                if chunk.startOffset == 0, let info = ClaudeTranscriptIngester.subagentInfo(forTranscript: path) {
-                    batch.subagents = [info]
+                var batch: LedgerBatch
+                var codexState: CodexRolloutState?
+                if isRollout {
+                    var state = chunk.startOffset == 0
+                        ? CodexRolloutState(path: path) : try rolloutState(path, upTo: chunk.startOffset)
+                    batch = CodexRolloutParser.batch(lines: chunk.lines, state: &state, transcriptPath: path,
+                                                     startsAtFileStart: chunk.startOffset == 0)
+                    codexState = state
+                } else {
+                    batch = ClaudeTranscriptIngester.batch(lines: chunk.lines, path: path, startOffset: chunk.startOffset)
+                    if chunk.startOffset == 0, let info = ClaudeTranscriptIngester.subagentInfo(forTranscript: path) {
+                        batch.subagents = [info]
+                    }
                 }
                 // If work stops before the end, `needsWork` must still see the rest of the file as unread.
                 var committed = chunk.cursor
                 if !chunk.atEnd { committed.size = committed.offset }
-                let changed = try await store.apply(batch, cursor: IngestCursor(source: .claudeCode, path: path,
-                                                                                file: committed))
+                let changed = try await store.apply(batch, cursor: IngestCursor(source: isRollout ? .codexCLI : .claudeCode,
+                                                                                path: path, file: committed))
                 cursor = committed
                 cursors[path] = committed
+                if let codexState { codexStates[path] = codexState }
                 pendingChanges.formUnion(changed)
                 if inBackfill {
                     progress.bytesDone += chunk.bytesConsumed
@@ -353,6 +371,30 @@ public actor IngestCoordinator {
         }
     }
 
+    private func fileCursors() async throws -> [String: FileCursor] {
+        var result = try await store.cursors(source: .claudeCode)
+        if codex != nil { result.merge(try await store.cursors(source: .codexCLI)) { claude, _ in claude } }
+        return result
+    }
+
+    private func discover() -> [ClaudeTranscriptIngester.TranscriptFile] {
+        (claude.discover() + (codex?.discover() ?? [])).sorted { $0.stat.modified > $1.stat.modified }
+    }
+
+    private func isLedgerFile(_ path: String) -> Bool {
+        claude.isTranscript(path) || (codex?.isRollout(path) ?? false)
+    }
+
+    // A tail that starts mid-file after a relaunch needs the model and ids from the lines before it.
+    private func rolloutState(_ path: String, upTo offset: Int64) throws -> CodexRolloutState {
+        if let known = codexStates[path] { return known }
+        var state = CodexRolloutState(path: path)
+        if let head = try FileTailer.read(path: path, from: nil, maxBytes: Int(offset)) {
+            _ = CodexRolloutParser.batch(lines: head.lines, state: &state, transcriptPath: path, startsAtFileStart: true)
+        }
+        return state
+    }
+
     private func needsWork(_ file: ClaudeTranscriptIngester.TranscriptFile) -> Bool {
         guard let cursor = cursors[file.path] else { return true }
         return cursor.inode != file.stat.inode || cursor.size != file.stat.size
@@ -366,13 +408,15 @@ public actor IngestCoordinator {
     }
 
     private func filesChanged(_ paths: [String]) async {
-        for path in paths where claude.isTranscript(path) { enqueue(path) }
+        for path in paths where isLedgerFile(path) { enqueue(path) }
         await drain()
     }
 
     private func startWatcher() {
-        guard FileManager.default.fileExists(atPath: claude.projectsDirectory) else { return }
-        let watcher = DirectoryWatcher(paths: [claude.projectsDirectory], latency: 0.5) { [weak self] paths in
+        let paths = ([claude.projectsDirectory] + (codex?.watchedDirectories ?? []))
+            .filter { FileManager.default.fileExists(atPath: $0) }
+        guard !paths.isEmpty else { return }
+        let watcher = DirectoryWatcher(paths: paths, latency: 0.5) { [weak self] paths in
             Task { await self?.filesChanged(paths) }
         }
         if watcher.start() { self.watcher = watcher }

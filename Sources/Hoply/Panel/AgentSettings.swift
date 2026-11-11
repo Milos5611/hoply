@@ -102,6 +102,8 @@ struct AgentConnectionRow: View {
         switch agent {
         case .claudeCode: return "Add Hoply's hooks to \(Format.path(path)), backing it up first; your own hooks and settings stay"
         case .copilotCLI: return "Write Hoply's hooks to \(Format.path(path))"
+        case .codexCLI:
+            return "Add Hoply's hooks to \(Format.path(path)), backing it up first; then trust them with /hooks in Codex"
         }
     }
 
@@ -109,6 +111,7 @@ struct AgentConnectionRow: View {
         switch agent {
         case .claudeCode: return "Remove only Hoply's hooks from \(Format.path(path)), backing it up first"
         case .copilotCLI: return "Rename \(Format.path(path)) so Copilot CLI stops loading it"
+        case .codexCLI: return "Remove only Hoply's hooks from \(Format.path(path)), backing it up first"
         }
     }
 

@@ -26,7 +26,7 @@ public enum TelemetryUsage {
             }
             tokens = genAITokens(record)
             dedupeKey = key
-        case .claudeCode, .copilotCLI:
+        case .claudeCode, .copilotCLI, .codexCLI:
             return nil
         }
         let place = place(of: record)

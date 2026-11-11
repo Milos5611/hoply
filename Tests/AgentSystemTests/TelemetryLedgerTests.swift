@@ -101,13 +101,13 @@ final class TelemetryLedgerTests: XCTestCase {
         let time = Date(timeIntervalSince1970: 1_794_228_000)
         let batch = [qwen("qw:q1:p1:1794228000000000000", at: time),
                      UsageRecord(dedupeKey: "otel:aa:bb", source: .copilotIDE, sessionID: "conv-1", timestamp: time,
-                                 model: "gpt-5.1", tokens: TokenCounts(input: 1200, output: 340))]
+                                 model: "gpt-9-preview", tokens: TokenCounts(input: 1200, output: 340))]
         await ledger.record(batch)
         await ledger.record(batch)
         let totals = try await ledger.reader.totalsBySource(in: allTime)
         XCTAssertEqual(totals[.qwenCode]?.calls, 1)
         XCTAssertEqual(totals[.copilotIDE]?.calls, 1)
-        XCTAssertEqual(totals[.copilotIDE]?.hasUnpriced, true, "gpt-5.1 has no bundled price: unpriced, not $0")
+        XCTAssertEqual(totals[.copilotIDE]?.hasUnpriced, true, "gpt-9-preview has no bundled price: unpriced, not $0")
     }
 
     func testSourcesWithAnotherLedgerAreDropped() async throws {

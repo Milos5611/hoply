@@ -541,10 +541,11 @@ final class AppModel {
             notifier.requestAuthorization()
         }
         if updated.port != old.port || updated.claudeConfigDir != old.claudeConfigDir
-            || updated.copilotHome != old.copilotHome {
+            || updated.copilotHome != old.copilotHome || updated.codexHome != old.codexHome {
             connections.settingsChanged()
         }
-        if updated.claudeConfigDir != old.claudeConfigDir || updated.copilotHome != old.copilotHome {
+        if updated.claudeConfigDir != old.claudeConfigDir || updated.copilotHome != old.copilotHome
+            || updated.codexHome != old.codexHome {
             unresolvedCwds = []
             history.reopen(LedgerConfiguration(settings: updated))
         } else if updated.localModelPatterns != old.localModelPatterns || updated.referenceModel != old.referenceModel

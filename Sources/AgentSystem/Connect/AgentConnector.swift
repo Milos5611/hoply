@@ -25,13 +25,15 @@ public struct ConnectOutcome: Equatable, Sendable {
 public struct AgentConnector: Sendable {
     public let claudeConfigDirectory: String
     public let copilotHome: String
+    public let codexHome: String
     public let port: Int
     private let now: @Sendable () -> Date
 
-    public init(claudeConfigDirectory: String, copilotHome: String, port: Int,
+    public init(claudeConfigDirectory: String, copilotHome: String, codexHome: String, port: Int,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.claudeConfigDirectory = URL(fileURLWithPath: claudeConfigDirectory).standardized.path
         self.copilotHome = URL(fileURLWithPath: copilotHome).standardized.path
+        self.codexHome = URL(fileURLWithPath: codexHome).standardized.path
         self.port = port
         self.now = now
     }
@@ -43,6 +45,8 @@ public struct AgentConnector: Sendable {
                                                                                                    home: home)),
                   copilotHome: Self.directory(settings.copilotHome,
                                               default: Self.defaultCopilotHome(environment: environment, home: home)),
+                  codexHome: Self.directory(settings.codexHome,
+                                            default: Self.defaultCodexHome(environment: environment, home: home)),
                   port: settings.port)
     }
 
@@ -54,6 +58,10 @@ public struct AgentConnector: Sendable {
         directory(environment["COPILOT_HOME"] ?? "", default: home + "/.copilot")
     }
 
+    public static func defaultCodexHome(environment: [String: String], home: String) -> String {
+        directory(environment["CODEX_HOME"] ?? "", default: home + "/.codex")
+    }
+
     static func directory(_ configured: String, default fallback: String) -> String {
         let trimmed = configured.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? fallback : (trimmed as NSString).expandingTildeInPath
@@ -61,13 +69,16 @@ public struct AgentConnector: Sendable {
 
     public var claudeSettingsPath: String { claudeConfigDirectory + "/settings.json" }
     public var copilotHooksPath: String { copilotHome + "/hooks/" + CopilotCLIHooks.fileName }
+    public var codexHooksPath: String { codexHome + "/" + CodexHooks.fileName }
     public var claudeHooks: ClaudeCodeHooks { ClaudeCodeHooks(port: port) }
     public var copilotHooks: CopilotCLIHooks { CopilotCLIHooks(port: port) }
+    public var codexHooks: CodexHooks { CodexHooks(port: port) }
 
     public func configDirectory(for agent: ConnectableAgent) -> String {
         switch agent {
         case .claudeCode: return claudeConfigDirectory
         case .copilotCLI: return copilotHome
+        case .codexCLI: return codexHome
         }
     }
 
@@ -75,6 +86,7 @@ public struct AgentConnector: Sendable {
         switch agent {
         case .claudeCode: return claudeSettingsPath
         case .copilotCLI: return copilotHooksPath
+        case .codexCLI: return codexHooksPath
         }
     }
 
@@ -102,6 +114,13 @@ public struct AgentConnector: Sendable {
             }
         case .copilotCLI:
             return copilotHooks.status(ofFile: data)
+        case .codexCLI:
+            guard let data else { return .notConnected }
+            do {
+                return codexHooks.status(of: try SettingsJSON.parse(data))
+            } catch {
+                return .unreadable(Self.unreadable(codexHooksPath, error).message)
+            }
         }
     }
 
@@ -112,25 +131,29 @@ public struct AgentConnector: Sendable {
     @discardableResult
     public func connect(_ agent: ConnectableAgent) throws(AgentConnectorError) -> ConnectOutcome {
         switch agent {
-        case .claudeCode: return try editClaudeSettings { settings throws(SettingsJSONError) in
+        case .claudeCode: return try editJSON(.claudeCode) { settings throws(SettingsJSONError) in
             try claudeHooks.connect(settings)
         }
         case .copilotCLI: return try connectCopilot()
+        case .codexCLI: return try editJSON(.codexCLI) { file throws(SettingsJSONError) in
+            try codexHooks.connect(file)
+        }
         }
     }
 
     @discardableResult
     public func disconnect(_ agent: ConnectableAgent) throws(AgentConnectorError) -> ConnectOutcome {
         switch agent {
-        case .claudeCode: return try editClaudeSettings { settings in claudeHooks.disconnect(settings) }
+        case .claudeCode: return try editJSON(.claudeCode) { settings in claudeHooks.disconnect(settings) }
         case .copilotCLI: return try disconnectCopilot()
+        case .codexCLI: return try editJSON(.codexCLI) { file in codexHooks.disconnect(file) }
         }
     }
 
-    private func editClaudeSettings(
-        _ transform: ([String: Any]) throws(SettingsJSONError) -> [String: Any]?
+    private func editJSON(
+        _ agent: ConnectableAgent, _ transform: ([String: Any]) throws(SettingsJSONError) -> [String: Any]?
     ) throws(AgentConnectorError) -> ConnectOutcome {
-        let path = claudeSettingsPath
+        let path = configPath(for: agent)
         let original = try Self.read(path)
         let settings: [String: Any]
         let edited: [String: Any]?
@@ -140,8 +163,8 @@ public struct AgentConnector: Sendable {
         } catch {
             throw Self.unreadable(path, error)
         }
-        guard let edited else { return ConnectOutcome(agent: .claudeCode, path: path, changed: false) }
-        try Self.createDirectory(claudeConfigDirectory)
+        guard let edited else { return ConnectOutcome(agent: agent, path: path, changed: false) }
+        try Self.createDirectory(configDirectory(for: agent))
         let target = Self.resolvingLinks(path)
         let permissions = Self.permissions(of: target) ?? 0o600
         var backup: String?
@@ -149,7 +172,7 @@ public struct AgentConnector: Sendable {
             backup = try Self.writeBackup(original, of: path, stamp: stamp(), permissions: permissions)
         }
         try Self.writeAtomically(SettingsJSON.encode(edited), to: target, permissions: permissions)
-        return ConnectOutcome(agent: .claudeCode, path: path, changed: true, backupPath: backup)
+        return ConnectOutcome(agent: agent, path: path, changed: true, backupPath: backup)
     }
 
     private func connectCopilot() throws(AgentConnectorError) -> ConnectOutcome {
