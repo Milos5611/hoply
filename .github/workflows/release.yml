@@ -1,12 +1,5 @@
 name: Release
 
-# Push a tag like v0.2.0 to build, test, sign, notarize and publish Hoply-0.2.0.dmg as a GitHub Release on the
-# public HOPLY_REPO (this repo is private), then update the Homebrew cask there.
-# Run it by hand (Actions → Release → Run workflow) to get the DMG as a build artifact only.
-# Without the signing secrets the DMG is ad-hoc signed and not notarized, and no release is published.
-# With the Sparkle secrets the app checks for updates (https://hoply.dev/appcast.xml, which redirects to the latest
-# release's appcast.xml); a release needs them, or its users would never hear of the next one. TAP_TOKEN writes
-# to HOPLY_REPO. An annotated tag's message becomes the notes.
 on:
   push:
     tags: ["v*"]
@@ -24,7 +17,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: xcode-27 # same Xcode as ci.yml
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
@@ -35,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # the build number is the commit count
+          fetch-depth: 0
 
       - name: Toolchain
         run: |
@@ -153,7 +146,7 @@ jobs:
         if: >-
           startsWith(github.ref, 'refs/tags/v') && !(env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
           && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true')
-        run: echo "::warning::No release published; it needs the Developer ID, notary, Sparkle and TAP_TOKEN secrets (README → Releasing)."
+        run: echo "::warning::No release published; it needs the Developer ID, notary, Sparkle and TAP_TOKEN secrets (docs/RELEASING.md)."
 
       - name: Remove the signing keychain
         if: always() && env.HAS_SIGNING == 'true'

@@ -62,26 +62,24 @@ step "Codex CLI is working (Bash)"
 codex_hook PermissionRequest ',"turn_id":"sim-t1","tool_name":"Bash","tool_input":{"command":"swift test"}'
 step "Codex CLI asks for permission (never held: Codex shows its own prompt)"
 
-# Qwen Code and Copilot IDE have no local history: their OTel is the ledger. hoply.cwd (set by the user through
-# OTEL_RESOURCE_ATTRIBUTES) names the project; without it Hoply asks the process.pid for its cwd.
 QWEN_RESOURCE="$(attr hoply.cwd stringValue "$CLAUDE_CWD")$(attr process.pid intValue $$)"
 post /v1/logs "$(otlp_log qwen-code sim-qwen qwen-code.user_prompt "$(attr prompt stringValue 'Write unit tests for the Prometheus parser')" "$QWEN_RESOURCE")"
 QWEN_RESPONSE="$(otlp_log qwen-code sim-qwen qwen-code.api_response "$(attr model stringValue qwen3-coder)$(attr prompt_id stringValue sim-p1)$(attr input_token_count intValue 2400)$(attr output_token_count intValue 610)" "$QWEN_RESOURCE")"
 post /v1/logs "$QWEN_RESPONSE"
-post /v1/logs "$QWEN_RESPONSE" # re-sent batch: same prompt_id and timeUnixNano, so the ledger keeps one row
+post /v1/logs "$QWEN_RESPONSE"
 post /v1/logs "$(otlp_log qwen-code sim-qwen-pid qwen-code.api_response "$(attr model stringValue qwen3-coder)$(attr prompt_id stringValue sim-p2)$(attr input_token_count intValue 900)$(attr output_token_count intValue 120)" "$(attr process.pid intValue $$)")"
 step "Qwen Code is working (sim-qwen in $CLAUDE_CWD; sim-qwen-pid in this shell's cwd via process.pid)"
 
 COPILOT_IDE_SPAN="$(otlp_chat_span copilot-chat sim-copilot-ide claude-sonnet-5 18400 920)"
 post /v1/traces "$COPILOT_IDE_SPAN"
-post /v1/traces "$COPILOT_IDE_SPAN" # re-sent batch: same trace and span id, so the ledger keeps one row
+post /v1/traces "$COPILOT_IDE_SPAN"
 post /v1/traces "$(otlp_chat_span copilot-chat sim-copilot-ide claude-sonnet-5 21000 450)"
 step "Copilot in the IDE made two model calls (Unassigned: no hoply.cwd)"
 
 post /hooks/claude-code "{\"hook_event_name\":\"Notification\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\"}"
 step "Claude Code needs permission"
 
-claude_hook() { # event name, extra JSON fields (start with a comma)
+claude_hook() {
   post /hooks/claude-code "{\"hook_event_name\":\"$1\",\"session_id\":\"sim-claude\",\"transcript_path\":\"$CLAUDE_TRANSCRIPT\",\"cwd\":\"$CLAUDE_CWD\"${2:-}}"
 }
 claude_hook PostToolUse ',"tool_name":"Bash"'

@@ -15,7 +15,6 @@ SIGN_IDENTITY="${HOPLY_SIGN_IDENTITY:--}"
 ARCHS=()
 [ "${HOPLY_UNIVERSAL:-0}" = 1 ] && ARCHS=(--arch arm64 --arch x86_64)
 
-# ${ARCHS[@]+...}: macOS's bash 3.2 treats an empty array as unbound under `set -u`.
 swift build -c release --product Hoply ${ARCHS[@]+"${ARCHS[@]}"} >&2
 bin="$(swift build -c release --show-bin-path ${ARCHS[@]+"${ARCHS[@]}"})/Hoply"
 
@@ -24,14 +23,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$bin" "$app/Contents/MacOS/Hoply"
 cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
-# The linker also records the build folder as an rpath; the bundle needs only @executable_path/../Frameworks.
+
 otool -l "$app/Contents/MacOS/Hoply" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH") } rpath && $1 == "path" { print $2 }' |
   while read -r path; do
     case "$path" in /*) install_name_tool -delete_rpath "$path" "$app/Contents/MacOS/Hoply" ;; esac
   done
 
-# ditto keeps the framework's version symlinks. The XPC services are only for sandboxed apps (Sparkle's docs);
-# headers are dropped as Xcode's embed step would.
 sparkle="$app/Contents/Frameworks/Sparkle.framework"
 ditto "$(dirname "$bin")/Sparkle.framework" "$sparkle"
 for part in XPCServices Headers PrivateHeaders Modules; do rm -rf "${sparkle:?}/$part" "$sparkle/Versions/B/$part"; done
@@ -65,8 +62,7 @@ sign() {
     codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$1" >&2
   fi
 }
-# Inside out and never --deep, as Sparkle's docs require; the hardened runtime only loads a framework signed
-# by the same team, so Sparkle's own ad-hoc signature is replaced.
+
 sign "$sparkle/Versions/B/Autoupdate"
 sign "$sparkle/Versions/B/Updater.app"
 sign "$sparkle"

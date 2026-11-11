@@ -1,188 +1,297 @@
 # Hoply
 
-A macOS menu bar app that shows what your AI coding agents are doing: Claude Code, OpenAI Codex CLI, GitHub Copilot (CLI and JetBrains), Qwen Code on your local model, and the vLLM server behind it. It is one Swift app with a small listener built in, so there is no separate daemon to run.
+**A Mac menu bar app that shows what your AI coding agents are doing, what they cost, and when they need you.**
 
-```
-Claude Code ── hooks + OTel logs ──┐
-Codex CLI ── hooks ────────────────┤
-Copilot CLI ── hooks (+ OTel) ─────┤
-Copilot in JetBrains ── OTel ──────┼──▶ Hoply (127.0.0.1:4318) ──▶ menu bar panel
-Qwen Code ── OTel ─────────────────┘      │
-vLLM on the ZGX ◀── polls /metrics ───────┤
-Claude 5-hour / weekly limits ◀── polls ──┘
-```
+Hoply watches Claude Code, Codex CLI, Copilot CLI, Copilot in JetBrains and Qwen Code, plus the model servers you run
+yourself. It groups live sessions by repository, moves any session that is waiting on you to the top, and keeps its
+own usage history, so you can see what each run cost and how much of your Claude plan is left. It's for people who
+run several agents at once and would rather not keep checking terminals. Everything stays on your Mac.
 
-## What each source gives you
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/panel-light.png">
+    <img src="docs/images/panel-light.png" width="448" alt="The Hoply panel: counts of live agents, sessions that need you and local model speed, then the Waiting on you card with a permission request, a question, a run stopped at a usage limit, a finished turn and a failed run.">
+  </picture>
+</p>
 
-| Source | How it reports | What you see |
+## Install
+
+- **Download** the DMG from [hoply.dev/download](https://hoply.dev/download), open it and drag Hoply to Applications.
+- **Or use Homebrew:** `brew install --cask milos5611/hoply/hoply`
+
+You need macOS 26 Tahoe or newer, on Apple silicon or Intel (it's one universal app). Release builds are signed with a
+Developer ID and notarized by Apple, so macOS asks only its usual one-time question for an app from the internet.
+Hoply is free during early access.
+
+**Updates.** Hoply checks for a new version once a day and shows it at the bottom of the panel. Nothing installs
+until you choose it. You can turn the check off in Settings → Updates; "Check for Updates…" is also in the menu bar
+icon's right-click menu. The Homebrew cask is marked `auto_updates`, so `brew upgrade` leaves Hoply to its own updater
+unless you pass `--greedy`.
+
+**Uninstall.** First disconnect your agents in Settings → Agents, which removes Hoply's hooks from their config, then
+delete the app. `brew uninstall --zap --cask hoply` also deletes Hoply's data, usage history included, but it doesn't
+remove the agent hooks.
+
+## First run
+
+1. Click the Hoply icon in the menu bar, then the gear. **Settings → Agents** lists the agents Hoply found. Press
+   **Connect** on each one you use.
+2. Restart any agent session that was already running, so it picks up the hooks.
+3. Using Codex CLI? Open Codex, run `/hooks` and trust Hoply's hooks. Codex runs a hook only after you trust it.
+
+That's it: start an agent and its session shows up in the panel within a second. Here's what Connect writes:
+
+- **Claude Code:** hooks and OpenTelemetry log settings in `~/.claude/settings.json`.
+- **Codex CLI:** hooks in `~/.codex/hooks.json`.
+- **Copilot CLI:** a hooks file at `~/.copilot/hooks/hoply.json`. Disconnect renames it instead of deleting it.
+
+Hoply backs a file up before changing it, keeps your own hooks and settings, and touches only its own entries, so
+connecting again is safe. If you change Hoply's port, the Agents card says Update, and pressing it rewrites the hooks
+(Codex then asks you to trust them again). If your agent config lives somewhere else (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`, `COPILOT_HOME`), set the folders in Settings → History.
+
+Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one more step each; see
+[Manual setup](#manual-setup).
+
+## What it does
+
+- **Live sessions** for Claude Code, Codex CLI, Copilot CLI, Copilot in JetBrains and Qwen Code, grouped by
+  repository (worktrees and subfolders share a card). Each row shows the state (working, your turn, needs permission,
+  limited, ended), the task, the model, the last tool, tokens and cost, plus live subagents, a context-window warning
+  and the branch's git diff.
+- **Waiting on you.** Sessions that need you move to the top of the panel, with a notification that says why: a
+  permission prompt, a question, a finished turn, a usage limit or an error. Quiet hours and per-project mute keep it
+  calm.
+- **Approve from Hoply** (off by default). Allow and Deny buttons for Claude Code permission prompts, in the panel and
+  on the notification. Your terminal keeps its own prompt.
+- **Usage history and cost.** API-equivalent cost per project, model, day and agent, from a local database that
+  outlives the agents' own records. Copilot's premium requests and AI units come straight from Copilot.
+- **Local model servers.** vLLM, tensorfold, llama.cpp, SGLang, TGI, Ollama, LM Studio and other OpenAI-compatible
+  servers, local or remote: speed, KV cache, running and queued requests, tokens per day, and what those tokens would
+  have cost on the API.
+- **Claude plan limits.** The 5-hour and weekly windows (including model-specific weekly ones), your pace against the
+  clock, burn rate, a projection at reset, and alerts at 80% and 95%.
+- **Dev servers.** The ports your agent sessions started, tied back to the session, with a Stop button.
+- **Clean up.** Merged worktrees, large build caches, old transcripts already in Hoply's history, and processes an
+  agent left running. Nothing goes without a review sheet, and files go to the Trash.
+- **Command palette** on ⌥Space, from any app: sessions, projects, dev servers, Dashboard pages and actions. Resume a
+  finished session in Terminal.
+- **A Dashboard window** with Overview, Projects, Sessions, Spending, Local model, Limits, Dev servers and Clean up
+  pages.
+
+### What each source reports
+
+| Source | How Hoply hears from it | What you see |
 |---|---|---|
-| Claude Code | hooks (state) + OpenTelemetry logs (tokens, cost) | working / needs permission / your turn, task title, last tool, tokens, cost |
-| Codex CLI | hooks (state); its session files under `~/.codex/sessions` (tokens) | working / needs permission / your turn, last tool, tokens, API-equivalent cost |
-| Copilot CLI | hooks (state), optional OpenTelemetry (tokens) | working / needs permission / your turn, task title, last tool |
-| Copilot in JetBrains | OpenTelemetry only (Copilot hooks aren't supported in JetBrains or Visual Studio) | working / idle, tokens |
-| Qwen Code | OpenTelemetry | working / idle, prompt title, tokens |
-| vLLM (ZGX) | Prometheus `/metrics` | model, running and queued requests, tokens/s, KV cache |
-| Claude plan | Claude Code's own login, read from the Keychain | 5-hour and weekly usage with reset times |
+| Claude Code | hooks for state; usage from its transcripts (its OpenTelemetry logs add live counts) | working / needs permission / your turn, task title, last tool, tokens, cost |
+| Codex CLI | hooks for state; usage from its session files in `~/.codex/sessions` | working / needs permission / your turn, last tool, tokens, API-equivalent cost |
+| Copilot CLI | hooks for state; usage from its own `~/.copilot/session-store.db` | working / needs permission / your turn, task title, last tool, AI units, premium requests |
+| Copilot in JetBrains | OpenTelemetry only (Copilot has no hooks in JetBrains or Visual Studio) | working / idle, tokens |
+| Qwen Code | OpenTelemetry, stored by Hoply | working / idle, prompt title, tokens |
+| Model servers | Prometheus `/metrics` or the server's model list | model, running and queued requests, tokens/s, KV cache |
+| Claude plan | your own Claude Code login, read from the Keychain | 5-hour and weekly usage, pace, reset times |
 
-Your chat UI talks to vLLM directly, so its activity shows up in the vLLM card.
+Anything else that talks to your model server, such as a chat app, shows up in that server's card too.
 
-## Run it
+## Privacy
 
-Requires macOS 26+ and Xcode 26+ (Swift 6.2 toolchain).
+- Hoply's listener is bound to `127.0.0.1` and turns away any connection that isn't from your Mac.
+- No account, no analytics, no crash reporter. Nothing your agents do is sent anywhere.
+- Hoply makes three kinds of outgoing request:
+  - to the **model servers you add**;
+  - to **Anthropic's usage endpoint**, with your own Claude Code login, for the Claude limits card. This only starts
+    once you press Connect there, and macOS asks you before Hoply may read that Keychain item;
+  - a **daily update check** at `https://hoply.dev/appcast.xml` (release builds only; Settings → Updates turns it off).
+- Agent records (transcripts, Codex session files, Copilot's database) are read, never changed. The two exceptions are
+  things you ask for: Connect writes the hook config above, and Clean up moves what you tick to the Trash.
+- Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`. Model-server tokens and passwords live in
+  your Keychain, never in settings, URLs or logs.
 
-```bash
-scripts/install.sh              # build Hoply.app into ~/Applications, connect Claude Code, Codex CLI and Copilot CLI, open it
-scripts/install.sh --uninstall  # disconnect the agents again
+More detail in the [privacy policy](https://hoply.dev/privacy).
+
+## Manual setup
+
+Settings → Agents connects Claude Code, Codex CLI and Copilot CLI. Everything else is set up here. The
+[setup guide](https://hoply.dev/guide) has the same steps with more context.
+
+**Copilot in JetBrains.** Open Settings → Tools → GitHub Copilot → Chat, turn on the OpenTelemetry export, and set
+the OTLP endpoint to `http://127.0.0.1:4318` (HTTP). JSON and protobuf both work.
+
+**Qwen Code.** Add this to `~/.qwen/settings.json`:
+
+```json
+"telemetry": { "enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http" }
 ```
 
-That's all. `install.sh` connects whichever of Claude Code, Codex CLI and Copilot CLI it finds (it runs `Hoply --connect`; no `jq` needed):
-- **Claude Code:** hooks and OTel log export, written to `~/.claude/settings.json` (backed up first). Restart running sessions afterwards.
-- **Codex CLI:** hooks added to `~/.codex/hooks.json` (or `$CODEX_HOME`; backed up first, your own hooks stay). Codex runs a hook only after you trust it: open Codex, run `/hooks` and trust Hoply's hooks, then restart running sessions. After a port change, Update rewrites them and Codex asks again.
-- **Copilot CLI:** hooks in `~/.copilot/hooks/hoply.json`.
+Qwen's OpenTelemetry is its only usage record, so Hoply stores it. To file usage under the right project, start Qwen
+with `OTEL_RESOURCE_ATTRIBUTES=hoply.cwd=$PWD`. Without it, Hoply asks Qwen's process (`process.pid`) for its working
+directory, and usage it can't place shows as "Unassigned".
 
-Re-running it is safe. Installed from the DMG instead? Settings → Agents connects, updates and disconnects the same hooks; it also says when they need an update, for example after you change the port.
+**Model servers.** Settings → Model servers → **Add server…** (it opens in the Dashboard window, which stays up while
+you copy a key), or **Find servers on this Mac**. Use the server's base URL without `/metrics`, for example
+`http://192.168.1.20:8000`; Hoply reads `<url>/metrics` or the server's model list. Plain http works for loopback,
+private-range addresses, `.local` names, Tailscale and similar local names (App Transport Security exceptions in the
+app's `Info.plist`); public hosts need https. macOS asks once for Local Network access. Hoply polls each server every
+5 seconds while the panel or Dashboard is open, every 30 seconds otherwise.
 
-By default the app is signed ad-hoc, which gives every build a new identity, so macOS asks again for Keychain and other permissions after each install. To avoid that, create a self-signed code-signing certificate once: Keychain Access → Certificate Assistant → Create a Certificate…, name it `Hoply Dev`, Identity Type "Self Signed Root", Certificate Type "Code Signing". Then install with `HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh`.
+**Claude plan limits.** Press Connect on the Claude limits tile in the panel, or on the Dashboard's Limits page.
+macOS asks once whether `security` may read the "Claude Code-credentials" Keychain item; choose Always Allow. If it
+says the login expired, open Claude Code once and it refreshes the token.
 
-For development:
+**Codex OpenTelemetry (optional).** Codex's session files already give Hoply its usage. For live token counts as well,
+add an `[otel]` exporter to Codex's `config.toml`: `otlp-http` with `protocol = "json"` and the endpoint
+`http://127.0.0.1:4318/v1/logs`. Hoply never writes `config.toml` itself.
 
-```bash
-swift test                # unit tests, using real OTLP payloads as fixtures
-swift run Hoply           # run without bundling (no notifications or launch at login)
-scripts/simulate.sh       # with Hoply running: fake agent activity to see the panel work
-```
-
-**Copilot in JetBrains:** open Settings → Tools → GitHub Copilot → Chat, turn on the OpenTelemetry export, and set the OTLP endpoint to `http://127.0.0.1:4318` (HTTP). Hoply accepts both JSON and protobuf.
-
-**Local model (vLLM or tensorfold):** open the panel → gear icon → Server URL: the server's base URL without `/metrics`, for example `http://<zgx-ip>:8888`. Hoply reads `<url>/metrics` every 5 seconds. Private-range IPs are allowed through App Transport Security in `Info.plist`; macOS will ask once for Local Network access.
-
-**Claude limits:** click Connect in the Claude plan card. macOS asks once whether `security` may read the "Claude Code-credentials" Keychain item; choose Always Allow. If it says the login expired, open Claude Code once and it refreshes the token.
-
-## Check that events arrive
+**Check that events arrive.** The panel footer says "Listening on 127.0.0.1:4318", or why it isn't. If another
+OpenTelemetry collector already has port 4318, change the port in Settings → Listener, then press Update on each
+agent in Settings → Agents. From a terminal:
 
 ```bash
 curl -s http://127.0.0.1:4318/health
-echo '{"hook_event_name":"UserPromptSubmit","session_id":"t1","cwd":"'$PWD'","prompt":"hello"}' \
-  | curl -s -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:4318/hooks/claude-code
 ```
 
-The installed hooks also send `X-Hoply-Pid: $PPID` (the agent's process id), which ties a session to the dev servers it started. Hoply uses it only after checking that the process is yours, was running before the hook fired and is the agent (or a shell under it).
+## Good to know
 
-The footer shows "Listening on 127.0.0.1:4318", or why it isn't (for example, the port is already taken by an OpenTelemetry collector; change it in Settings, then press Update in Settings → Agents).
+<details>
+<summary><b>How usage and cost are counted</b></summary>
 
-**Qwen Code** (not connected automatically): add `"telemetry": {"enabled": true, "otlpEndpoint": "http://127.0.0.1:4318", "otlpProtocol": "http"}` to `~/.qwen/settings.json`. Its OTel is its only history, so Hoply stores it. To file the usage under the right project, optionally start Qwen with `OTEL_RESOURCE_ATTRIBUTES=hoply.cwd=$PWD`; without it Hoply asks Qwen's process (`process.pid`) for its working directory, and usage it can't place shows as "Unassigned".
+Hoply keeps its own usage history in `~/Library/Application Support/Hoply/hoply.sqlite`, with one source per agent so
+nothing is counted twice:
 
-## Layout
+- **Claude Code:** the transcripts under `~/.claude/projects` (read-only), subagents included. So Hoply has history
+  from before you installed it, and it works with OpenTelemetry off. Claude Code deletes transcripts after about 30
+  days; Hoply never deletes usage rows, so its history outlives them.
+- **Codex CLI:** its session files under `~/.codex/sessions` and `~/.codex/archived_sessions` (or `$CODEX_HOME`),
+  read-only, so this also has history from before Hoply. A call's tokens are the growth of the session's running
+  total, and a forked session's copy of its parent's calls is counted once. Prices are API-equivalent: a ChatGPT plan
+  doesn't bill per token, and the files don't say whether a call ran in a faster, dearer tier.
+- **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds.
+  Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses Copilot's figure as
+  the cost and also shows AIU and premium requests. Settings → Copilot plan sets your monthly allowance and the price
+  of extra requests.
+- **Copilot in JetBrains and Qwen Code:** the OpenTelemetry they send to Hoply, stored as it arrives. Re-sent batches
+  are recognized by their ids and counted once.
 
-```
-Sources/AgentKit/      platform-neutral core
-  HubServer.swift      Network.framework listener, loopback only
-  HTTP.swift           HTTP/1.1 parser (Content-Length and chunked)
-  HubRouter.swift      routes /v1/{logs,traces,metrics} and /hooks/<source>/<event>
-  OTLPDecoder.swift    OTLP JSON + protobuf (hand-rolled wire reader, no dependencies)
-  HookMapper.swift     Claude Code / Codex CLI / Copilot CLI hook payloads → events
-  TelemetryMapper.swift  Claude, Qwen, Copilot (GenAI conventions) telemetry → events
-  SessionBoard.swift   session state machine
-  PrometheusParser.swift  Prometheus text parser (snapshots and rates live in ModelServers/)
-  ClaudeLimits.swift   plan limits decode + Keychain/HTTP client
-  Settings/            AppSettings with lenient per-key decoding
-  Usage/               usage records, Claude transcript parser, Copilot store and OTel usage mappers, ledger value types
-  Pricing/             price table (bundled as a string literal), cost-state calibration
-  Projects/            cwd → project resolver (repo, worktree, folder, home, scratch)
-Sources/AgentSystem/   macOS I/O adapters
-  Store/               SQLite schema + migrations, Store (writer), StoreReader (queries)
-  Ingest/              file tailer, FSEvents watcher, Claude transcript and Copilot store ingesters, coordinator
-  Processes/           process cwd through libproc (OTel `process.pid` fallback)
-Sources/Hoply/         SwiftUI menu bar app: App/, Services/, Panel/, Components/
-Tests/AgentKitTests/   tests; fixtures were produced by the official OpenTelemetry JS exporters
-Tests/AgentSystemTests/  adapter tests (in-memory SQLite, temp directories)
-scripts/               install.sh (build, install, connect agents), simulate.sh (dev)
-```
-
-## Usage history
-
-Hoply keeps its own usage ledger in `~/Library/Application Support/Hoply/hoply.sqlite`, with one source per agent so nothing is counted twice:
-
-- **Claude Code:** the transcripts under `~/.claude/projects` (read-only), including subagents, so it has history from before Hoply was installed and works with OTel off. Claude Code deletes transcripts after about 30 days; the ledger never deletes rows, so it outlives them.
-- **Codex CLI:** its session files under `~/.codex/sessions` and `~/.codex/archived_sessions` (or `$CODEX_HOME`), read-only, so it also has history from before Hoply was installed. A call's tokens are the growth of the session's running total, and a forked session's copy of its parent's calls is counted once. Prices are API-equivalent: a ChatGPT plan doesn't bill per token, and the files don't say whether a call ran in a faster, dearer tier.
-- **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds. Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses Copilot's figure as the cost and also shows AIU and premium requests.
-- **Copilot in JetBrains and Qwen Code:** the OpenTelemetry they send to Hoply, stored as it arrives. Re-sent batches are recognized by their ids and counted once.
-
-Costs are API-equivalent list prices from a table bundled in the app. Local models (any model whose name contains `qwen`, configurable) cost $0 and are also priced at a reference model (default `claude-sonnet-5-5`) to show what they saved. Unknown models show as unpriced, not $0. To add or correct a price, put the same shape as the bundled table in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
+Costs are API-equivalent list prices from a table bundled in the app. Local models (any model whose name contains
+`qwen`; change it in Settings → History) cost $0, and are also priced at a reference model (default
+`claude-sonnet-5-5`) to show what they saved. A model Hoply doesn't know shows as unpriced, never as $0; Settings →
+Pricing lets you price it as a model it does know. To add or correct a price, put the same shape as the bundled table
+in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
 
 ```json
 { "models": { "claude-opus-4-5": { "input": 5, "output": 25 } } }
 ```
 
-Cache prices default to 0.1× input (read), 1.25× (5 minute write) and 2× (1 hour write); `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, `fast` and `longContext` can be set per model.
+Cache prices default to 0.1× input for a read, 1.25× for a 5-minute write and 2× for a 1-hour write. You can set
+`cacheRead`, `cacheWrite5m`, `cacheWrite1h`, `fast` and `longContext` per model.
 
-## Clean up
+</details>
 
-The Dashboard's Clean up page lists what Hoply thinks is safe to remove, and what it keeps and why. Nothing is removed until you tick it and confirm the review sheet, and each item is checked again right before it goes.
+<details>
+<summary><b>Approve from Hoply</b></summary>
 
-- **Worktrees:** linked git worktrees that are merged into the default branch, clean, unlocked and idle for a week, with no session or dev server in them. The folder moves to the Trash and git forgets the worktree; the branch stays. Squash-merged branches count as unmerged and are kept.
-- **Build caches:** `.next`, `.turbo`, `.build`, `target` and the like, over 50 MB, in projects idle for two weeks. In a repo the folder must be gitignored. `node_modules` is opt-in.
-- **Claude transcripts:** sessions older than 90 days that are fully in Hoply's history. The usage stays in the ledger; Claude Code can no longer resume those sessions.
-- **Orphan processes:** processes an agent session started and left running after it ended. These are terminated, not trashed.
+Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by default) adds Allow and Deny to a Claude
+Code session's permission prompt, in the panel and on its notification. It needs Hoply's current `PermissionRequest`
+hook: if Settings → Agents shows Claude Code as needing an update, press Update once.
+
+- Hoply holds the hook's reply until you click, for at most 9½ minutes. Allow answers that one request (no rule is
+  saved); Deny tells Claude you declined and lets it carry on.
+- The terminal prompt stays up the whole time, and whichever answers first wins. If you answer in the terminal, the
+  buttons go away once Claude Code moves on or cancels the hook.
+- With the setting off, or with Hoply not running, the hook returns nothing and Claude Code's own prompt decides as
+  before.
+- Questions (`AskUserQuestion`) and plan approval (`ExitPlanMode`) are never offered: they need your answer, not a
+  yes.
+- Copilot CLI and Codex CLI aren't supported: their permission hooks run before their own rules and prompt, so holding
+  one would stall every tool call.
+- The Allow button on a notification asks macOS to unlock first.
+
+</details>
+
+<details>
+<summary><b>Clean up</b></summary>
+
+The Dashboard's Clean up page lists what Hoply thinks is safe to remove, and what it keeps and why. Nothing is
+removed until you tick it and confirm the review sheet, and each item is checked again right before it goes.
+
+- **Worktrees:** linked git worktrees that are merged into the default branch, clean, unlocked and idle for a week,
+  with no session or dev server in them. The folder moves to the Trash and git forgets the worktree; the branch stays.
+  Squash-merged branches count as unmerged and are kept.
+- **Build caches:** `.next`, `.turbo`, `.build`, `target` and the like, over 50 MB, in projects idle for two weeks. In
+  a repo the folder must be gitignored. `node_modules` is opt-in.
+- **Claude transcripts:** sessions older than 90 days that are fully in Hoply's history. The usage stays in Hoply;
+  Claude Code can no longer resume those sessions.
+- **Orphan processes:** processes an agent session started and left running after it ended. These are stopped, not
+  trashed.
 
 Files go to the Trash, so Finder's Put Back works.
 
-## Command palette
+</details>
 
-⌥Space opens a search field over whatever app is in front: live and recent sessions, projects, dev servers, Dashboard pages and actions. Type `>` to list actions only. Return runs the highlighted row and ⌘Return its second action; things you pick often rank higher.
+<details>
+<summary><b>Command palette</b></summary>
 
-- **Resume:** Return on a finished Claude Code session writes a small `.command` script (`cd <folder>` then `claude --resume <id>`) to `~/Library/Application Support/Hoply/Resume/` and opens it in Terminal. Other agents open in the Dashboard instead.
-- **Shortcut:** change it or turn the palette off in Settings → Command palette, which also shows whether the shortcut has fired. If ⌥Space does nothing, macOS or another app owns it; use ⌃⌥Space or record another combination. The panel's search button and the menu bar icon's right-click menu open the palette too.
+⌥Space opens a search field over whatever app is in front: live and recent sessions, projects, dev servers, Dashboard
+pages and actions. Type `>` to list actions only. Return runs the highlighted row and ⌘Return its second action;
+things you pick often rank higher.
 
-## Approve from Hoply
+- **Resume:** Return on a finished Claude Code, Codex CLI, Copilot CLI or Qwen Code session writes a small `.command`
+  script (`cd` into the session's folder, then the agent's own resume command, such as `claude --resume <id>`) to
+  `~/Library/Application Support/Hoply/Resume/` and opens it in Terminal. Copilot in JetBrains sessions open in the
+  Dashboard instead. A live session is never resumed.
+- **Shortcut:** change it or turn the palette off in Settings → Command palette, which also shows whether the shortcut
+  has fired. If ⌥Space does nothing, macOS or another app owns it; use ⌃⌥Space or record another combination. The
+  panel's search button and the menu bar icon's right-click menu open the palette too.
 
-Settings → Notifications → "Approve Claude Code prompts from Hoply" (off by default) adds Allow and Deny to a Claude Code session's permission prompt, in the panel and on its notification. It needs Hoply's current `PermissionRequest` hook: if Settings → Agents shows Claude Code as needing an update, press Update once.
+</details>
 
-- Hoply holds the hook's reply until you click, for at most 9½ minutes. Allow answers that one request (no rule is saved); Deny tells Claude you declined and lets it carry on.
-- The terminal prompt stays up the whole time, and whichever answers first wins. If you answer in the terminal, the buttons go away once Claude Code moves on or cancels the hook.
-- With the setting off, or with Hoply not running, the hook returns nothing and Claude Code's own prompt decides as before.
-- Questions (`AskUserQuestion`) and plan approval (`ExitPlanMode`) are never offered: they need your answer, not a yes.
-- Copilot CLI and Codex CLI are not supported: their permission hooks run before their own rules and prompt, so holding one would stall every tool call.
-- The Allow button on a notification asks macOS to unlock first.
+<details>
+<summary><b>Known limitations</b></summary>
 
-## Releasing
+- The Claude limits card uses `api.anthropic.com/api/oauth/usage`, the undocumented endpoint behind Claude Code's
+  `/usage`. It can change without notice.
+- Copilot in JetBrains and Qwen Code have no hooks Hoply can use, so they show only working and idle, never "needs
+  permission" or "your turn".
+- OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP without compression.
+- Codex CLI's session files are an internal format that changes between versions. Hoply is tested against files from
+  Codex 0.98 and 0.144.
+- Cursor runs the hooks in `~/.claude/settings.json` too. Hoply ignores those calls (they carry `cursor_version`)
+  rather than showing them as Claude Code sessions.
+- Claude Code's own `cost-state` totals include calls it never writes to the transcript (title generation, web search,
+  and in subagent-heavy sessions much more), so Hoply's per-session totals are usually a few percent lower.
 
-`.github/workflows/release.yml` builds, tests and packages a universal (Apple silicon + Intel) `Hoply-<version>.dmg` on a macOS 26 runner. Pushing a tag `v<version>` signs it with a Developer ID, notarizes it, publishes it as a GitHub Release on the public repo `Milos5611/homebrew-hoply` (this repo is private) and updates the Homebrew cask there; running the workflow by hand only uploads the DMG as a build artifact. Without the secrets below the DMG is ad-hoc signed, which proves the build but is blocked by Gatekeeper on other Macs.
+</details>
 
-One-time setup:
+## Build from source
 
-1. Join the Apple Developer Program (https://developer.apple.com/programs/enroll/, 99 USD a year; an individual account is enough).
-2. Create a **Developer ID Application** certificate: Xcode → Settings → Accounts → your team → Manage Certificates → + → Developer ID Application. Then Keychain Access → My Certificates → that certificate → Export as `.p12` with a password.
-3. Create an App Store Connect API key for notarization: https://appstoreconnect.apple.com/access/integrations/api → Team Keys → + (access: Developer). Download the `.p8` (only possible once) and note its Key ID and the Issuer ID above the list.
-4. Add the repository secrets (GitHub → Settings → Secrets and variables → Actions):
+You need macOS 26 or newer and Xcode 27. There's no Xcode project; it's a Swift package.
 
-   | Secret | Value |
-   |---|---|
-   | `DEVELOPER_ID_P12_BASE64` | `base64 -i DeveloperID.p12 \| pbcopy` |
-   | `DEVELOPER_ID_P12_PASSWORD` | the `.p12` export password |
-   | `KEYCHAIN_PASSWORD` | any random string, e.g. `openssl rand -base64 24` |
-   | `NOTARY_KEY_P8_BASE64` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` |
-   | `NOTARY_KEY_ID` | the key's Key ID |
-   | `NOTARY_ISSUER_ID` | the Issuer ID |
-   | `SPARKLE_PUBLIC_KEY` | the public key from step 5 |
-   | `SPARKLE_PRIVATE_KEY` | the contents of the exported private key file from step 5 |
-   | `TAP_TOKEN` | the fine-grained token from step 6 |
+```bash
+git clone https://github.com/Milos5611/hoply.git
+cd hoply
+swift build
+swift run Hoply           # runs unbundled; the icon appears in the menu bar
+scripts/install.sh        # builds Hoply.app into ~/Applications, connects your agents, opens it
+```
 
-5. Create the update signing key (Sparkle, EdDSA) once, after a `swift build` has fetched Sparkle: `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account hoply`. It stores the private key in your login Keychain and prints the public key. Export the private key with `generate_keys --account hoply -x hoply-sparkle.key`, paste its contents into the secret, then delete the file. Keep the Keychain item: losing the key means installed copies can no longer verify updates.
-6. Create the public repo that hosts every release and is also the Homebrew tap: GitHub → New repository → `homebrew-hoply`, Public, with "Add a README file" ticked, so `main` has a commit (releases are tagged on it, and the workflow pushes `Casks/hoply.rb` to it). Then create its token: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token; Repository access → Only select repositories → `Milos5611/homebrew-hoply`; Permissions → Repository → Contents: Read and write (Metadata: Read-only comes with it). Save it as the `TAP_TOKEN` secret here, and renew it before its expiry date or releases stop publishing.
+Builds from source never update themselves, and notifications and launch at login only work in the bundled app from
+`scripts/install.sh`. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest: tests, snapshots, simulated traffic and how
+the code is laid out.
 
-   Release builds check `https://hoply.dev/appcast.xml`, which the site redirects to `https://github.com/Milos5611/homebrew-hoply/releases/latest/download/appcast.xml`; `https://hoply.dev/download` redirects to that release's `Hoply.dmg`. The feed URL is baked into every build, so the releases can move to another host later by changing only the redirect. The appcast's download and release-notes links point at GitHub directly.
+## Contributing
 
-Release: `git tag -a v0.1.0 -m "What changed"` and `git push origin v0.1.0`. The tag sets the version (`CFBundleShortVersionString`); the build number (`CFBundleVersion`, which Sparkle compares) is the commit count, so release from `main`. The tag message becomes the release notes in the update window and on the release page; without one, both link to https://hoply.dev/changelog. The workflow publishes `Hoply-<version>.dmg`, a copy named `Hoply.dmg` and `appcast.xml` on `Milos5611/homebrew-hoply`, then commits `Casks/hoply.rb` there (`scripts/cask.sh <version> <sha256>` prints it). It publishes nothing unless all secrets are set, because a build without the Sparkle keys never checks for updates again. To build the same DMG locally: `HOPLY_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… SPARKLE_PUBLIC_KEY=… scripts/package.sh` (it signs the update with the Keychain key unless `SPARKLE_PRIVATE_KEY` is set; `HOPLY_REPO`, `HOPLY_FEED_URL` and `HOPLY_DOWNLOAD_URL` override the URLs above).
+Bug reports and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Found a security problem?
+Please follow [SECURITY.md](SECURITY.md) and report it privately instead of opening an issue.
 
-A tester installs with `brew install --cask milos5611/hoply/hoply` (Homebrew adds the tap itself), or downloads the DMG from https://hoply.dev/download, then connects their agents in Settings → Agents. The cask declares `auto_updates`, so `brew upgrade` leaves Hoply to Sparkle unless `--greedy` is passed; `brew uninstall --zap --cask hoply` also deletes Hoply's data, usage history included, but not the agent hooks, so disconnect agents in Settings → Agents first. Release builds check for updates once a day (Settings → Updates turns that off) and show a new version at the bottom of the panel; "Check for Updates…" is also in the status item's right-click menu. Builds from `scripts/install.sh` or `swift run` never update themselves.
+## License
 
-## Known gaps
+The code is MIT; see [LICENSE](LICENSE).
 
-- `api.anthropic.com/api/oauth/usage` is the undocumented endpoint Claude Code's `/usage` uses; it can change without notice.
-- Copilot CLI's OTel service name and encoding aren't documented in detail. If its tokens appear as a separate "Copilot IDE" row, adjust `TelemetryMapper.source(of:)`.
-- JetBrains Copilot and Qwen Code have no hooks here, so they can't show "needs permission" or "your turn", only working and idle.
-- OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP and no compression.
-- Codex CLI's session files are an internal format that changes between versions; Hoply is tested against files from Codex 0.98 and 0.144. Codex's OpenTelemetry (`[otel]` in `config.toml`, `otlp-http` with `protocol = "json"` and the endpoint `http://127.0.0.1:4318/v1/logs`) is optional and only adds live token counts; Hoply never writes `config.toml`.
-- Cursor runs the hooks in `~/.claude/settings.json` too; Hoply ignores those calls (they carry `cursor_version`) rather than showing them as Claude Code sessions.
-- Claude Code's own `cost-state` totals include calls it never writes to the transcript (title generation, web search, and in subagent-heavy sessions much more), so per-session ledger totals are usually a few percent below it.
+**Name and icon.** The license covers the code, not the Hoply name or app icon (`Sources/Hoply/Hoply.icon` and the
+matching `HoplyMark` glyph), which identify the official app. If you ship a fork or a build of your own, give it its
+own name and icon, so nobody mistakes it for an official release.
+
+Hoply is an independent project. It isn't affiliated with, endorsed by or sponsored by Anthropic, OpenAI, GitHub or
+Microsoft. Claude, Claude Code, Codex, GitHub and Copilot are trademarks of their owners and are named here only to say
+what Hoply works with.

@@ -1,7 +1,5 @@
 name: CI
 
-# Build and test on pull requests and on pushes to main that touch the package or the scripts.
-# macOS minutes count 10× on a private repo, so docs-only changes skip it.
 on:
   push:
     branches: [main]

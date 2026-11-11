@@ -9,8 +9,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TARGET="$HOME/Applications/Hoply.app"
-# Ad-hoc signatures change on every build, so Keychain and TCC grants are asked for again after each install.
-# A stable self-signed identity keeps them.
 SIGN_IDENTITY="${HOPLY_SIGN_IDENTITY:--}"
 
 case "${1:-}" in
@@ -21,7 +19,7 @@ esac
 
 install_app() {
   local app
-  # No feed: a local install never updates itself.
+
   app="$(HOPLY_SIGN_IDENTITY="$SIGN_IDENTITY" HOPLY_FEED_URL= HOPLY_ED_PUBLIC_KEY= scripts/build-app.sh)"
   mkdir -p "$HOME/Applications"
   pkill -x Hoply 2>/dev/null || true
@@ -34,7 +32,7 @@ install_app() {
 
 if [ "$UNINSTALL" = 1 ]; then
   bin="$TARGET/Contents/MacOS/Hoply"
-  # An app from before `--disconnect` existed would ignore the flag and start its UI instead of exiting.
+
   if [ ! -x "$bin" ] || ! grep -qaF -- "--disconnect" "$bin"; then
     swift build -c release --product Hoply >&2
     bin="$(swift build -c release --show-bin-path)/Hoply"
