@@ -1,17 +1,22 @@
 name: Release
 
-# Push a tag like v0.2.0 to build, test, sign, notarize and publish Hoply-0.2.0.dmg as a GitHub Release.
+# Push a tag like v0.2.0 to build, test, sign, notarize and publish Hoply-0.2.0.dmg as a GitHub Release on the
+# public HOPLY_REPO (this repo is private), then update the Homebrew cask there.
 # Run it by hand (Actions → Release → Run workflow) to get the DMG as a build artifact only.
 # Without the signing secrets the DMG is ad-hoc signed and not notarized, and no release is published.
-# With the Sparkle secrets the app checks for updates and appcast.xml is published with the DMG; a release
-# needs them, or its users would never hear of the next one. An annotated tag's message becomes the notes.
+# With the Sparkle secrets the app checks for updates (https://hoply.dev/appcast.xml, which redirects to the latest
+# release's appcast.xml); a release needs them, or its users would never hear of the next one. TAP_TOKEN writes
+# to HOPLY_REPO. An annotated tag's message becomes the notes.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  HOPLY_REPO: Milos5611/homebrew-hoply # package.sh and cask.sh read it too
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,6 +31,7 @@ jobs:
       HAS_SIGNING: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8_BASE64 != '' }}
       HAS_SPARKLE: ${{ secrets.SPARKLE_PUBLIC_KEY != '' && secrets.SPARKLE_PRIVATE_KEY != '' }}
+      HAS_TAP: ${{ secrets.TAP_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -77,10 +83,15 @@ jobs:
         run: |
           # checkout can leave an annotated tag lightweight; fetch the tag object itself.
           git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          notes="$RUNNER_TEMP/notes.md"
+          : > "$notes"
           if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
-            git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" | sed '/^-----BEGIN /,$d' > "$RUNNER_TEMP/notes.md"
-            if [ -s "$RUNNER_TEMP/notes.md" ]; then echo "HOPLY_RELEASE_NOTES=$RUNNER_TEMP/notes.md" >> "$GITHUB_ENV"; fi
+            git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" | sed '/^-----BEGIN /,$d' > "$notes"
           fi
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "What changed in Hoply ${GITHUB_REF_NAME#v}: [hoply.dev/changelog](https://hoply.dev/changelog)" > "$notes"
+          fi
+          echo "HOPLY_RELEASE_NOTES=$notes" >> "$GITHUB_ENV"
 
       - name: Package
         env:
@@ -100,23 +111,49 @@ jobs:
             build/appcast.xml
           if-no-files-found: error
 
-      - name: Publish the GitHub Release
+      - name: Publish the GitHub Release on the tap repo
         if: >-
           startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
-          && env.HAS_SPARKLE == 'true'
+          && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
-          notes=()
-          if [ -n "${HOPLY_RELEASE_NOTES:-}" ]; then notes=(--notes-file "$HOPLY_RELEASE_NOTES"); fi
-          gh release create "$GITHUB_REF_NAME" "$DMG" build/appcast.xml --title "Hoply ${GITHUB_REF_NAME#v}" \
-            --generate-notes "${notes[@]}"
+          # Hoply.dmg backs https://hoply.dev/download (releases/latest/download/Hoply.dmg).
+          cp "$DMG" build/Hoply.dmg
+          gh release create "$GITHUB_REF_NAME" "$DMG" build/Hoply.dmg build/appcast.xml --repo "$HOPLY_REPO" \
+            --title "Hoply ${GITHUB_REF_NAME#v}" --notes-file "$HOPLY_RELEASE_NOTES"
+
+      - name: Check out the tap
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+          && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.HOPLY_REPO }}
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Update the Homebrew cask
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+          && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha256="$(shasum -a 256 "$DMG" | cut -d ' ' -f 1)"
+          mkdir -p tap/Casks
+          scripts/cask.sh "$version" "$sha256" > tap/Casks/hoply.rb
+          cd tap
+          git add Casks/hoply.rb
+          if git diff --cached --quiet; then echo "Casks/hoply.rb is already at $version"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "hoply $version"
+          git push origin HEAD
 
       - name: Explain a skipped release
         if: >-
           startsWith(github.ref, 'refs/tags/v') && !(env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
-          && env.HAS_SPARKLE == 'true')
-        run: echo "::warning::No release published; it needs the Developer ID, notary and Sparkle secrets (README → Releasing)."
+          && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true')
+        run: echo "::warning::No release published; it needs the Developer ID, notary, Sparkle and TAP_TOKEN secrets (README → Releasing)."
 
       - name: Remove the signing keychain
         if: always() && env.HAS_SIGNING == 'true'

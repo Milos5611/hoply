@@ -5,15 +5,15 @@
 #   notarized and stapled, so it opens on any Mac without a Gatekeeper warning. Without either it is ad-hoc
 #   signed, which only proves the build: other Macs block it.
 #   With SPARKLE_PUBLIC_KEY the app checks for updates, and build/appcast.xml (one item: this DMG, EdDSA signed)
-#   is written next to it; publish both, the appcast at the feed URL.
+#   is written next to it; publish both as assets of the release v<version> on HOPLY_REPO (release.yml does).
 # Env: HOPLY_SIGN_IDENTITY  "Developer ID Application: <name> (<team id>)"; unset = ad-hoc
 #      NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID  App Store Connect API key (.p8) for notarytool
 #      HOPLY_VERSION  default: CFBundleShortVersionString in Sources/Hoply/Info.plist
 #      HOPLY_BUILD    default: the commit count
 #      SPARKLE_PUBLIC_KEY   generate_keys' public key; unset = no updates
 #      SPARKLE_PRIVATE_KEY  generate_keys -x output; unset = the login Keychain item (account SPARKLE_ACCOUNT, default hoply)
-#      HOPLY_REPO           owner/repo for the URLs below; default: GITHUB_REPOSITORY, else the origin remote
-#      HOPLY_FEED_URL       default: https://github.com/<repo>/releases/latest/download/appcast.xml
+#      HOPLY_REPO           public owner/repo whose releases host the DMG and appcast; default Milos5611/homebrew-hoply
+#      HOPLY_FEED_URL       SUFeedURL; default https://hoply.dev/appcast.xml (redirects to the latest release's appcast)
 #      HOPLY_DOWNLOAD_URL   default: https://github.com/<repo>/releases/download/v<version>/Hoply-<version>.dmg
 #      HOPLY_RELEASE_NOTES  a Markdown file shown in the update window
 set -euo pipefail
@@ -34,12 +34,8 @@ hardened=0
 feed=""
 rm -f build/appcast.xml
 if [ -n "${SPARKLE_PUBLIC_KEY:-}" ]; then
-  repo="${HOPLY_REPO:-${GITHUB_REPOSITORY:-$(git remote get-url origin 2>/dev/null |
-    sed -nE 's#^(git@github\.com:|https://github\.com/)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')}}"
-  if [ -z "$repo" ] && { [ -z "${HOPLY_FEED_URL:-}" ] || [ -z "${HOPLY_DOWNLOAD_URL:-}" ]; }; then
-    echo "No GitHub repo for the update URLs: set HOPLY_REPO, or HOPLY_FEED_URL and HOPLY_DOWNLOAD_URL" >&2; exit 1
-  fi
-  feed="${HOPLY_FEED_URL:-https://github.com/$repo/releases/latest/download/appcast.xml}"
+  repo="${HOPLY_REPO:-Milos5611/homebrew-hoply}"
+  feed="${HOPLY_FEED_URL:-https://hoply.dev/appcast.xml}"
   download="${HOPLY_DOWNLOAD_URL:-https://github.com/$repo/releases/download/v$version/Hoply-$version.dmg}"
   case "$feed $download" in
     https://*" https://"*) ;;
@@ -101,7 +97,7 @@ if [ -n "$feed" ]; then
       <sparkle:minimumSystemVersion>$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")</sparkle:minimumSystemVersion>
 XML
     [ -z "$notes" ] || printf '%s\n' "$notes"
-    [ -z "${repo:-}" ] || echo "      <sparkle:fullReleaseNotesLink>https://github.com/$repo/releases</sparkle:fullReleaseNotesLink>"
+    echo "      <sparkle:fullReleaseNotesLink>https://github.com/$repo/releases</sparkle:fullReleaseNotesLink>"
     cat <<XML
       <enclosure url="$(sed 's/&/\&amp;/g; s/"/\&quot;/g; s/</\&lt;/g' <<<"$download")" length="$(stat -f %z "$dmg")" type="application/octet-stream" sparkle:edSignature="$signature"/>
     </item>
