@@ -37,6 +37,7 @@ final class SessionBoardTests: XCTestCase {
         let done = try XCTUnwrap(board.apply(hook(.turnFinished("Added an await."), at: 60)))
         XCTAssertEqual(done.to, .yourTurn)
         XCTAssertEqual(done.previousDuration, 50, accuracy: 0.001)
+        XCTAssertEqual(done.turnDuration, 59, accuracy: 0.001, "timed from the prompt, across the permission prompt")
         XCTAssertEqual(board.sessions[claude]?.lastMessage, "Added an await.")
 
         // The idle reminder 60 s later is not a new state change.
@@ -44,6 +45,28 @@ final class SessionBoardTests: XCTestCase {
 
         board.apply(hook(.sessionEnded("prompt_input_exit"), at: 130))
         XCTAssertEqual(board.sessions[claude]?.state, .ended)
+    }
+
+    func testTurnClockStartsWhenWorkStartsAndSurvivesPrompts() throws {
+        var board = SessionBoard()
+        board.apply(hook(.sessionStarted, at: 0))
+        board.apply(hook(.promptSubmitted("x"), at: 5))
+        board.apply(hook(.questionAsked("Which file?"), at: 8))
+        board.apply(hook(.toolFinished("AskUserQuestion"), at: 20))
+        board.apply(hook(.needsPermission("Allow Bash?"), at: 22))
+        board.apply(hook(.toolFinished("Bash"), at: 40))
+        var done = try XCTUnwrap(board.apply(hook(.turnFinished(nil), at: 45)))
+        XCTAssertEqual(done.previousDuration, 5, accuracy: 0.001)
+        XCTAssertEqual(done.turnDuration, 40, accuracy: 0.001)
+
+        board.apply(hook(.promptSubmitted("y"), at: 100))
+        done = try XCTUnwrap(board.apply(hook(.turnFinished(nil), at: 104)))
+        XCTAssertEqual(done.turnDuration, 4, accuracy: 0.001, "a finished turn's next work is a new turn")
+
+        let other = SessionKey(source: .claudeCode, id: "mid")
+        board.apply(hook(.toolStarted("Read"), at: 200, key: other))
+        done = try XCTUnwrap(board.apply(hook(.turnFinished(nil), at: 230, key: other)))
+        XCTAssertEqual(done.turnDuration, 30, accuracy: 0.001)
     }
 
     func testDelayedTelemetryDoesNotOverrideHookState() {

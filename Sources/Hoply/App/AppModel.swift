@@ -133,6 +133,7 @@ final class AppModel {
         server.setHoldsApprovals(settings.approveFromHoply)
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
+        history.onLiveModels = { [weak self] in self?.applyLiveModels() }
         projectEdits.onEdited = { [weak self] in self?.projectsEdited() }
         history.open(LedgerConfiguration(settings: settings))
         ResumeLauncher.prune()
@@ -183,13 +184,19 @@ final class AppModel {
         history.recordStateChanges(changes)
         releaseApprovals(PermissionApproval.answered(approvals, by: events))
         history.tail(Set(events.compactMap(\.transcriptPath)))
-        if events.contains(where: { $0.key.source == .copilotCLI && $0.fromHook }) {
-            history.pollCopilot()
+        let copilotSessions = Set(events.filter { $0.key.source == .copilotCLI && $0.fromHook }.map(\.key.id))
+        if !copilotSessions.isEmpty {
+            history.pollCopilot(sessions: copilotSessions)
         }
         publishSessions()
     }
 
+    private func applyLiveModels() {
+        if board.noteModels(history.liveModels) { publishSessions() }
+    }
+
     private func publishSessions() {
+        board.noteModels(history.liveModels)
         sessions = board.ordered
         history.track(sessions)
         resolveProjects()

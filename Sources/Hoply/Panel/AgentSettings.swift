@@ -17,7 +17,7 @@ struct AgentSettings: View {
                                        directory: connector.configDirectory(for: agent),
                                        notice: connections.notices[agent], running: connections.running)
                 }
-                Hint("Qwen Code and Copilot in JetBrains are set up by hand: see the README.")
+                Hint("Copilot CLI also covers Copilot's agent in JetBrains. Qwen Code is set up by hand: see the README.")
             }
         }
     }

@@ -51,6 +51,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var startedAt: Date
     public var lastEventAt: Date
     public var stateSince: Date
+    public var turnStartedAt: Date?
     public var inputTokens: Int
     public var outputTokens: Int
     public var cacheTokens: Int
@@ -87,6 +88,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.startedAt = time
         self.lastEventAt = time
         self.stateSince = time
+        self.turnStartedAt = nil
         self.inputTokens = 0
         self.outputTokens = 0
         self.cacheTokens = 0

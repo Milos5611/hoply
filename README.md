@@ -25,10 +25,10 @@ macOS 26 Tahoe. Release builds are signed with a Developer ID and notarized by A
 one-time question for an app from the internet.
 Hoply is free during early access.
 
-**Updates.** Hoply checks for a new version once a day and shows it at the bottom of the panel. Nothing installs
-until you choose it. You can turn the check off in Settings → Updates; "Check for Updates…" is also in the menu bar
-icon's right-click menu. The Homebrew cask is marked `auto_updates`, so `brew upgrade` leaves Hoply to its own updater
-unless you pass `--greedy`.
+**Updates.** Hoply checks for a new version at launch and twice a day and shows it at the bottom of the panel. Nothing
+installs until you choose it. You can turn the check off in Settings → Updates; "Check for Updates…" is also in the menu
+bar icon's right-click menu. The Homebrew cask is marked `auto_updates`, so `brew upgrade` leaves Hoply to its own
+updater unless you pass `--greedy`.
 
 **Uninstall.** First disconnect your agents in Settings → Agents, which removes Hoply's hooks from their config, then
 delete the app. `brew uninstall --zap --cask hoply` also deletes Hoply's data, usage history included, but it doesn't
@@ -46,6 +46,7 @@ That's it: start an agent and its session shows up in the panel within a second.
 - **Claude Code:** hooks and OpenTelemetry log settings in `~/.claude/settings.json`.
 - **Codex CLI:** hooks in `~/.codex/hooks.json`.
 - **Copilot CLI:** a hooks file at `~/.copilot/hooks/hoply.json`. Disconnect renames it instead of deleting it.
+  Copilot's agent in JetBrains IDEs runs the same hooks, so its sessions show up too, as Copilot CLI.
 
 Hoply backs a file up before changing it, keeps your own hooks and settings, and touches only its own entries, so
 connecting again is safe. If you change Hoply's port, the Agents card says Update, and pressing it rewrites the hooks
@@ -62,8 +63,8 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
   limited, ended), the task, the model, the last tool, tokens and cost, plus live subagents, a context-window warning
   and the branch's git diff.
 - **Waiting on you.** Sessions that need you move to the top of the panel, with a notification that says why: a
-  permission prompt, a question, a finished turn, a usage limit or an error. Quiet hours and per-project mute keep it
-  calm.
+  permission prompt, a question, a finished turn, a usage limit or an error. A turn shorter than 10 seconds ends
+  without one (Settings → Notifications sets the delay, or Always), and quiet hours and per-project mute keep it calm.
 - **Approve from Hoply** (off by default). Allow and Deny buttons for Claude Code permission prompts, in the panel and
   on the notification. Your terminal keeps its own prompt.
 - **Usage history and cost.** API-equivalent cost per project, model, day and agent, from a local database that
@@ -87,8 +88,8 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
 |---|---|---|
 | Claude Code | hooks for state; usage from its transcripts (its OpenTelemetry logs add live counts) | working / needs permission / your turn, task title, last tool, tokens, cost |
 | Codex CLI | hooks for state; usage from its session files in `~/.codex/sessions` | working / needs permission / your turn, last tool, tokens, API-equivalent cost |
-| Copilot CLI | hooks for state; usage from its own `~/.copilot/session-store.db` | working / needs permission / your turn, task title, last tool, AI units, premium requests |
-| Copilot in JetBrains | OpenTelemetry only (Copilot has no hooks in JetBrains or Visual Studio) | working / idle, tokens |
+| Copilot CLI (and Copilot's agent in JetBrains) | hooks for state; usage from its own `~/.copilot/session-store.db` and each session's `~/.copilot/session-state/<id>/events.jsonl` | working / needs permission / your turn, task title, model, last tool, AI units, premium requests |
+| Copilot in JetBrains | OpenTelemetry, when its agent doesn't run the Copilot CLI hooks | working / idle, tokens |
 | Qwen Code | OpenTelemetry, stored by Hoply | working / idle, prompt title, tokens |
 | Model servers | Prometheus `/metrics` or the server's model list | model, running and queued requests, tokens/s, KV cache |
 | Claude plan | your own Claude Code login, read from the Keychain | 5-hour and weekly usage, pace, reset times |
@@ -103,9 +104,11 @@ Anything else that talks to your model server, such as a chat app, shows up in t
   - to the **model servers you add**;
   - to **Anthropic's usage endpoint**, with your own Claude Code login, for the Claude limits card. This only starts
     once you press Connect there, and macOS asks you before Hoply may read that Keychain item;
-  - a **daily update check** at `https://hoply.dev/appcast.xml` (release builds only; Settings → Updates turns it off).
-- Agent records (transcripts, Codex session files, Copilot's database) are read, never changed. The two exceptions are
-  things you ask for: Connect writes the hook config above, and Clean up moves what you tick to the Trash.
+  - an **update check** at `https://hoply.dev/appcast.xml`, at launch and twice a day (release builds only; Settings →
+    Updates turns it off).
+- Agent records (transcripts, Codex session files, Copilot's database and session files) are read, never changed.
+  The two exceptions are things you ask for: Connect writes the hook config above, and Clean up moves what you tick
+  to the Trash.
 - Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`. Model-server tokens and passwords live in
   your Keychain, never in settings, URLs or logs.
 
@@ -167,9 +170,12 @@ nothing is counted twice:
   read-only, so this also has history from before Hoply. A call's tokens are the growth of the session's running
   total, and a forked session's copy of its parent's calls is counted once. Prices are API-equivalent: a ChatGPT plan
   doesn't bill per token, and the files don't say whether a call ran in a faster, dearer tier.
-- **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds.
-  Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses Copilot's figure as
-  the cost and also shows AIU and premium requests. Settings → Copilot plan sets your monthly allowance and the price
+- **Copilot CLI:** its own `~/.copilot/session-store.db` (or `$COPILOT_HOME`), read-only, checked every 10 seconds,
+  and each session's `~/.copilot/session-state/<id>/events.jsonl`, read as it grows. Copilot's agent in JetBrains
+  writes only the session files. A session's usage comes from whichever of the two recorded it first, so it is never
+  counted twice. Copilot prices each call in AI units (AIU), and 1 AIU is $0.01 at API list price, so Hoply uses
+  Copilot's figure as the cost and also shows AIU and premium requests; a call without AI units (a model such as Kimi
+  K3) is priced from the table, or shows as unpriced. Settings → Copilot plan sets your monthly allowance and the price
   of extra requests.
 - **Copilot in JetBrains and Qwen Code:** the OpenTelemetry they send to Hoply, stored as it arrives. Re-sent batches
   are recognized by their ids and counted once.
@@ -252,8 +258,8 @@ things you pick often rank higher.
 
 - The Claude limits card uses `api.anthropic.com/api/oauth/usage`, the undocumented endpoint behind Claude Code's
   `/usage`. It can change without notice.
-- Copilot in JetBrains and Qwen Code have no hooks Hoply can use, so they show only working and idle, never "needs
-  permission" or "your turn".
+- Copilot in JetBrains through OpenTelemetry alone, and Qwen Code, have no hooks Hoply can use, so they show only
+  working and idle, never "needs permission" or "your turn".
 - OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP without compression.
 - Codex CLI's session files are an internal format that changes between versions. Hoply is tested against files from
   Codex 0.98 and 0.144.

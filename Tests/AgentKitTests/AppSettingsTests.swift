@@ -6,6 +6,21 @@ final class AppSettingsTests: XCTestCase {
     /// The exact shape v1 wrote to UserDefaults under "HoplySettings".
     private let v1JSON = #"{"port":4400,"vllmBaseURL":"http://10.0.0.5:8000","vllmName":"ZGX","claudeLimitsEnabled":true,"notificationsEnabled":false}"#
 
+    func testTurnNotificationDelayDecodesLeniently() {
+        XCTAssertEqual(AppSettings.decode(Data(v1JSON.utf8)).turnNotificationDelay, 10, "older settings mean the default")
+        XCTAssertEqual(AppSettings.decode(Data(#"{"turnNotificationDelay":0}"#.utf8)).turnNotificationDelay, 0)
+        XCTAssertEqual(AppSettings.decode(Data(#"{"turnNotificationDelay":120}"#.utf8)).turnNotificationDelay, 120)
+        XCTAssertEqual(AppSettings.decode(Data(#"{"turnNotificationDelay":45}"#.utf8)).turnNotificationDelay, 10)
+        XCTAssertEqual(AppSettings.decode(Data(#"{"turnNotificationDelay":-1}"#.utf8)).turnNotificationDelay, 10)
+        let wrong = AppSettings.decode(Data(#"{"turnNotificationDelay":"30","port":4400}"#.utf8))
+        XCTAssertEqual(wrong.turnNotificationDelay, 10)
+        XCTAssertEqual(wrong.port, 4400)
+        XCTAssertEqual(AppSettings.turnNotificationDelays, [0, 10, 30, 60, 120])
+        var settings = AppSettings()
+        settings.turnNotificationDelay = 30
+        XCTAssertEqual(AppSettings.decode(settings.encoded()).turnNotificationDelay, 30)
+    }
+
     func testV1SettingsStillDecode() {
         let settings = AppSettings.decode(Data(v1JSON.utf8))
         XCTAssertEqual(settings.port, 4400)

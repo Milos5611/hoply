@@ -57,4 +57,76 @@ final class RealCopilotTests: XCTestCase {
         XCTAssertEqual(totals.premiumRequests, expected.premium, accuracy: 1e-9)
         XCTAssertEqual(sessions.totalCount, expected.sessions)
     }
+
+    func testEventsFilesNeverDoubleTheStore() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOPLY_REAL_COPILOT"] == "1",
+                          "Set HOPLY_REAL_COPILOT=1 to ingest a copy of the real ~/.copilot")
+        let real = CopilotStoreIngester()
+        let realEvents = CopilotEventsIngester(home: real.home)
+        let directory = try TempDirectory()
+        let home = directory.path("copilot")
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: real.databasePath + suffix) {
+            try FileManager.default.copyItem(atPath: real.databasePath + suffix,
+                                             toPath: home + "/" + CopilotStoreIngester.databaseName + suffix)
+        }
+        var fileCalls: [String: Int] = [:]
+        var checkpoints: [String: (nano: Double, premium: Double)] = [:]
+        for file in realEvents.discover() {
+            let folder = URL(fileURLWithPath: file.path).deletingLastPathComponent()
+            let id = folder.lastPathComponent
+            let target = home + "/session-state/" + id
+            try FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+            for name in [CopilotEventsIngester.eventsName, CopilotEventsIngester.workspaceName]
+            where FileManager.default.fileExists(atPath: folder.path + "/" + name) {
+                try FileManager.default.copyItem(atPath: folder.path + "/" + name, toPath: target + "/" + name)
+            }
+            let lines = JSONLines.complete(in: try Data(contentsOf: URL(fileURLWithPath: target + "/events.jsonl"))).lines
+            for line in lines {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let type = object["type"] as? String else { continue }
+                if type == "session.usage_record" { fileCalls[id, default: 0] += 1 }
+                if type == "session.usage_checkpoint", let data = object["data"] as? [String: Any] {
+                    checkpoints[id] = ((data["totalNanoAiu"] as? NSNumber)?.doubleValue ?? 0,
+                                       (data["totalPremiumRequests"] as? NSNumber)?.doubleValue ?? 0)
+                }
+            }
+        }
+        var storeCalls: [String: Int] = [:]
+        if FileManager.default.fileExists(atPath: home + "/" + CopilotStoreIngester.databaseName) {
+            let copy = try SQLiteConnection(path: "file:\(home)/\(CopilotStoreIngester.databaseName)?mode=ro",
+                                            readOnly: true)
+            for (id, calls) in try copy.query("SELECT session_id, COUNT(*) FROM assistant_usage_events GROUP BY 1",
+                                              [], { ($0.text(0), $0.int(1)) }) {
+                storeCalls[id] = calls
+            }
+        }
+
+        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
+                                                                   claudeConfigDirectory: directory.path("claude"),
+                                                                   copilotHome: home, pricingOverridesURL: nil,
+                                                                   watchForChanges: false))
+        await ledger.ingest.start()
+        let progress = await ledger.ingest.progress
+        XCTAssertNil(progress.lastError)
+        let ids = Set(storeCalls.keys).union(fileCalls.filter { $0.value > 0 }.keys).sorted()
+        var expectedCalls = 0
+        for id in ids {
+            let totals = try await ledger.reader.session(SessionKey(source: .copilotCLI, id: id))?.totals ?? .zero
+            let store = storeCalls[id] ?? 0
+            let file = fileCalls[id] ?? 0
+            let source = store > 0 && totals.calls == store ? "store" : file > 0 && totals.calls == file ? "events" : "?"
+            print(String(format: "%@…  store %d  events %d  ledger %d (%@)  $%.4f  %.2f premium%@", String(id.prefix(8)),
+                         store, file, totals.calls, source, totals.costUSD, totals.premiumRequests,
+                         totals.hasUnpriced ? "  unpriced" : ""))
+            XCTAssertNotEqual(source, "?", "\(id): one ledger per session")
+            expectedCalls += source == "store" ? store : file
+            if store == 0, let point = checkpoints[id] {
+                XCTAssertEqual(totals.premiumRequests, point.premium, accuracy: 1e-9, id)
+                if !totals.hasUnpriced { XCTAssertEqual(totals.costUSD, point.nano / 1e11, accuracy: 1e-9, id) }
+            }
+        }
+        let all = try await ledger.reader.totalsBySource(in: DateInterval(start: .distantPast, end: .distantFuture))
+        XCTAssertEqual(all[.copilotCLI]?.calls ?? 0, expectedCalls)
+    }
 }

@@ -30,6 +30,8 @@
 	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>43200</integer>
 	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>

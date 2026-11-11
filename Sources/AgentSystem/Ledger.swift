@@ -68,6 +68,7 @@ public struct Ledger: Sendable {
                                    claude: ClaudeTranscriptIngester(configDirectory: configuration.claudeConfigDirectory),
                                    copilot: CopilotStoreIngester(home: configuration.copilotHome),
                                    codex: configuration.codexHome.map { CodexRolloutIngester(home: $0) },
+                                   copilotEvents: CopilotEventsIngester(home: configuration.copilotHome),
                                    watch: configuration.watchForChanges, rescanInterval: configuration.rescanInterval,
                                    copilotPollInterval: configuration.copilotPollInterval)
     }
@@ -80,7 +81,8 @@ public struct Ledger: Sendable {
         await ingest.record(usage, prompts: prompts)
     }
 
-    public func pollCopilot() async {
+    public func pollCopilot(sessions: [String] = []) async {
+        await ingest.tailCopilotSessions(sessions)
         await ingest.pollCopilot()
     }
 

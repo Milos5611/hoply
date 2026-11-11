@@ -59,6 +59,7 @@ public struct CopilotSession: Sendable, Equatable {
 }
 
 public enum CopilotUsageMapper {
+    public static let keyPrefix = "cp:"
     public static let nanoAIUPerAIU = 1e9
     public static let usdPerAIU = 0.01
     public static let titleRank = 2
@@ -70,27 +71,34 @@ public enum CopilotUsageMapper {
         let updates = bySession.keys.sorted().map { id in
             sessionUpdate(sessions[id] ?? CopilotSession(id: id), usage: bySession[id] ?? [])
         }
-        return LedgerBatch(usage: usage, sessions: updates)
+        return LedgerBatch(usage: usage, sessions: updates, origin: keyPrefix)
     }
 
     public static func usage(_ event: CopilotUsageEvent, session: CopilotSession?) -> UsageRecord? {
         guard let timestamp = date(event.createdAt) ?? date(session?.createdAt) else { return nil }
-        let details = tokenDetails(event.tokenDetailsJSON)
-        let cacheRead = details["cache_read"] ?? event.cacheReadTokens
-        let cacheWrite = details["cache_write"] ?? event.cacheWriteTokens
-        let input = details["input"] ?? max(0, event.inputTokens - cacheRead - cacheWrite)
-        let output = details["output"] ?? event.outputTokens
-        // Copilot gives no 5m/1h split; like unsplit Claude writes, the default 5 minute TTL is assumed.
-        let tokens = TokenCounts(input: input, output: output, reasoning: min(event.reasoningTokens, output),
-                                 cacheRead: cacheRead, cacheWrite5m: cacheWrite)
+        let tokens = tokens(input: event.inputTokens, output: event.outputTokens, cacheRead: event.cacheReadTokens,
+                            cacheWrite: event.cacheWriteTokens, reasoning: event.reasoningTokens,
+                            details: tokenDetails(event.tokenDetailsJSON))
         let nano = event.totalNanoAIU.map(Double.init)
         return UsageRecord(
-            dedupeKey: "cp:\(event.sessionID):\(event.id):\(event.createdAt ?? "")",
+            dedupeKey: "\(keyPrefix)\(event.sessionID):\(event.id):\(event.createdAt ?? "")",
             source: .copilotCLI, sessionID: event.sessionID, timestamp: timestamp, model: event.model,
             isSidechain: event.agentID != nil, agentID: event.agentID, tokens: tokens,
             nativeCost: nano.map { $0 / nanoAIUPerAIU }, nativeUSD: nano.map { $0 / nanoAIUPerAIU * usdPerAIU },
             requestMultiplier: event.requestMultiplier, turnIndex: event.turnIndex,
             cwd: nonEmpty(session?.cwd), gitBranch: nonEmpty(session?.branch))
+    }
+
+    // Copilot counts cache reads and writes inside `inputTokens`.
+    public static func tokens(input: Int, output: Int, cacheRead: Int, cacheWrite: Int, reasoning: Int,
+                              details: [String: Int] = [:]) -> TokenCounts {
+        let cacheRead = details["cache_read"] ?? cacheRead
+        let cacheWrite = details["cache_write"] ?? cacheWrite
+        let uncached = details["input"] ?? max(0, input - cacheRead - cacheWrite)
+        let output = details["output"] ?? output
+        // Copilot gives no 5m/1h split; like unsplit Claude writes, the default 5 minute TTL is assumed.
+        return TokenCounts(input: uncached, output: output, reasoning: min(reasoning, output), cacheRead: cacheRead,
+                           cacheWrite5m: cacheWrite)
     }
 
     public static func sessionUpdate(_ session: CopilotSession, usage: [UsageRecord] = []) -> SessionUpdate {

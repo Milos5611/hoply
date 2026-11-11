@@ -164,7 +164,7 @@ struct UpdateSettings: View {
                         get: { updates.automaticallyChecks },
                         set: { updates.setAutomaticallyChecks($0) }
                     ))
-                    Hint("Hoply checks once a day. A new version shows at the bottom of the panel; nothing installs until you choose it.")
+                    Hint("Hoply checks at launch and twice a day. A new version shows at the bottom of the panel; nothing installs until you choose it.")
                 } else if let error = updates.startError {
                     Hint("Updates are off: \(error)")
                 } else if model.isBundledApp {
@@ -383,6 +383,18 @@ struct NotificationSettings: View {
                 SectionTitle("Notifications")
                 SwitchRow("Notify when an agent needs me", isOn: $settings.notificationsEnabled)
                 Group {
+                    HStack {
+                        Text("Notify when a turn ends")
+                        Spacer()
+                        Picker("Notify when a turn ends", selection: $settings.turnNotificationDelay) {
+                            ForEach(AppSettings.turnNotificationDelays, id: \.self) { delay in
+                                Text(delay == 0 ? "Always" : "After \(Format.timeSpent(delay))").tag(delay)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    .help("For \"waiting for you\" banners, counted from the start of the turn. Permission prompts and questions always notify.")
                     SwitchRow("Claude limit alerts at 80% and 95%", isOn: $settings.limitAlertsEnabled)
                     SwitchRow("Local model offline for 2 minutes", isOn: $settings.localModelAlertsEnabled)
                     SwitchRow("Quiet hours", isOn: $settings.quietHoursEnabled)

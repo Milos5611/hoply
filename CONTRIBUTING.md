@@ -31,7 +31,7 @@ Opt-in tests that read your real data (read-only) and compare Hoply's totals wit
 
 ```bash
 HOPLY_REAL_TRANSCRIPTS=1 swift test --filter RealTranscriptsTests  # ingest the real ~/.claude into a temp DB, compare with cost-state
-HOPLY_REAL_COPILOT=1 swift test --filter RealCopilotTests          # ingest a temp copy of ~/.copilot/session-store.db, compare with its own sums
+HOPLY_REAL_COPILOT=1 swift test --filter RealCopilotTests          # ingest a temp copy of ~/.copilot (store + session files), compare with its own sums
 HOPLY_REAL_PROCESSES=1 swift test --filter ProcessScannerTests/testRealProcesses  # time a real process scan, print counts
 ```
 
@@ -123,8 +123,8 @@ Claude plan limits ◀── polls Anthropic ───────────�
 Agent records ◀── reads into the ledger ────────────┘
 ```
 
-Agent records are Claude Code's transcripts, Codex's session files and Copilot CLI's session store. Hoply is one
-app with its own small HTTP listener, so there is no daemon. The code is split into three targets, and
+Agent records are Claude Code's transcripts, Codex's session files and Copilot CLI's session store and session files.
+Hoply is one app with its own small HTTP listener, so there is no daemon. The code is split into three targets, and
 the split is the main rule: **logic that can be tested lives outside the app target.**
 
 - **`AgentKit`** is the platform-neutral core: HTTP parsing, routing, OTLP decoding (JSON and protobuf, with a
@@ -147,8 +147,9 @@ a raw payload. Once a session has sent a hook, hooks own its state and telemetry
 in delayed batches.
 
 The usage ledger is a SQLite file in `~/Library/Application Support/Hoply/`. Each agent has exactly one source of
-truth (Claude Code: transcripts; Codex CLI: its session files; Copilot CLI: its `session-store.db`; Copilot in
-JetBrains and Qwen Code: the OpenTelemetry Hoply receives), so nothing is counted twice. Every row has a stable dedupe
+truth (Claude Code: transcripts; Codex CLI: its session files; Copilot CLI: its `session-store.db` or, per session,
+its `session-state/<id>/events.jsonl`, whichever recorded the session first; Copilot in JetBrains and Qwen Code: the
+OpenTelemetry Hoply receives), so nothing is counted twice. Every row has a stable dedupe
 key, writes are idempotent upserts, and rows are never deleted: the agents delete their own records after a while, so
 Hoply's file is the long-term history. Unknown models are stored unpriced, never as $0.
 
@@ -169,14 +170,14 @@ Sources/AgentKit/          platform-neutral core
   Approvals/               Approve from Hoply (held permission requests)
   Connect/                 agent hook config: event lists, commands, transforms
   Settings/                AppSettings with lenient per-key decoding
-  Usage/                   usage records, Claude transcript and Codex rollout parsers, Copilot and OTel usage mappers
+  Usage/                   usage records, Claude transcript, Codex rollout and Copilot events parsers, Copilot and OTel usage mappers
   Pricing/                 price table (bundled as a string literal), cost-state calibration
   Projects/                cwd → project resolver (repo, worktree, folder, home, scratch), session grouping
   ModelServers/            servers, engines, per-engine metric names, detection
   Cleanup/ Git/ Metrics/ Notifications/ Palette/ Processes/ Remote/ Support/ Updates/
 Sources/AgentSystem/       macOS I/O adapters
   SQLite/ Store/           SQLite wrapper, schema + migrations, Store (the only writer), StoreReader (queries)
-  Ingest/                  file tailer, FSEvents watcher, transcript / Codex / Copilot store ingesters, coordinator
+  Ingest/                  file tailer, FSEvents watcher, transcript / Codex / Copilot store and events ingesters, coordinator
   Connect/                 AgentConnector (writes agent config) and the --connect CLI
   Processes/               process scans through libproc, process cwd (the OTel `process.pid` fallback), dev servers
   Remote/                  Keychain, model server client

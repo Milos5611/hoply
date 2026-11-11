@@ -103,14 +103,17 @@ public struct NotificationPreferences: Sendable, Equatable {
     public var mutedProjectRoots: Set<String>
     public var limitAlerts: Bool
     public var localModelAlerts: Bool
+    public var turnNotificationDelay: TimeInterval
 
     public init(enabled: Bool = true, quietHours: QuietHours? = nil, mutedProjectRoots: Set<String> = [],
-                limitAlerts: Bool = true, localModelAlerts: Bool = true) {
+                limitAlerts: Bool = true, localModelAlerts: Bool = true,
+                turnNotificationDelay: TimeInterval = AppSettings().turnNotificationDelay) {
         self.enabled = enabled
         self.quietHours = quietHours
         self.mutedProjectRoots = mutedProjectRoots
         self.limitAlerts = limitAlerts
         self.localModelAlerts = localModelAlerts
+        self.turnNotificationDelay = turnNotificationDelay
     }
 
     public init(settings: AppSettings) {
@@ -118,7 +121,8 @@ public struct NotificationPreferences: Sendable, Equatable {
                   quietHours: settings.quietHoursEnabled
                       ? QuietHours(start: settings.quietHoursStart, end: settings.quietHoursEnd) : nil,
                   mutedProjectRoots: Set(settings.mutedProjectRoots),
-                  limitAlerts: settings.limitAlertsEnabled, localModelAlerts: settings.localModelAlertsEnabled)
+                  limitAlerts: settings.limitAlertsEnabled, localModelAlerts: settings.localModelAlertsEnabled,
+                  turnNotificationDelay: settings.turnNotificationDelay)
     }
 }
 
@@ -127,7 +131,6 @@ public struct NotificationPolicy: Sendable {
     public var calendar: Calendar
 
     public static let cooldown: TimeInterval = 120
-    public static let minimumWork: TimeInterval = 30
     public static let limitThresholds: [Double] = [80, 95]
     public static let offlineAlertAfter: TimeInterval = 120
     public static let offlineCheckGap: TimeInterval = 90
@@ -198,7 +201,7 @@ public struct NotificationPolicy: Sendable {
         }
         lastPosted = lastPosted.filter { now.timeIntervalSince($0.value) < Self.cooldown }
 
-        guard change.from != change.to, let cause = Self.cause(of: change) else { return actions }
+        guard change.from != change.to, let cause = cause(of: change) else { return actions }
         let cooldown = Cooldown(session: session.key, cause: cause)
         guard preferences.enabled, !isQuiet(at: now), !isMuted(session, project: project),
               lastPosted[cooldown] == nil else { return actions }
@@ -224,13 +227,13 @@ public struct NotificationPolicy: Sendable {
         NotificationActions(withdraw: [Self.notificationID(for: key)])
     }
 
-    private static func cause(of change: StateChange) -> NotificationCause? {
+    private func cause(of change: StateChange) -> NotificationCause? {
         switch change.to {
         case .needsPermission:
             return .permission
         case .yourTurn where change.session.awaitsInput:
             return .input
-        case .yourTurn where change.from == .working && change.previousDuration >= minimumWork:
+        case .yourTurn where change.from == .working && change.turnDuration >= preferences.turnNotificationDelay:
             return .yourTurn
         default:
             return nil

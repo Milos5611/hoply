@@ -43,12 +43,13 @@ public actor Store {
     public func apply(_ batch: LedgerBatch, cursor: IngestCursor? = nil) throws -> Set<SessionKey> {
         try db.transaction {
             var touched = Set<SessionKey>()
-            for update in batch.sessions {
+            let foreign = try sessionsOwnedElsewhere(batch)
+            for update in batch.sessions where !foreign.contains(update.key) {
                 try upsert(update)
                 touched.insert(update.key)
             }
             var turns = Set<CopilotTurn>()
-            for record in batch.usage {
+            for record in batch.usage where !foreign.contains(SessionKey(source: record.source, id: record.sessionID)) {
                 try upsert(record)
                 touched.insert(SessionKey(source: record.source, id: record.sessionID))
                 if record.requestMultiplier != nil {
@@ -69,6 +70,16 @@ public actor Store {
             try record(batch.prompts, touched: &touched)
             if let cursor { try save(cursor) }
             return touched
+        }
+    }
+
+    private func sessionsOwnedElsewhere(_ batch: LedgerBatch) throws -> Set<SessionKey> {
+        guard let origin = batch.origin, !origin.isEmpty else { return [] }
+        let keys = Set(batch.sessions.map(\.key) + batch.usage.map { SessionKey(source: $0.source, id: $0.sessionID) })
+        return try keys.filter { key in
+            try db.queryOne("""
+                SELECT 1 FROM usage WHERE source = ? AND session_id = ? AND substr(dedupe_key, 1, ?) <> ? LIMIT 1
+                """, [key.source.rawValue, key.id, origin.count, origin]) { _ in true } == true
         }
     }
 

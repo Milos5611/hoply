@@ -5,6 +5,10 @@ public struct StateChange: Sendable, Equatable {
     public let from: SessionState?
     public let to: SessionState
     public let previousDuration: TimeInterval
+
+    public var turnDuration: TimeInterval {
+        session.turnStartedAt.map { session.stateSince.timeIntervalSince($0) } ?? previousDuration
+    }
 }
 
 public struct SessionBoard: Sendable {
@@ -117,12 +121,15 @@ public struct SessionBoard: Sendable {
         // Hooks own the state once they have spoken; delayed telemetry must not undo it.
         if !event.fromHook && session.hasLiveState { next = nil }
         if session.state == .ended && event.kind != .sessionStarted && existing != nil { next = nil }
+        // Work after a permission prompt or an answered question continues the turn; anything else starts one.
+        let resting = existing == nil || session.state == .idle || (session.state == .yourTurn && !session.awaitsInput)
         if next != nil { session.awaitsInput = asksQuestion || (keepsQuestion && session.awaitsInput) }
 
         var change: StateChange?
         if let next, next != session.state || existing == nil {
             let from = existing?.state
             let previousDuration = existing.map { event.time.timeIntervalSince($0.stateSince) } ?? 0
+            if resting, next == .working || next == .needsPermission { session.turnStartedAt = event.time }
             session.state = next
             session.stateSince = event.time
             change = StateChange(session: session, from: from, to: next, previousDuration: previousDuration)
@@ -202,6 +209,19 @@ public struct SessionBoard: Sendable {
 
     public mutating func dismiss(_ key: SessionKey) {
         sessions[key] = nil
+    }
+
+    // Never creates a session: backfill reports models for sessions that ended long ago.
+    @discardableResult
+    public mutating func noteModels(_ models: [SessionKey: String]) -> Bool {
+        guard !models.isEmpty else { return false }
+        var changed = false
+        for (key, session) in sessions {
+            guard let model = models[key], !model.isEmpty, session.model != model else { continue }
+            sessions[key]?.model = model
+            changed = true
+        }
+        return changed
     }
 
     static func title(from prompt: String?) -> String? {

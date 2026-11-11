@@ -59,7 +59,7 @@ final class NotificationPolicyTests: XCTestCase {
 
     func testYourTurnIsPassiveAndOnlyAfterRealWork() throws {
         send("a", .promptSubmitted("Quick one"), at: 0)
-        XCTAssertTrue(send("a", .turnFinished(nil), at: 29).post.isEmpty, "under 30 s of work")
+        XCTAssertTrue(send("a", .turnFinished(nil), at: 9).post.isEmpty, "under the 10 s default")
         send("a", .promptSubmitted("Longer"), at: 40)
         let actions = send("a", .turnFinished(nil), at: 75)
         let request = try XCTUnwrap(actions.post.first)
@@ -73,6 +73,44 @@ final class NotificationPolicyTests: XCTestCase {
         send("b", .promptSubmitted("x"), at: 0)
         send("b", .needsPermission(nil), at: 50)
         XCTAssertTrue(send("b", .turnFinished(nil), at: 100).post.isEmpty, "your-turn only follows work")
+    }
+
+    func testTurnDelayComesFromTheSettings() {
+        XCTAssertEqual(NotificationPreferences().turnNotificationDelay, 10)
+        var settings = AppSettings()
+        settings.turnNotificationDelay = 60
+        policy.preferences = NotificationPreferences(settings: settings)
+        send("a", .promptSubmitted("x"), at: 0)
+        XCTAssertTrue(send("a", .turnFinished(nil), at: 59).post.isEmpty)
+        send("b", .promptSubmitted("x"), at: 0)
+        XCTAssertEqual(send("b", .turnFinished(nil), at: 60).post.first?.cause, .yourTurn)
+    }
+
+    func testDelayZeroAlwaysNotifies() {
+        policy.preferences.turnNotificationDelay = 0
+        send("a", .promptSubmitted("x"), at: 0)
+        XCTAssertEqual(send("a", .turnFinished(nil), at: 1).post.first?.cause, .yourTurn)
+    }
+
+    func testAPromptMidTurnDoesNotRestartTheTurnClock() {
+        policy.preferences.turnNotificationDelay = 30
+        send("a", .promptSubmitted("x"), at: 0)
+        XCTAssertEqual(send("a", .needsPermission("Allow Bash?"), at: 3).post.first?.cause, .permission)
+        send("a", .toolFinished("Bash"), at: 25)
+        XCTAssertEqual(send("a", .turnFinished(nil), at: 40).post.first?.cause, .yourTurn,
+                       "40 s since the prompt, though only 15 s since the permission prompt")
+
+        policy.preferences.turnNotificationDelay = 10
+        send("b", .promptSubmitted("x"), at: 0)
+        XCTAssertEqual(send("b", .questionAsked("Which file?"), at: 3).post.first?.cause, .input)
+        send("b", .toolFinished("AskUserQuestion"), at: 8)
+        XCTAssertEqual(send("b", .turnFinished(nil), at: 15).post.first?.cause, .yourTurn,
+                       "answering a question continues the turn")
+
+        send("c", .promptSubmitted("x"), at: 0)
+        send("c", .needsPermission(nil), at: 3)
+        send("c", .toolFinished("Bash"), at: 4)
+        XCTAssertTrue(send("c", .turnFinished(nil), at: 9).post.filter { $0.cause == .yourTurn }.isEmpty)
     }
 
     func testLeavingAWaitingStateWithdrawsItsNotification() {

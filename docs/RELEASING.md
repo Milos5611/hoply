@@ -122,8 +122,8 @@ A tester installs with `brew install --cask milos5611/hoply/hoply` (Homebrew add
 DMG from https://hoply.dev/download, then connects their agents in Settings → Agents. The cask declares
 `auto_updates`, so `brew upgrade` leaves Hoply to Sparkle unless `--greedy` is passed; `brew uninstall --zap --cask
 hoply` also deletes Hoply's data, usage history included, but not the agent hooks, so disconnect agents in Settings →
-Agents first. Release builds check for updates once a day (Settings → Updates turns that off) and show a new version
-at the bottom of the panel; "Check for Updates…" is also in the status item's right-click menu. Builds from
-`scripts/install.sh` or `swift run` never update themselves.
+Agents first. Release builds check for updates at launch and twice a day (Settings → Updates turns that off) and show
+a new version at the bottom of the panel; "Check for Updates…" is also in the status item's right-click menu. Builds
+from `scripts/install.sh` or `swift run` never update themselves.
 
 The site (hoply.dev) gets a changelog entry and its `softwareVersion` / `datePublished` bumped for each release.

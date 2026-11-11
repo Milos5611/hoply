@@ -23,6 +23,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var paletteEnabled = true
     public var paletteHotKey = HotKeyCombo.optionSpace
     public var approveFromHoply = false
+    public var turnNotificationDelay: Double = 10
+
+    public static let turnNotificationDelays: [Double] = [0, 10, 30, 60, 120]
 
     public init() {}
 
@@ -66,6 +69,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         paletteHotKey = container.lenient(HotKeyCombo.self, .paletteHotKey).flatMap { $0.isValid ? $0 : nil }
             ?? defaults.paletteHotKey
         approveFromHoply = container.lenient(Bool.self, .approveFromHoply) ?? defaults.approveFromHoply
+        turnNotificationDelay = container.lenient(Double.self, .turnNotificationDelay)
+            .flatMap { Self.turnNotificationDelays.contains($0) ? $0 : nil } ?? defaults.turnNotificationDelay
     }
 
     private enum LegacyKeys: String, CodingKey {

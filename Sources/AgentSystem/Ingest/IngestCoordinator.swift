@@ -4,6 +4,7 @@ import Foundation
 public struct IngestUpdate: Sendable, Equatable {
     public var progress: IngestProgress
     public var changedSessions: Set<SessionKey>
+    public var models: [SessionKey: String] = [:]
 }
 
 public actor IngestCoordinator {
@@ -15,6 +16,7 @@ public actor IngestCoordinator {
     private let claude: ClaudeTranscriptIngester
     private let copilot: CopilotStoreIngester?
     private let codex: CodexRolloutIngester?
+    private let copilotEvents: CopilotEventsIngester?
     private let watch: Bool
     private let rescanInterval: Duration
     private let copilotPollInterval: Duration
@@ -22,6 +24,9 @@ public actor IngestCoordinator {
     private let chunkBytes: Int
     private var cursors: [String: FileCursor] = [:]
     private var codexStates: [String: CodexRolloutState] = [:]
+    private var copilotEventStates: [String: CopilotEventsState] = [:]
+    private var reportedModels: [SessionKey: String] = [:]
+    private var pendingModels: [SessionKey: String] = [:]
     private var pending: [String] = []
     private var backfillRemaining: Set<String> = []
     private var pendingChanges: Set<SessionKey> = []
@@ -43,13 +48,15 @@ public actor IngestCoordinator {
     private var telemetryCwds: [SessionKey: String] = [:]
 
     public init(store: Store, claude: ClaudeTranscriptIngester = ClaudeTranscriptIngester(),
-                copilot: CopilotStoreIngester? = nil, codex: CodexRolloutIngester? = nil, watch: Bool = true,
+                copilot: CopilotStoreIngester? = nil, codex: CodexRolloutIngester? = nil,
+                copilotEvents: CopilotEventsIngester? = nil, watch: Bool = true,
                 rescanInterval: Duration = .seconds(60),
                 copilotPollInterval: Duration = .seconds(10), copilotBatchSize: Int = 500, chunkBytes: Int = 4 << 20) {
         self.store = store
         self.claude = claude
         self.copilot = copilot
         self.codex = codex
+        self.copilotEvents = copilotEvents
         self.watch = watch
         self.rescanInterval = rescanInterval
         self.copilotPollInterval = copilotPollInterval
@@ -133,6 +140,13 @@ public actor IngestCoordinator {
         await drain()
     }
 
+    public func tailCopilotSessions(_ ids: [String]) async {
+        guard let copilotEvents else { return }
+        for path in ids.compactMap(copilotEvents.eventsPath) where FileTailer.status(of: path) != nil {
+            await tailTranscript(atPath: path)
+        }
+    }
+
     public func rescan() async {
         guard !stopped else { return }
         if watch, watcher?.isRunning != true { startWatcher() }
@@ -149,10 +163,11 @@ public actor IngestCoordinator {
         do {
             try await store.resetCursors(source: .claudeCode)
             if codex != nil { try await store.resetCursors(source: .codexCLI) }
+            if copilot != nil || copilotEvents != nil { try await store.resetCursors(source: .copilotCLI) }
             cursors = try await fileCursors()
             codexStates = [:]
+            copilotEventStates = [:]
             if let copilot {
-                try await store.resetCursors(source: .copilotCLI)
                 copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath]
                 copilotSignature = nil
                 copilotSessions = [:]
@@ -236,7 +251,7 @@ public actor IngestCoordinator {
         if !moved.isEmpty {
             pendingChanges.formUnion(try await store.apply(LedgerBatch(sessions: moved.map {
                 CopilotUsageMapper.sessionUpdate($0)
-            })))
+            }, origin: CopilotUsageMapper.keyPrefix)))
             for session in moved { copilotSessions[session.id] = session }
         }
         return connection.schemaVersion
@@ -326,6 +341,7 @@ public actor IngestCoordinator {
     private func process(_ path: String) async {
         let inBackfill = backfillRemaining.contains(path)
         let isRollout = codex?.isRollout(path) ?? false
+        let isCopilotEvents = copilotEvents?.isEventsFile(path) ?? false
         var cursor = cursors[path]
         do {
             while true {
@@ -333,12 +349,20 @@ public actor IngestCoordinator {
                 if chunk.lines.isEmpty, chunk.cursor == cursor { break }
                 var batch: LedgerBatch
                 var codexState: CodexRolloutState?
+                var copilotState: CopilotEventsState?
                 if isRollout {
                     var state = chunk.startOffset == 0
                         ? CodexRolloutState(path: path) : try rolloutState(path, upTo: chunk.startOffset)
                     batch = CodexRolloutParser.batch(lines: chunk.lines, state: &state, transcriptPath: path,
                                                      startsAtFileStart: chunk.startOffset == 0)
                     codexState = state
+                } else if isCopilotEvents {
+                    let workspace = copilotEvents?.workspace(forEventsFile: path)
+                    var state = chunk.startOffset == 0
+                        ? CopilotEventsState(path: path)
+                        : try copilotEventsState(path, upTo: chunk.startOffset, workspace: workspace)
+                    batch = CopilotEventsParser.batch(lines: chunk.lines, state: &state, workspace: workspace)
+                    copilotState = state
                 } else {
                     batch = ClaudeTranscriptIngester.batch(lines: chunk.lines, path: path, startOffset: chunk.startOffset)
                     if chunk.startOffset == 0, let info = ClaudeTranscriptIngester.subagentInfo(forTranscript: path) {
@@ -348,11 +372,16 @@ public actor IngestCoordinator {
                 // If work stops before the end, `needsWork` must still see the rest of the file as unread.
                 var committed = chunk.cursor
                 if !chunk.atEnd { committed.size = committed.offset }
-                let changed = try await store.apply(batch, cursor: IngestCursor(source: isRollout ? .codexCLI : .claudeCode,
-                                                                                path: path, file: committed))
+                let source: AgentSource = isRollout ? .codexCLI : isCopilotEvents ? .copilotCLI : .claudeCode
+                let changed = try await store.apply(batch, cursor: IngestCursor(source: source, path: path,
+                                                                                file: committed))
                 cursor = committed
                 cursors[path] = committed
                 if let codexState { codexStates[path] = codexState }
+                if let copilotState {
+                    copilotEventStates[path] = copilotState
+                    noteModel(copilotState)
+                }
                 pendingChanges.formUnion(changed)
                 if inBackfill {
                     progress.bytesDone += chunk.bytesConsumed
@@ -374,15 +403,37 @@ public actor IngestCoordinator {
     private func fileCursors() async throws -> [String: FileCursor] {
         var result = try await store.cursors(source: .claudeCode)
         if codex != nil { result.merge(try await store.cursors(source: .codexCLI)) { claude, _ in claude } }
+        if let copilotEvents {
+            let events = try await store.cursors(source: .copilotCLI).filter { copilotEvents.isEventsFile($0.key) }
+            result.merge(events) { claude, _ in claude }
+        }
         return result
     }
 
     private func discover() -> [ClaudeTranscriptIngester.TranscriptFile] {
-        (claude.discover() + (codex?.discover() ?? [])).sorted { $0.stat.modified > $1.stat.modified }
+        (claude.discover() + (codex?.discover() ?? []) + (copilotEvents?.discover() ?? []))
+            .sorted { $0.stat.modified > $1.stat.modified }
     }
 
     private func isLedgerFile(_ path: String) -> Bool {
-        claude.isTranscript(path) || (codex?.isRollout(path) ?? false)
+        claude.isTranscript(path) || (codex?.isRollout(path) ?? false) || (copilotEvents?.isEventsFile(path) ?? false)
+    }
+
+    private func copilotEventsState(_ path: String, upTo offset: Int64,
+                                    workspace: CopilotWorkspace?) throws -> CopilotEventsState {
+        if let known = copilotEventStates[path] { return known }
+        var state = CopilotEventsState(path: path)
+        if let head = try FileTailer.read(path: path, from: nil, maxBytes: Int(offset)) {
+            _ = CopilotEventsParser.batch(lines: head.lines, state: &state, workspace: workspace)
+        }
+        return state
+    }
+
+    private func noteModel(_ state: CopilotEventsState) {
+        let key = SessionKey(source: .copilotCLI, id: state.sessionID)
+        guard let model = state.model, reportedModels[key] != model else { return }
+        reportedModels[key] = model
+        pendingModels[key] = model
     }
 
     // A tail that starts mid-file after a relaunch needs the model and ids from the lines before it.
@@ -413,7 +464,8 @@ public actor IngestCoordinator {
     }
 
     private func startWatcher() {
-        let paths = ([claude.projectsDirectory] + (codex?.watchedDirectories ?? []))
+        let paths = ([claude.projectsDirectory] + (codex?.watchedDirectories ?? [])
+                     + (copilotEvents?.watchedDirectories ?? []))
             .filter { FileManager.default.fileExists(atPath: $0) }
         guard !paths.isEmpty else { return }
         let watcher = DirectoryWatcher(paths: paths, latency: 0.5) { [weak self] paths in
@@ -426,7 +478,8 @@ public actor IngestCoordinator {
         let now = ContinuousClock.now
         if !force, let lastEmit, now - lastEmit < .milliseconds(250) { return }
         lastEmit = now
-        continuation.yield(IngestUpdate(progress: progress, changedSessions: pendingChanges))
+        continuation.yield(IngestUpdate(progress: progress, changedSessions: pendingChanges, models: pendingModels))
         pendingChanges = []
+        pendingModels = [:]
     }
 }

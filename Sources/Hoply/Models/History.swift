@@ -134,6 +134,8 @@ final class History {
     @ObservationIgnored private var spanTask: Task<Void, Never>?
     @ObservationIgnored private var isQuitting = false
     @ObservationIgnored var onLoaded: ((DashboardPage) -> Void)?
+    @ObservationIgnored private(set) var liveModels: [SessionKey: String] = [:]
+    @ObservationIgnored var onLiveModels: (() -> Void)?
     @ObservationIgnored private var sampleTask: Task<Void, Never>?
     // Counter resets asked for per server, and how many a later sample write has settled. A Store opened in
     // between re-seeds its baselines from the old connection's buckets, so an unsettled reset is repeated on it.
@@ -219,6 +221,10 @@ final class History {
 
     private func receive(_ update: IngestUpdate) {
         if progress != update.progress { progress = update.progress }
+        if !update.models.isEmpty {
+            liveModels.merge(update.models) { _, new in new }
+            onLiveModels?()
+        }
         let day = Calendar.current.startOfDay(for: Date())
         if !update.changedSessions.isEmpty || day != refreshedDay {
             scheduleRefresh()
@@ -307,9 +313,9 @@ final class History {
         scheduleRefresh(after: .zero)
     }
 
-    func pollCopilot() {
+    func pollCopilot(sessions: Set<String> = []) {
         guard let ledger else { return }
-        Task { await ledger.pollCopilot() }
+        Task { await ledger.pollCopilot(sessions: sessions.sorted()) }
     }
 
     func resolveProjects(_ cwds: [String]) async -> [String: ProjectRef]? {

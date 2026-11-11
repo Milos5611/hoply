@@ -8,7 +8,9 @@ public enum ModelName {
     public static func display(_ id: String) -> String {
         let trimmed = id.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "Unknown model" }
-        guard let parts = claudeParts(trimmed) else { return openAIName(trimmed) ?? lastPathComponent(trimmed) }
+        guard let parts = claudeParts(trimmed) else {
+            return openAIName(trimmed) ?? titledName(trimmed) ?? lastPathComponent(trimmed)
+        }
         let name = parts.family.prefix(1).uppercased() + parts.family.dropFirst()
         return parts.version.isEmpty ? name : "\(name) \(parts.version)"
     }
@@ -39,6 +41,14 @@ public enum ModelName {
               version.allSatisfy({ $0.isNumber || $0 == "." || $0.isLetter }) else { return nil }
         let rest = tokens.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }
         return (["GPT-" + version] + rest).joined(separator: " ")
+    }
+
+    private static let titledFamilies: Set<String> = ["kimi", "gemini", "grok"]
+
+    private static func titledName(_ id: String) -> String? {
+        let tokens = lastPathComponent(id).lowercased().split(separator: "-")
+        guard tokens.count > 1, let family = tokens.first, titledFamilies.contains(String(family)) else { return nil }
+        return tokens.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
     static func claudeVersion(_ id: String) -> (family: String, version: [Int])? {

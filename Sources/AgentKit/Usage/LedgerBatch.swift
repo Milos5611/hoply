@@ -44,13 +44,15 @@ public struct LedgerBatch: Sendable, Equatable {
     public var sessions: [SessionUpdate]
     public var subagents: [SubagentInfo]
     public var prompts: [PromptRecord]
+    public var origin: String?
 
     public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = [], subagents: [SubagentInfo] = [],
-                prompts: [PromptRecord] = []) {
+                prompts: [PromptRecord] = [], origin: String? = nil) {
         self.usage = usage
         self.sessions = sessions
         self.subagents = subagents
         self.prompts = prompts
+        self.origin = origin
     }
 
     public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty && subagents.isEmpty && prompts.isEmpty }

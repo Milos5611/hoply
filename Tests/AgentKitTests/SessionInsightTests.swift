@@ -308,7 +308,7 @@ final class MonogramTests: XCTestCase {
     func testLetters() {
         let cases: [(String, String)] = [
             ("hoply", "H"), ("yasm-backend", "YB"), ("yasm_backend", "YB"), ("yasm.backend.api", "YB"),
-            ("yasmBackend", "YB"), ("HTTPServer", "HS"), ("Mizu UI", "MU"), ("fiba", "F"), ("fiba2", "F2"),
+            ("yasmBackend", "YB"), ("HTTPServer", "HS"), ("Mobile UI", "MU"), ("fiba", "F"), ("fiba2", "F2"),
             ("v2", "V2"), ("3d-engine", "3D"), ("2048", "2"), ("UI", "UI"), ("API", "A"), (".github", "G"),
             ("@scope/pkg", "SP"), ("проект", "П"), ("мой проект", "МП"), ("東京", "東京"), ("東京プロジェクト", "東"),
             ("🚀 launch", "🚀"), ("launch 🚀", "L"), ("", "?"), ("   ", "?"), ("---", "?"), ("Unassigned", "U"),

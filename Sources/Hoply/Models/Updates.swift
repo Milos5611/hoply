@@ -34,6 +34,10 @@ final class Updates: NSObject {
             startError = error.localizedDescription
             return
         }
+        // Only right after start(): Sparkle's own cycle begins on the next run loop turn and would drop a later call.
+        if updater.automaticallyChecksForUpdates {
+            updater.checkForUpdatesInBackground()
+        }
         self.updater = updater
         canCheckObservation = updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             Task { @MainActor in self?.canCheck = updater.canCheckForUpdates }
