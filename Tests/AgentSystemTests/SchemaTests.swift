@@ -107,7 +107,7 @@ final class SchemaTests: XCTestCase {
             INSERT INTO sessions (source, id, project_id, cwd, turns) VALUES ('qwen-code', 'q1', 1, '/p/fiba/src', 3);
             INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, output) VALUES ('qw:q1:p1:1', 'qwen-code', 'q1', 1, 1, 10);
             """)
-        try Schema.migrate(db, databasePath: path)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(4)))
         XCTAssertEqual(try db.userVersion(), 4)
         XCTAssertTrue(try tables(db).isSuperset(of: ["session_prompts", "dismissed_suggestions"]))
         XCTAssertEqual(try db.queryOne("SELECT project_origin, turns FROM sessions") { "\($0.text(0)) \($0.int(1))" }, "auto 3")
@@ -117,6 +117,27 @@ final class SchemaTests: XCTestCase {
         let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
         XCTAssertEqual(try backup.userVersion(), 3, "the v3 ledger was backed up before migrating")
         XCTAssertFalse(try tables(backup).contains("session_prompts"))
+    }
+
+    func testV5AddsLimitPlansAndContextWindowsToAFilledV4Ledger() throws {
+        let directory = try TempDirectory()
+        let path = directory.path("hoply.sqlite")
+        let db = try SQLiteConnection(path: path)
+        try Schema.configure(db)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(4)))
+        try db.execute("""
+            INSERT INTO sessions (source, id, turns) VALUES ('codex-cli', 'c1', 2);
+            INSERT INTO limit_samples (kind, ts, utilization, resets_at) VALUES ('five_hour', 1, 40, 18001);
+            """)
+        try Schema.migrate(db, databasePath: path)
+        XCTAssertEqual(try db.userVersion(), 5)
+        XCTAssertEqual(try db.queryOne("SELECT turns, context_window IS NULL FROM sessions") { "\($0.int(0)) \($0.bool(1))" },
+                       "2 true")
+        XCTAssertEqual(try db.queryOne("SELECT kind, utilization, plan IS NULL FROM limit_samples") {
+            "\($0.text(0)) \($0.int(1)) \($0.bool(2))"
+        }, "five_hour 40 true", "Claude rows keep their kind and gain no plan")
+        let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
+        XCTAssertEqual(try backup.userVersion(), 4, "the v4 ledger was backed up before migrating")
     }
 
     func testFailedMigrationRollsBack() throws {

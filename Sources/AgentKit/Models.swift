@@ -121,6 +121,24 @@ public struct LiveSubagent: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct SubagentActivity: Sendable, Equatable, Hashable {
+    public var session: SessionKey
+    public var agentID: String
+    public var type: String?
+    public var time: Date
+    public var ended: Bool
+
+    public static let freshness: TimeInterval = 300
+
+    public init(session: SessionKey, agentID: String, type: String? = nil, time: Date, ended: Bool) {
+        self.session = session
+        self.agentID = agentID
+        self.type = type
+        self.time = time
+        self.ended = ended
+    }
+}
+
 public struct AgentEvent: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
         case sessionStarted

@@ -16,11 +16,13 @@ public struct SessionUpdate: Sendable, Equatable {
     public var transcriptPath: String?
     public var prompts: Int
     public var resetsTurns: Bool
+    public var contextWindow: Int?
 
     public init(key: SessionKey, firstAt: Date? = nil, lastAt: Date? = nil, cwd: String? = nil, branch: String? = nil,
                 placeIsAuthoritative: Bool = true, title: String? = nil, titleRank: Int = 0, prURL: String? = nil,
                 nativeCostUSD: Double? = nil, linesAdded: Int? = nil, linesRemoved: Int? = nil,
-                transcriptPath: String? = nil, prompts: Int = 0, resetsTurns: Bool = false) {
+                transcriptPath: String? = nil, prompts: Int = 0, resetsTurns: Bool = false,
+                contextWindow: Int? = nil) {
         self.key = key
         self.firstAt = firstAt
         self.lastAt = lastAt
@@ -36,6 +38,7 @@ public struct SessionUpdate: Sendable, Equatable {
         self.transcriptPath = transcriptPath
         self.prompts = prompts
         self.resetsTurns = resetsTurns
+        self.contextWindow = contextWindow
     }
 }
 
@@ -45,17 +48,25 @@ public struct LedgerBatch: Sendable, Equatable {
     public var subagents: [SubagentInfo]
     public var prompts: [PromptRecord]
     public var origin: String?
+    public var limits: [LimitSample]
+    // Not stored; for the live board only.
+    public var activity: [SubagentActivity]
 
     public init(usage: [UsageRecord] = [], sessions: [SessionUpdate] = [], subagents: [SubagentInfo] = [],
-                prompts: [PromptRecord] = [], origin: String? = nil) {
+                prompts: [PromptRecord] = [], origin: String? = nil, limits: [LimitSample] = [],
+                activity: [SubagentActivity] = []) {
         self.usage = usage
         self.sessions = sessions
         self.subagents = subagents
         self.prompts = prompts
         self.origin = origin
+        self.limits = limits
+        self.activity = activity
     }
 
-    public var isEmpty: Bool { usage.isEmpty && sessions.isEmpty && subagents.isEmpty && prompts.isEmpty }
+    public var isEmpty: Bool {
+        usage.isEmpty && sessions.isEmpty && subagents.isEmpty && prompts.isEmpty && limits.isEmpty
+    }
 }
 
 extension ClaudeTranscriptBatch {

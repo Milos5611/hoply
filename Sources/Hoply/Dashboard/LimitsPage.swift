@@ -10,38 +10,31 @@ struct LimitsPage: View {
         let data = history.limits
         let now = Date()
         let live = model.claudeLimits
-        let windows = windows(data, now: now)
+        let windows = claudeWindows(data, now: now)
+        let codex = codexWindows(data)
         let extras = model.settings.claudeLimitsEnabled && (live?.extraUsage != nil || live?.spend != nil) ? live : nil
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PageHeader(title: "Limits", subtitle: "Claude plan usage windows and Copilot premium requests")
+                PageHeader(title: "Limits", subtitle: "Claude and Codex plan windows, and Copilot premium requests")
                 HistoryBanner()
+                if !codex.isEmpty {
+                    LimitsProviderHeader(provider: .claude, detail: "Read with Claude Code's login every 3 minutes")
+                }
                 if !model.settings.claudeLimitsEnabled {
                     LimitsConnectCard()
                 } else if windows.isEmpty {
                     LimitsLoadingCard()
                 } else {
-                    Grid(horizontalSpacing: 12, verticalSpacing: 12) {
-                        ForEach(Array(stride(from: 0, to: windows.count, by: 2)), id: \.self) { start in
-                            GridRow {
-                                ForEach(windows[start..<min(start + 2, windows.count)], id: \.kind) { projection in
-                                    LimitWindowCard(projection: projection,
-                                                    title: LimitsStyle.title(projection.kind, live: live),
-                                                    spend: data?.windowSpend[projection.kind], now: now)
-                                }
-                                if start + 1 == windows.count {
-                                    if let extras {
-                                        PlanExtrasCard(limits: extras, stacked: true)
-                                    } else {
-                                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    LimitWindowGrid(windows: windows, spend: data?.windowSpend ?? [:], live: live, extras: extras, now: now)
                 }
                 if let extras, windows.count % 2 == 0 {
                     PlanExtrasCard(limits: extras)
+                }
+                if !codex.isEmpty {
+                    LimitsProviderHeader(provider: .codex, plan: codexPlan,
+                                         detail: "From Codex's session files: no login, no network")
+                        .padding(.top, 6)
+                    LimitWindowGrid(windows: codex, spend: data?.windowSpend ?? [:], live: nil, now: now)
                 }
                 if model.settings.claudeLimitsEnabled || !(data?.samples.isEmpty ?? true) {
                     LimitHistoryCard(data: data, now: now)
@@ -55,9 +48,9 @@ struct LimitsPage: View {
         }
     }
 
-    private func windows(_ data: LimitsData?, now: Date) -> [LimitsProjection] {
+    private func claudeWindows(_ data: LimitsData?, now: Date) -> [LimitsProjection] {
         guard model.settings.claudeLimitsEnabled else { return [] }
-        var projections = data?.projections ?? [:]
+        var projections = (data?.projections ?? [:]).filter { $0.key.provider == .claude }
         if projections.isEmpty, let live = model.claudeLimits {
             projections = LimitsProjection.projections(live.samples(at: model.claudeLimitsFetchedAt ?? now))
         }
@@ -69,10 +62,81 @@ struct LimitsPage: View {
         }
         return projections.keys.sorted().compactMap { projections[$0] }
     }
+
+    // Only the windows Codex still reports; once the page has loaded, a reading older than the projections'
+    // lookback has no card, so a Codex left unused for weeks doesn't keep a stale section.
+    private func codexWindows(_ data: LimitsData?) -> [LimitsProjection] {
+        let current = model.history.codexLimits
+        return current.keys.sorted().compactMap { kind in
+            guard let data else { return current[kind].flatMap { LimitsProjection(samples: [$0]) } }
+            return data.projections[kind]
+        }
+    }
+
+    private var codexPlan: String? {
+        Format.codexPlan(model.history.codexLimits.values.max { $0.ts < $1.ts }?.plan)
+    }
+}
+
+private struct LimitsProviderHeader: View {
+    let provider: LimitProvider
+    var plan: String?
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SourceBadge(source: provider.source, size: 22)
+            Text(provider.displayName)
+                .font(.system(size: 15, weight: .semibold))
+            if let plan {
+                LimitChip(text: "\(plan) plan", color: .primary)
+                    .help("The plan Codex reported with its latest reading")
+            }
+            Spacer(minLength: 12)
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 2)
+    }
+}
+
+private struct LimitWindowGrid: View {
+    let windows: [LimitsProjection]
+    let spend: [LimitKind: LedgerTotals]
+    let live: ClaudeLimits?
+    var extras: ClaudeLimits?
+    let now: Date
+
+    var body: some View {
+        Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+            ForEach(Array(stride(from: 0, to: windows.count, by: 2)), id: \.self) { start in
+                GridRow {
+                    ForEach(windows[start..<min(start + 2, windows.count)], id: \.kind) { projection in
+                        LimitWindowCard(projection: projection, title: LimitsStyle.title(projection.kind, live: live),
+                                        spend: spend[projection.kind], now: now)
+                    }
+                    if start + 1 == windows.count {
+                        if let extras {
+                            PlanExtrasCard(limits: extras, stacked: true)
+                        } else {
+                            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 enum LimitsStyle {
     static func color(_ kind: LimitKind) -> Color {
+        if kind.provider == .codex {
+            if kind.isModelScoped { return scopedColor(kind) }
+            if isShort(kind) { return Color(red: 0.06, green: 0.64, blue: 0.5) }
+            return kind.windowMinutes == 10_080 ? .blue : .purple
+        }
         switch kind {
         case .fiveHour: return SourceBadge.color(for: .claudeCode)
         case .sevenDay: return .blue
@@ -80,6 +144,10 @@ enum LimitsStyle {
         case .sevenDaySonnet: return .teal
         default: return scopedColor(kind)
         }
+    }
+
+    static func isShort(_ kind: LimitKind) -> Bool {
+        kind.windowLength < 86_400
     }
 
     private static func scopedColor(_ kind: LimitKind) -> Color {
@@ -92,18 +160,20 @@ enum LimitsStyle {
     }
 
     static func name(_ kind: LimitKind, live: ClaudeLimits?) -> String {
-        if !kind.isFixed, let scoped = live?.scoped.first(where: { $0.kind == kind }) {
+        if kind.provider == .claude, !kind.isFixed, let scoped = live?.scoped.first(where: { $0.kind == kind }) {
             return "Weekly \(scoped.displayName)"
         }
         return kind.displayName
     }
 
     static func title(_ kind: LimitKind, live: ClaudeLimits?) -> String {
-        kind == .fiveHour ? "5-hour window" : name(kind, live: live)
+        guard !kind.isModelScoped, kind.windowMinutes != 10_080 else { return name(kind, live: live) }
+        return "\(kind.windowName) window"
     }
 
-    static func coversAllModels(_ kind: LimitKind) -> Bool {
-        kind == .fiveHour || kind == .sevenDay
+    static func resetLabel(_ kind: LimitKind, name: String) -> String {
+        if kind.isModelScoped { return "\(name) reset" }
+        return kind.windowMinutes == 10_080 ? "Week reset" : "\(kind.windowName) reset"
     }
 
     static func paceLabel(_ band: LimitPace.Band) -> String {
@@ -138,7 +208,7 @@ struct LimitWindowCard: View {
         Card(prominent: true, padding: 16) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 6) {
-                    Image(systemName: "asterisk")
+                    Image(systemName: SourceBadge.symbol(for: projection.kind.provider.source))
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(LimitsStyle.color(projection.kind))
                     Text(title)
@@ -184,12 +254,13 @@ struct LimitWindowCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     Metric(value: burnRate, label: "Burn rate")
                     Metric(value: projectedEnd.map { "\(Int($0.rounded()))%" } ?? "–", label: "At reset")
-                    if LimitsStyle.coversAllModels(projection.kind) {
-                        Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv so far")
-                            .help("What Claude Code's usage in this window would cost on the API, from the usage ledger")
-                    } else {
+                    let agent = projection.kind.provider.source.displayName
+                    if projection.kind.isModelScoped {
                         Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv, all models")
-                            .help("What all of Claude Code's usage since this window started would cost on the API. The ledger doesn't split it by model per window.")
+                            .help("What all of \(agent)'s usage since this window started would cost on the API. The ledger doesn't split it by model per window.")
+                    } else {
+                        Metric(value: spend.map(Format.spend) ?? "–", label: "API equiv so far")
+                            .help("What \(agent)'s usage in this window would cost on the API, from the usage ledger")
                     }
                 }
             }
@@ -240,7 +311,8 @@ struct LimitWindowCard: View {
 
     private var burnRate: String {
         guard let rate = projection.burnRatePerHour else { return "–" }
-        return projection.kind == .fiveHour ? String(format: "%.1f%%/h", rate) : String(format: "%.1f%%/day", rate * 24)
+        return LimitsStyle.isShort(projection.kind) ? String(format: "%.1f%%/h", rate)
+                                                    : String(format: "%.1f%%/day", rate * 24)
     }
 
     private var outlook: (chip: String, sentence: String, color: Color) {
@@ -372,28 +444,57 @@ struct LimitHistoryCard: View {
     @Environment(AppModel.self) private var model
     let data: LimitsData?
     let now: Date
+    @State private var picked = LimitProvider.claude
 
     var body: some View {
         let history = model.history
         let days = data?.days ?? history.limitsDays
+        let providers = providers
+        let provider = providers.contains(picked) ? picked : providers.first ?? .claude
+        let samples = data?.samples.filter { $0.kind.provider == provider } ?? []
         DashboardCard(title: "Utilization history", subtitle: "Last \(days) days · peak per \(days > 7 ? "hour" : "10 minutes")",
                       trailing: {
-            Picker("Range", selection: Binding(get: { history.limitsDays }, set: { history.setLimitsDays($0) })) {
-                ForEach(History.limitDayChoices, id: \.self) { Text("\($0) days").tag($0) }
+            HStack(spacing: 8) {
+                if providers.count > 1 {
+                    Picker("Plan", selection: Binding(get: { provider }, set: { picked = $0 })) {
+                        ForEach(providers, id: \.self) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Picker("Range", selection: Binding(get: { history.limitsDays }, set: { history.setLimitsDays($0) })) {
+                    ForEach(History.limitDayChoices, id: \.self) { Text("\($0) days").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
         }) {
             if history.unavailableReason != nil {
                 EmptyNote(text: "The utilization history lives in the usage ledger, which is off.")
-            } else if let data, !data.samples.isEmpty {
-                LimitChart(samples: data.samples, days: data.days, now: now) { LimitsStyle.name($0, live: model.claudeLimits) }
-                    .frame(height: 250)
+            } else if !samples.isEmpty {
+                LimitChart(samples: samples, provider: provider, days: days, now: now) {
+                    LimitsStyle.name($0, live: model.claudeLimits)
+                }
+                .frame(height: 250)
             } else {
-                EmptyNote(text: data == nil ? "Loading…" : "No readings yet. Hoply stores one every 3 minutes while it runs.")
+                EmptyNote(text: data == nil ? "Loading…" : emptyText(provider))
                     .frame(height: 120)
             }
+        }
+    }
+
+    private var providers: [LimitProvider] {
+        var found = Set(data?.samples.map(\.kind.provider) ?? [])
+        if model.settings.claudeLimitsEnabled { found.insert(.claude) }
+        return found.sorted()
+    }
+
+    private func emptyText(_ provider: LimitProvider) -> String {
+        switch provider {
+        case .claude: return "No readings yet. Hoply stores one every 3 minutes while it runs."
+        case .codex: return "No readings in this range. Codex writes them to its session files as you use it."
         }
     }
 }
@@ -419,16 +520,18 @@ struct LimitChart: View {
     let resets: [Reset]
     let domain: ClosedRange<Date>
     let days: Int
+    let provider: LimitProvider
     @State private var selection: Date?
 
-    init(samples: [LimitSample], days: Int, now: Date, name: (LimitKind) -> String) {
+    init(samples: [LimitSample], provider: LimitProvider, days: Int, now: Date, name: (LimitKind) -> String) {
         let range = now.addingTimeInterval(-Double(days) * 86_400)...now
         self.days = days
+        self.provider = provider
         domain = range
         var points: [LimitKind: [Point]] = [:]
         var resets: [String: Reset] = [:]
-        var weeklyResets: [Reset] = []
-        for (kind, samples) in Dictionary(grouping: samples, by: \.kind) {
+        var longResets: [Reset] = []
+        for (kind, samples) in Dictionary(grouping: samples.filter { $0.kind.provider == provider }, by: \.kind) {
             var window = 0
             var previous: LimitSample?
             var list: [Point] = []
@@ -443,11 +546,11 @@ struct LimitChart: View {
                 list.append(Point(ts: sample.ts, utilization: sample.utilization, window: "\(kind.rawValue)-\(window)"))
                 if let resetsAt = sample.resetsAt, range.contains(resetsAt) {
                     let reset = Reset(kind: kind, at: resetsAt, label: "")
-                    if kind == .fiveHour {
+                    if LimitsStyle.isShort(kind) {
                         let slot = "\(Int(resetsAt.timeIntervalSince1970 / LimitSample.windowTolerance))"
                         resets[slot] = resets[slot] ?? reset
                     } else {
-                        weeklyResets.append(reset)
+                        longResets.append(reset)
                     }
                 }
                 previous = sample
@@ -455,12 +558,12 @@ struct LimitChart: View {
             points[kind] = list
         }
         self.points = points
-        self.resets = (Array(resets.values) + Self.mergedWeeklyResets(weeklyResets, name: name)).sorted { $0.at < $1.at }
+        self.resets = (Array(resets.values) + Self.mergedLongResets(longResets, name: name)).sorted { $0.at < $1.at }
         kinds = points.keys.filter { !(points[$0]?.isEmpty ?? true) }.sorted()
         names = Dictionary(uniqueKeysWithValues: kinds.map { ($0, name($0)) })
     }
 
-    private static func mergedWeeklyResets(_ resets: [Reset], name: (LimitKind) -> String) -> [Reset] {
+    private static func mergedLongResets(_ resets: [Reset], name: (LimitKind) -> String) -> [Reset] {
         var clusters: [[Reset]] = []
         for reset in resets.sorted(by: { $0.at < $1.at }) {
             if let last = clusters.last?.last, reset.at.timeIntervalSince(last.at) <= LimitSample.windowTolerance {
@@ -471,8 +574,8 @@ struct LimitChart: View {
         }
         return clusters.compactMap { cluster in
             guard let first = cluster.first else { return nil }
-            let lead = cluster.first { $0.kind == .sevenDay } ?? first
-            return Reset(kind: lead.kind, at: lead.at, label: lead.kind == .sevenDay ? "Week reset" : "\(name(lead.kind)) reset")
+            let lead = cluster.first { !$0.kind.isModelScoped } ?? first
+            return Reset(kind: lead.kind, at: lead.at, label: LimitsStyle.resetLabel(lead.kind, name: name(lead.kind)))
         }
     }
 
@@ -491,7 +594,7 @@ struct LimitChart: View {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             ForEach(resets) { reset in
-                if reset.kind == .fiveHour {
+                if LimitsStyle.isShort(reset.kind) {
                     RuleMark(x: .value("Reset", reset.at), yStart: .value("Utilization", 0),
                              yEnd: .value("Utilization", 7))
                         .foregroundStyle(LimitsStyle.color(reset.kind))
@@ -541,7 +644,7 @@ struct LimitChart: View {
                 }
             }
         }
-        .accessibilityLabel("Claude plan utilization over the last \(days) days")
+        .accessibilityLabel("\(provider.displayName) plan utilization over the last \(days) days")
     }
 
     private var legend: some View {
@@ -553,10 +656,10 @@ struct LimitChart: View {
                 }
             }
             Spacer(minLength: 8)
-            if kinds.contains(.fiveHour) {
+            if let short = kinds.first(where: LimitsStyle.isShort) {
                 HStack(spacing: 5) {
-                    Capsule().fill(LimitsStyle.color(.fiveHour)).frame(width: 1.5, height: 9)
-                    Text("5-hour reset")
+                    Capsule().fill(LimitsStyle.color(short)).frame(width: 1.5, height: 9)
+                    Text("\(short.windowName) reset")
                 }
             }
             HStack(spacing: 5) {

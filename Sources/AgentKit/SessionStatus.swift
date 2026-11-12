@@ -74,14 +74,16 @@ public enum LimitedSessions {
 
     public static func blockingWindow(for session: AgentSession, limits: [LimitSample],
                                       localModelPatterns: [String] = [], now: Date = Date()) -> LimitSample? {
-        guard session.key.source == .claudeCode, session.state == .yourTurn, !session.awaitsInput else { return nil }
+        guard let provider = LimitProvider(source: session.key.source), session.state == .yourTurn,
+              !session.awaitsInput else { return nil }
         let model = session.model?.lowercased()
-        // Claude Code pointed at a local model does not draw on the plan.
+        // An agent pointed at a local model does not draw on the plan.
         if let model, localModelPatterns.contains(where: { !$0.isEmpty && model.contains($0.lowercased()) }) {
             return nil
         }
         var latest: [LimitKind: LimitSample] = [:]
-        for sample in limits where sample.ts >= (latest[sample.kind]?.ts ?? .distantPast) {
+        for sample in limits where sample.kind.provider == provider
+            && sample.ts >= (latest[sample.kind]?.ts ?? .distantPast) {
             latest[sample.kind] = sample
         }
         return latest.values
@@ -99,8 +101,10 @@ public enum LimitedSessions {
     }
 
     static func applies(_ kind: LimitKind, toModel model: String?) -> Bool {
-        if kind == .fiveHour || kind == .sevenDay { return true }
-        guard let model, let family = kind.scopeName.split(separator: " ").first?.lowercased() else { return false }
+        guard kind.isModelScoped else { return true }
+        // A Codex limit id is a code name (`codex_bengalfox`), not a model family.
+        guard kind.provider == .claude, let model,
+              let family = kind.scopeName.split(separator: " ").first?.lowercased() else { return false }
         return model.contains(family)
     }
 }

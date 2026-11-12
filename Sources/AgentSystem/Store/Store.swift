@@ -39,8 +39,17 @@ public actor Store {
         self.registry = ProjectRegistry(resolver: resolver, fileSystem: fileSystem)
     }
 
+    public struct Applied: Sendable, Equatable {
+        public var sessions: Set<SessionKey>
+        public var previousLimits: [LimitKind: LimitSample]
+    }
+
     @discardableResult
     public func apply(_ batch: LedgerBatch, cursor: IngestCursor? = nil) throws -> Set<SessionKey> {
+        try commit(batch, cursor: cursor).sessions
+    }
+
+    public func commit(_ batch: LedgerBatch, cursor: IngestCursor? = nil) throws -> Applied {
         try db.transaction {
             var touched = Set<SessionKey>()
             let foreign = try sessionsOwnedElsewhere(batch)
@@ -68,7 +77,25 @@ public actor Store {
                 touched.insert(subagent.session)
             }
             try record(batch.prompts, touched: &touched)
+            let previous = batch.limits.isEmpty ? [:] : try insertLimitSamples(batch.limits)
             if let cursor { try save(cursor) }
+            return Applied(sessions: touched, previousLimits: previous)
+        }
+    }
+
+    @discardableResult
+    public func applyTitles(_ titles: [String: String], source: AgentSource, rank: Int) throws -> Set<SessionKey> {
+        let named = titles.filter { !$0.value.isEmpty }
+        guard !named.isEmpty else { return [] }
+        return try db.transaction {
+            var touched = Set<SessionKey>()
+            for (id, title) in named.sorted(by: { $0.key < $1.key }) {
+                try db.run("""
+                    UPDATE sessions SET title = ?3, title_rank = ?4
+                    WHERE source = ?1 AND id = ?2 AND title_rank <= ?4 AND title IS NOT ?3
+                    """, [source.rawValue, id, title, rank])
+                if db.changes > 0 { touched.insert(SessionKey(source: source, id: id)) }
+            }
             return touched
         }
     }
@@ -128,28 +155,42 @@ public actor Store {
 
     // MARK: - Limit samples
 
-    public static let limitSampleInterval: TimeInterval = 900
+    public static let limitSampleInterval: TimeInterval = LimitSample.repeatInterval
 
     @discardableResult
     public func recordLimitSamples(_ samples: [LimitSample]) throws -> [LimitKind: LimitSample] {
-        try db.transaction {
-            let previous = try StoreReader.latestLimitSamples(db)
-            var last = previous
-            for sample in samples {
-                if let stored = last[sample.kind], sample.ts >= stored.ts,
-                   sample.ts.timeIntervalSince(stored.ts) < Self.limitSampleInterval,
-                   stored.utilization == sample.utilization, sample.isSameWindow(as: stored) {
-                    continue
-                }
-                try db.run("""
-                    INSERT INTO limit_samples (kind, ts, utilization, resets_at) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(kind, ts) DO UPDATE SET utilization = excluded.utilization, resets_at = excluded.resets_at
-                    """, [sample.kind.rawValue, sample.ts.timeIntervalSince1970, sample.utilization,
-                          sample.resetsAt?.timeIntervalSince1970])
-                if sample.ts >= last[sample.kind]?.ts ?? .distantPast { last[sample.kind] = sample }
+        try db.transaction { try insertLimitSamples(samples) }
+    }
+
+    // Rollouts arrive newest file first and fork copies repeat old readings, so a reading is compared with its
+    // stored neighbours on both sides: a repeat within `limitSampleInterval` of either adds no row.
+    private func insertLimitSamples(_ samples: [LimitSample]) throws -> [LimitKind: LimitSample] {
+        let previous = try StoreReader.latestLimitSamples(db)
+        for sample in samples.sorted(by: { $0.ts < $1.ts }) {
+            let kind = sample.kind.rawValue
+            let ts = sample.ts.timeIntervalSince1970
+            let before = try db.queryOne("""
+                SELECT kind, ts, utilization, resets_at, plan FROM limit_samples WHERE kind = ? AND ts <= ?
+                ORDER BY ts DESC LIMIT 1
+                """, [kind, ts]) { StoreReader.limitSample($0) } ?? nil
+            if let before, sample.ts.timeIntervalSince(before.ts) < Self.limitSampleInterval,
+               before.isSameReading(as: sample) {
+                continue
             }
-            return previous
+            if before?.ts != sample.ts, let after = try db.queryOne("""
+                SELECT kind, ts, utilization, resets_at, plan FROM limit_samples WHERE kind = ? AND ts > ?
+                ORDER BY ts LIMIT 1
+                """, [kind, ts], { StoreReader.limitSample($0) }) ?? nil,
+               after.ts.timeIntervalSince(sample.ts) < Self.limitSampleInterval, after.isSameReading(as: sample) {
+                continue
+            }
+            try db.run("""
+                INSERT INTO limit_samples (kind, ts, utilization, resets_at, plan) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(kind, ts) DO UPDATE SET utilization = excluded.utilization, resets_at = excluded.resets_at,
+                    plan = excluded.plan
+                """, [kind, ts, sample.utilization, sample.resetsAt?.timeIntervalSince1970, sample.plan])
         }
+        return previous
     }
 
     // MARK: - Samples
@@ -243,8 +284,8 @@ public actor Store {
 
     private static let upsertSession = """
         INSERT INTO sessions (source, id, project_id, cwd, branch, worktree, title, title_rank, pr_url, first_at,
-                              last_at, turns, native_cost, lines_added, lines_removed, transcript_path)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                              last_at, turns, native_cost, lines_added, lines_removed, transcript_path, context_window)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?19)
         ON CONFLICT(source, id) DO UPDATE SET
             project_id = CASE WHEN ?17 AND excluded.project_id IS NOT NULL THEN excluded.project_id
                               ELSE COALESCE(sessions.project_id, excluded.project_id) END,
@@ -264,7 +305,8 @@ public actor Store {
             native_cost = COALESCE(excluded.native_cost, sessions.native_cost),
             lines_added = COALESCE(excluded.lines_added, sessions.lines_added),
             lines_removed = COALESCE(excluded.lines_removed, sessions.lines_removed),
-            transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)
+            transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
+            context_window = COALESCE(excluded.context_window, sessions.context_window)
         """
 
     private func upsert(_ update: SessionUpdate) throws {
@@ -275,6 +317,7 @@ public actor Store {
             update.title, update.titleRank, update.prURL, update.firstAt?.timeIntervalSince1970,
             update.lastAt?.timeIntervalSince1970, update.prompts, update.nativeCostUSD, update.linesAdded,
             update.linesRemoved, update.transcriptPath, update.placeIsAuthoritative, update.resetsTurns,
+            update.contextWindow,
         ])
         if let projectID, let lastAt = update.lastAt {
             try db.run("UPDATE projects SET last_active = max(COALESCE(last_active, 0), ?) WHERE id = ?",

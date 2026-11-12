@@ -72,8 +72,9 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
 - **Local model servers.** vLLM, tensorfold, llama.cpp, SGLang, TGI, Ollama, LM Studio and other OpenAI-compatible
   servers, local or remote: speed, KV cache, running and queued requests, tokens per day, and what those tokens would
   have cost on the API.
-- **Claude plan limits.** The 5-hour and weekly windows (including model-specific weekly ones), your pace against the
-  clock, burn rate, a projection at reset, and alerts at 80% and 95%.
+- **Plan limits.** Claude's 5-hour and weekly windows (including model-specific weekly ones) and Codex's (5-hour and
+  weekly, or 30 days on the free plan, with the plan's name): your pace against the clock, burn rate, a projection at
+  reset, and alerts at 80% and 95%. Codex's come from its own session files, with no login and no network request.
 - **Dev servers.** The ports your agent sessions started, tied back to the session, with a Stop button.
 - **Clean up.** Merged worktrees, large build caches, old transcripts already in Hoply's history, and processes an
   agent left running. Nothing goes without a review sheet, and files go to the Trash.
@@ -87,12 +88,13 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
 | Source | How Hoply hears from it | What you see |
 |---|---|---|
 | Claude Code | hooks for state; usage from its transcripts (its OpenTelemetry logs add live counts) | working / needs permission / your turn, task title, last tool, tokens, cost |
-| Codex CLI | hooks for state; usage from its session files in `~/.codex/sessions` | working / needs permission / your turn, last tool, tokens, API-equivalent cost |
+| Codex CLI | hooks for state; usage from its session files in `~/.codex/sessions` | working / needs permission / your turn, thread name, last tool, tokens, API-equivalent cost, subagents, context window |
 | Copilot CLI (and Copilot's agent in JetBrains) | hooks for state; usage from its own `~/.copilot/session-store.db` and each session's `~/.copilot/session-state/<id>/events.jsonl` | working / needs permission / your turn, task title, model, last tool, AI units, premium requests |
 | Copilot in JetBrains | OpenTelemetry, when its agent doesn't run the Copilot CLI hooks | working / idle, tokens |
 | Qwen Code | OpenTelemetry, stored by Hoply | working / idle, prompt title, tokens |
 | Model servers | Prometheus `/metrics` or the server's model list | model, running and queued requests, tokens/s, KV cache |
 | Claude plan | your own Claude Code login, read from the Keychain | 5-hour and weekly usage, pace, reset times |
+| Codex plan | the rate limits Codex writes into its session files with each response | 5-hour and weekly usage (30 days on the free plan), plan, pace, reset times |
 
 Anything else that talks to your model server, such as a chat app, shows up in that server's card too.
 
@@ -142,6 +144,10 @@ app's `Info.plist`); public hosts need https. macOS asks once for Local Network 
 **Claude plan limits.** Press Connect on the Claude limits tile in the panel, or on the Dashboard's Limits page.
 macOS asks once whether `security` may read the "Claude Code-credentials" Keychain item; choose Always Allow. If it
 says the login expired, open Claude Code once and it refreshes the token.
+
+**Codex plan limits** need no setup. Codex writes its 5-hour and weekly usage into its session files with each
+response, and they appear on the Limits page once you use Codex. They are kept in Hoply's usage history, so the
+Claude limits switch doesn't affect them.
 
 **Codex OpenTelemetry (optional).** Codex's session files already give Hoply its usage. For live token counts as well,
 add an `[otel]` exporter to Codex's `config.toml`: `otlp-http` with `protocol = "json"` and the endpoint
@@ -263,6 +269,8 @@ things you pick often rank higher.
 - OTLP over gRPC and gzip-compressed bodies aren't supported; use HTTP without compression.
 - Codex CLI's session files are an internal format that changes between versions. Hoply is tested against files from
   Codex 0.98 and 0.144.
+- Codex limits move only when Codex runs on this Mac, since they come from its session files. Codex used on another
+  device or in the browser shows up with your next Codex response here.
 - Cursor runs the hooks in `~/.claude/settings.json` too. Hoply ignores those calls (they carry `cursor_version`)
   rather than showing them as Claude Code sessions.
 - Claude Code's own `cost-state` totals include calls it never writes to the transcript (title generation, web search,

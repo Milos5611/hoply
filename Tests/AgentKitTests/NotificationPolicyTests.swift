@@ -303,6 +303,35 @@ final class NotificationPolicyTests: XCTestCase {
         XCTAssertEqual(weekly.map(\.body), ["Resets in 2 d 3 h."])
     }
 
+    func testCodexLimitsAreNamedAfterCodexAndTheirWindow() throws {
+        let fiveHour = try XCTUnwrap(LimitKind.codex(windowMinutes: 300))
+        let month = try XCTUnwrap(LimitKind.codex(windowMinutes: 43_200))
+        XCTAssertEqual(limits(sample(82, fiveHour, at: 0), previous: [:]).map(\.title), ["Codex 5-hour limit at 82%"])
+        let monthly = limits(sample(96, month, at: 10, resets: 20 * 86_400), previous: [:])
+        XCTAssertEqual(monthly.map(\.title), ["Codex 30-day limit at 96%"])
+        XCTAssertEqual(monthly.map(\.interruption), [.active])
+        XCTAssertTrue(limits(sample(85, fiveHour, at: 20), previous: [:]).isEmpty, "remembered per kind")
+        XCTAssertEqual(limits(sample(85, at: 20), previous: [:]).map(\.title), ["Claude 5-hour limit at 85%"],
+                       "Claude's window is its own")
+    }
+
+    func testOldReadingsRaiseTheFloorButNeverAlert() throws {
+        let fiveHour = try XCTUnwrap(LimitKind.codex(windowMinutes: 300))
+        let backfilled = [sample(70, fiveHour, at: -7200), sample(88, fiveHour, at: -3600)]
+        XCTAssertTrue(policy.limitsUpdated(backfilled, previous: [:], now: at(0)).post.isEmpty)
+        XCTAssertTrue(limits(sample(90, fiveHour, at: 0)).isEmpty, "80 was crossed in a reading nobody saw live")
+        XCTAssertEqual(limits(sample(95, fiveHour, at: 60)).map(\.title), ["Codex 5-hour limit at 95%"])
+        let edge = sample(81, .sevenDay, at: -NotificationPolicy.limitAlertFreshness, resets: 2 * 86_400)
+        XCTAssertEqual(policy.limitsUpdated([edge], previous: [:], now: at(0)).post.count, 1, "ten minutes is still news")
+    }
+
+    func testOneUpdateWithSeveralReadingsAlertsOnceInTimeOrder() throws {
+        let fiveHour = try XCTUnwrap(LimitKind.codex(windowMinutes: 300))
+        let posted = policy.limitsUpdated([sample(86, fiveHour, at: 30), sample(81, fiveHour, at: 0)],
+                                          previous: [fiveHour: sample(60, fiveHour, at: -300)], now: at(40))
+        XCTAssertEqual(posted.post.map(\.title), ["Codex 5-hour limit at 81%"])
+    }
+
     // MARK: - Local model
 
     private let server = "http://192.168.40.141:8888"
@@ -477,6 +506,26 @@ final class NotificationPolicyTests: XCTestCase {
         let lifted = policy.limitedSessionsChecked(live, limits: [full(at: 200, utilization: 60)], now: at(200))
         XCTAssertEqual(lifted.post.first?.body, "Fix it can continue.")
         XCTAssertEqual(lifted.post.first?.session, SessionKey(source: .claudeCode, id: "s1"))
+    }
+
+    func testEachProviderGetsItsOwnResetNotification() throws {
+        let codexKind = try XCTUnwrap(LimitKind.codex(windowMinutes: 10_080))
+        send("s1", .promptSubmitted("Fix it"), at: 0)
+        send("s1", .turnFinished(nil), at: 10)
+        let codex = SessionKey(source: .codexCLI, id: "c1")
+        board.apply(AgentEvent(key: codex, kind: .promptSubmitted("Port it"), time: at(0), fromHook: true))
+        board.apply(AgentEvent(key: codex, kind: .turnFinished(nil), time: at(12), fromHook: true))
+        let held = [full(), full(codexKind, resetsAt: 7200)]
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: held, now: at(20)).isEmpty)
+
+        let claudeReset = policy.limitedSessionsChecked(live, limits: held, now: at(3601))
+        XCTAssertEqual(claudeReset.post.map(\.title), ["Claude 5-hour limit reset"])
+        XCTAssertEqual(claudeReset.post.first?.session, SessionKey(source: .claudeCode, id: "s1"))
+        XCTAssertTrue(policy.limitedSessionsChecked(live, limits: held, now: at(3700)).isEmpty)
+        let codexReset = policy.limitedSessionsChecked(live, limits: held, now: at(7201))
+        XCTAssertEqual(codexReset.post.map(\.title), ["Codex weekly limit reset"])
+        XCTAssertEqual(codexReset.post.first?.body, "Port it can continue.")
+        XCTAssertEqual(codexReset.post.first?.id, NotificationPolicy.limitResetID(codexKind, resetsAt: at(7200)))
     }
 
     func testResetNotificationRespectsPreferencesAndQuietHours() {

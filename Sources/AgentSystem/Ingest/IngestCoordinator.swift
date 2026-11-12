@@ -5,6 +5,9 @@ public struct IngestUpdate: Sendable, Equatable {
     public var progress: IngestProgress
     public var changedSessions: Set<SessionKey>
     public var models: [SessionKey: String] = [:]
+    public var limits: [LimitSample] = []
+    public var previousLimits: [LimitKind: LimitSample] = [:]
+    public var subagents: [SubagentActivity] = []
 }
 
 public actor IngestCoordinator {
@@ -27,6 +30,14 @@ public actor IngestCoordinator {
     private var copilotEventStates: [String: CopilotEventsState] = [:]
     private var reportedModels: [SessionKey: String] = [:]
     private var pendingModels: [SessionKey: String] = [:]
+    private var pendingLimits: [LimitSample] = []
+    private var pendingPreviousLimits: [LimitKind: LimitSample] = [:]
+    private var pendingLimitKinds: Set<LimitKind> = []
+    private var pendingSubagents: [SubagentActivity] = []
+    private var codexTitles: [String: String] = [:]
+    private var sessionIndexCursor: FileCursor?
+    private var sessionIndexWatcher: DirectoryWatcher?
+    private var rolloutsRead = false
     private var pending: [String] = []
     private var backfillRemaining: Set<String> = []
     private var pendingChanges: Set<SessionKey> = []
@@ -67,6 +78,7 @@ public actor IngestCoordinator {
 
     deinit {
         watcher?.stop()
+        sessionIndexWatcher?.stop()
         rescanTask?.cancel()
         copilotTask?.cancel()
         continuation.finish()
@@ -84,6 +96,7 @@ public actor IngestCoordinator {
             progress.lastError = "Could not read ingest cursors: \(error)"
         }
         guard generation == runGeneration else { return }
+        await refreshSessionIndex()
         if watch {
             startWatcher()
             let interval = rescanInterval
@@ -117,6 +130,8 @@ public actor IngestCoordinator {
         runGeneration += 1
         watcher?.stop()
         watcher = nil
+        sessionIndexWatcher?.stop()
+        sessionIndexWatcher = nil
         rescanTask?.cancel()
         rescanTask = nil
         copilotTask?.cancel()
@@ -150,6 +165,7 @@ public actor IngestCoordinator {
     public func rescan() async {
         guard !stopped else { return }
         if watch, watcher?.isRunning != true { startWatcher() }
+        await refreshSessionIndex()
         for file in discover() where needsWork(file) { enqueue(file.path) }
         await drain()
     }
@@ -167,6 +183,8 @@ public actor IngestCoordinator {
             cursors = try await fileCursors()
             codexStates = [:]
             copilotEventStates = [:]
+            sessionIndexCursor = nil
+            codexTitles = [:]
             if let copilot {
                 copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath]
                 copilotSignature = nil
@@ -180,6 +198,7 @@ public actor IngestCoordinator {
         cursorResets -= 1
         resumeIdleWaiters()
         if reset {
+            await refreshSessionIndex()
             await pollCopilot()
             await backfill()
         }
@@ -320,9 +339,16 @@ public actor IngestCoordinator {
     private func drain() async {
         guard !draining, !stopped else { return }
         draining = true
-        while !pending.isEmpty, !stopped {
-            await process(pending.removeFirst())
-        }
+        repeat {
+            while !pending.isEmpty, !stopped {
+                await process(pending.removeFirst())
+            }
+            // The index may not exist yet (no watcher), and Codex names a thread after its first turn.
+            if rolloutsRead, !stopped {
+                rolloutsRead = false
+                await refreshSessionIndex()
+            }
+        } while !pending.isEmpty && !stopped
         draining = false
         resumeIdleWaiters()
         if progress.isBackfilling, backfillRemaining.isEmpty { progress.isBackfilling = false }
@@ -355,6 +381,7 @@ public actor IngestCoordinator {
                         ? CodexRolloutState(path: path) : try rolloutState(path, upTo: chunk.startOffset)
                     batch = CodexRolloutParser.batch(lines: chunk.lines, state: &state, transcriptPath: path,
                                                      startsAtFileStart: chunk.startOffset == 0)
+                    nameSessions(&batch)
                     codexState = state
                 } else if isCopilotEvents {
                     let workspace = copilotEvents?.workspace(forEventsFile: path)
@@ -373,11 +400,17 @@ public actor IngestCoordinator {
                 var committed = chunk.cursor
                 if !chunk.atEnd { committed.size = committed.offset }
                 let source: AgentSource = isRollout ? .codexCLI : isCopilotEvents ? .copilotCLI : .claudeCode
-                let changed = try await store.apply(batch, cursor: IngestCursor(source: source, path: path,
-                                                                                file: committed))
+                let applied = try await store.commit(batch, cursor: IngestCursor(source: source, path: path,
+                                                                                 file: committed))
+                let changed = applied.sessions
                 cursor = committed
                 cursors[path] = committed
-                if let codexState { codexStates[path] = codexState }
+                if let codexState {
+                    codexStates[path] = codexState
+                    rolloutsRead = true
+                    noteLimits(batch.limits, previous: applied.previousLimits)
+                    if !inBackfill { noteSubagents(batch.activity) }
+                }
                 if let copilotState {
                     copilotEventStates[path] = copilotState
                     noteModel(copilotState)
@@ -429,6 +462,85 @@ public actor IngestCoordinator {
         return state
     }
 
+    private func noteLimits(_ samples: [LimitSample], previous: [LimitKind: LimitSample]) {
+        let now = Date()
+        let fresh = samples.filter { now.timeIntervalSince($0.ts) <= NotificationPolicy.limitAlertFreshness }
+        guard !fresh.isEmpty else { return }
+        // The first batch's `previous` stands for the whole update: a later one already holds the earlier readings.
+        for kind in Set(fresh.map(\.kind)) where pendingLimitKinds.insert(kind).inserted {
+            pendingPreviousLimits[kind] = previous[kind]
+        }
+        pendingLimits += fresh
+    }
+
+    private func noteSubagents(_ activity: [SubagentActivity]) {
+        let now = Date()
+        pendingSubagents += activity.filter { now.timeIntervalSince($0.time) <= SubagentActivity.freshness }
+    }
+
+    // MARK: - Codex session index
+
+    private func nameSessions(_ batch: inout LedgerBatch) {
+        for index in batch.sessions.indices where batch.sessions[index].title == nil {
+            guard let name = codexTitles[batch.sessions[index].key.id], !name.isEmpty else { continue }
+            batch.sessions[index].title = name
+            batch.sessions[index].titleRank = CodexSessionIndex.titleRank
+        }
+    }
+
+    private func refreshSessionIndex() async {
+        guard let codex, !stopped else { return }
+        let path = codex.sessionIndexPath
+        if watch, sessionIndexWatcher?.isRunning != true { startSessionIndexWatcher(path) }
+        guard let stat = FileTailer.status(of: path) else { return }
+        if let known = sessionIndexCursor, known.inode == stat.inode, known.size == stat.size { return }
+        var names = codexTitles
+        var touched = Set<String>()
+        var cursor = sessionIndexCursor
+        do {
+            while let chunk = try FileTailer.read(path: path, from: cursor, maxBytes: chunkBytes) {
+                if chunk.didReset {
+                    var rebuilt: [String: String] = [:]
+                    CodexSessionIndex.apply(lines: chunk.lines, to: &rebuilt)
+                    touched.formUnion(Set(rebuilt.keys).union(names.keys).filter { rebuilt[$0] != names[$0] })
+                    names = rebuilt
+                } else {
+                    touched.formUnion(CodexSessionIndex.apply(lines: chunk.lines, to: &names))
+                }
+                cursor = chunk.cursor
+                if chunk.atEnd || chunk.bytesConsumed == 0 { break }
+            }
+        } catch {
+            progress.lastError = "session_index.jsonl: \(error)"
+            return
+        }
+        codexTitles = names
+        sessionIndexCursor = cursor
+        let titles = CodexSessionIndex.titles(names, ids: touched)
+        guard !titles.isEmpty else { return }
+        do {
+            pendingChanges.formUnion(try await store.applyTitles(titles, source: .codexCLI,
+                                                                 rank: CodexSessionIndex.titleRank))
+        } catch {
+            progress.lastError = "Codex titles: \(error)"
+        }
+    }
+
+    // The file, not the Codex folder (its SQLite logs churn). FSEvents sees a file only once it exists, so a
+    // missing index is picked up by the rescan.
+    private func startSessionIndexWatcher(_ path: String) {
+        guard FileTailer.status(of: path) != nil else { return }
+        let watcher = DirectoryWatcher(paths: [path], latency: 0.5) { [weak self] _ in
+            Task { await self?.sessionIndexChanged() }
+        }
+        if watcher.start() { sessionIndexWatcher = watcher }
+    }
+
+    private func sessionIndexChanged() async {
+        await refreshSessionIndex()
+        if !pendingChanges.isEmpty { emit(force: true) }
+    }
+
     private func noteModel(_ state: CopilotEventsState) {
         let key = SessionKey(source: .copilotCLI, id: state.sessionID)
         guard let model = state.model, reportedModels[key] != model else { return }
@@ -478,8 +590,14 @@ public actor IngestCoordinator {
         let now = ContinuousClock.now
         if !force, let lastEmit, now - lastEmit < .milliseconds(250) { return }
         lastEmit = now
-        continuation.yield(IngestUpdate(progress: progress, changedSessions: pendingChanges, models: pendingModels))
+        continuation.yield(IngestUpdate(progress: progress, changedSessions: pendingChanges, models: pendingModels,
+                                        limits: pendingLimits.sorted { ($0.ts, $0.kind) < ($1.ts, $1.kind) },
+                                        previousLimits: pendingPreviousLimits, subagents: pendingSubagents))
         pendingChanges = []
         pendingModels = [:]
+        pendingLimits = []
+        pendingPreviousLimits = [:]
+        pendingLimitKinds = []
+        pendingSubagents = []
     }
 }

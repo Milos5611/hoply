@@ -242,6 +242,30 @@ final class StatusPriorityTests: XCTestCase {
         XCTAssertNil(LimitedSessions.limitedUntil(sessions[unknown]!, limits: limits, now: t0))
     }
 
+    func testEachAgentIsHeldOnlyByItsOwnProvidersLimits() throws {
+        let claude = add("claude", [.promptSubmitted("a"), .turnFinished(nil)])
+        let codex = add("codex", [.promptSubmitted("a"), .turnFinished(nil)], source: .codexCLI, model: "gpt-6.1-sol")
+        let oss = add("oss", [.promptSubmitted("a"), .turnFinished(nil)], source: .codexCLI, model: "qwen3-coder")
+        let copilot = add("copilot", [.promptSubmitted("a"), .turnFinished(nil)], source: .copilotCLI)
+        let sessions = board.sessions
+        let codexFive = full(try XCTUnwrap(LimitKind.codex(windowMinutes: 300)))
+        let codexMonth = full(try XCTUnwrap(LimitKind.codex(windowMinutes: 43_200)), resetsIn: 20 * 86_400)
+        let codeName = full(try XCTUnwrap(LimitKind.codex(windowMinutes: 300, limitID: "codex_bengalfox")))
+        func until(_ key: SessionKey, _ limits: [LimitSample]) -> Date? {
+            LimitedSessions.limitedUntil(sessions[key]!, limits: limits, localModelPatterns: ["qwen"], now: t0)
+        }
+
+        XCTAssertEqual(until(codex, [codexFive]), t0.addingTimeInterval(3600))
+        XCTAssertEqual(until(codex, [codexFive, codexMonth]), t0.addingTimeInterval(20 * 86_400))
+        XCTAssertNil(until(codex, [full()]), "Claude's windows never hold a Codex session")
+        XCTAssertNil(until(claude, [codexFive]), "nor Codex's a Claude session")
+        XCTAssertEqual(until(claude, [full(), codexMonth]), t0.addingTimeInterval(3600))
+        XCTAssertNil(until(codex, [codeName]), "a limit id names no model, so it holds nothing")
+        XCTAssertNil(until(oss, [codexFive]), "a local model draws on no plan")
+        XCTAssertNil(until(copilot, [full(), codexFive]))
+        XCTAssertNil(until(codex, [full(try XCTUnwrap(LimitKind.codex(windowMinutes: 300)), resetsIn: -1)]))
+    }
+
     func testGroupingSortsWaitingByStatusPriority() {
         add("turn", [.promptSubmitted("a"), .turnFinished(nil)], source: .copilotCLI, at: 50)
         add("limited", [.promptSubmitted("a"), .turnFinished(nil)], at: 40)
@@ -301,6 +325,59 @@ final class ContextWindowTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(window(input: 0, read: 160_000)).isWarning)
         XCTAssertEqual(ContextWindow(used: 300, limit: 200).fraction, 1)
         XCTAssertEqual(ContextWindow(used: 300, limit: 200).remaining, 0)
+    }
+
+    func testAReportedWindowCountsTheWholeLastCall() throws {
+        let key = SessionKey(source: .codexCLI, id: "c")
+        let tokens = TokenCounts(input: 4_000, output: 1_200, reasoning: 300, cacheRead: 200_000)
+        let window = try XCTUnwrap(ContextWindow(lastCall: SessionLastCall(key: key, model: "gpt-6.1-sol",
+                                                                            timestamp: Date(), tokens: tokens,
+                                                                            contextLimit: 258_400)))
+        XCTAssertEqual(window.used, 205_200, "Codex's tokens_in_context_window is the call's total_tokens")
+        XCTAssertEqual(window.limit, 258_400)
+        XCTAssertFalse(window.isWarning)
+        XCTAssertNil(ContextWindow(lastCall: SessionLastCall(key: key, model: "gpt-6.1-sol", timestamp: Date(),
+                                                             tokens: tokens)),
+                     "without a reported window a Codex model has no known limit")
+        let busy = TokenCounts(input: 10_000, output: 2_000, cacheRead: 200_000)
+        XCTAssertTrue(try XCTUnwrap(ContextWindow(lastCall: SessionLastCall(key: key, model: nil, timestamp: Date(),
+                                                                            tokens: busy, contextLimit: 258_400))).isWarning)
+    }
+}
+
+final class LiveSubagentActivityTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    private let key = SessionKey(source: .codexCLI, id: "root")
+
+    private func activity(_ id: String, ended: Bool, at seconds: TimeInterval, session: SessionKey? = nil) -> SubagentActivity {
+        SubagentActivity(session: session ?? key, agentID: id, type: "Hume", time: t0.addingTimeInterval(seconds),
+                         ended: ended)
+    }
+
+    func testRolloutActivityUpdatesALiveSessionAndNeverCreatesOne() throws {
+        var board = SessionBoard()
+        XCTAssertFalse(board.noteSubagents([activity("t1", ended: false, at: 1)]))
+        XCTAssertTrue(board.sessions.isEmpty)
+
+        board.apply(AgentEvent(key: key, kind: .promptSubmitted("Go"), time: t0, fromHook: true))
+        XCTAssertTrue(board.noteSubagents([activity("t1", ended: false, at: 1), activity("t2", ended: false, at: 2)]))
+        var session = try XCTUnwrap(board.sessions[key])
+        XCTAssertEqual(session.subagents.map(\.id), ["t1", "t2"])
+        XCTAssertEqual(session.subagents.map(\.type), ["Hume", "Hume"])
+        XCTAssertEqual(session.workingSubagentCount, 2)
+        XCTAssertEqual(session.state, .working, "subagent activity never moves the session")
+
+        XCTAssertTrue(board.noteSubagents([activity("t1", ended: true, at: 5)]))
+        XCTAssertFalse(board.noteSubagents([activity("t1", ended: true, at: 5)]), "a repeat changes nothing")
+        session = try XCTUnwrap(board.sessions[key])
+        XCTAssertEqual(session.subagents.first?.endedAt, t0.addingTimeInterval(5))
+        XCTAssertEqual(session.workingSubagentCount, 1)
+        XCTAssertTrue(board.noteSubagents([activity("t1", ended: false, at: 9)]))
+        XCTAssertEqual(board.sessions[key]?.workingSubagentCount, 2, "a later turn works again")
+
+        board.apply(AgentEvent(key: key, kind: .sessionEnded(nil), time: t0.addingTimeInterval(20), fromHook: true))
+        XCTAssertFalse(board.noteSubagents([activity("t3", ended: false, at: 21)]))
+        XCTAssertEqual(board.sessions[key]?.subagents.count, 2)
     }
 }
 

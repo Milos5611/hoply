@@ -395,7 +395,8 @@ struct NotificationSettings: View {
                         .fixedSize()
                     }
                     .help("For \"waiting for you\" banners, counted from the start of the turn. Permission prompts and questions always notify.")
-                    SwitchRow("Claude limit alerts at 80% and 95%", isOn: $settings.limitAlertsEnabled)
+                    SwitchRow("Plan limit alerts at 80% and 95%", isOn: $settings.limitAlertsEnabled)
+                        .help("Claude's windows while Claude plan limits are on, and Codex's from its session files")
                     SwitchRow("Local model offline for 2 minutes", isOn: $settings.localModelAlertsEnabled)
                     SwitchRow("Quiet hours", isOn: $settings.quietHoursEnabled)
                     if settings.quietHoursEnabled {

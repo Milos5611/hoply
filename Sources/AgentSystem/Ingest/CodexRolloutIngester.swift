@@ -17,6 +17,7 @@ public struct CodexRolloutIngester: Sendable {
     // `codex archive` moves a rollout here under the same name.
     public var archivedDirectory: String { home + "/archived_sessions" }
     public var watchedDirectories: [String] { [sessionsDirectory, archivedDirectory] }
+    public var sessionIndexPath: String { home + "/session_index.jsonl" }
 
     public func discover() -> [ClaudeTranscriptIngester.TranscriptFile] {
         let fileManager = FileManager.default

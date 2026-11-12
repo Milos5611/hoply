@@ -82,11 +82,11 @@ swift run Hoply --snapshot build/snapshots
 ```
 
 It renders sample data (never your real database) to PNGs: the panel (light, dark, full height, settings, full
-settings), every Dashboard page, the Limits empty state, the Local model offline and no-server states, the Clean up
-page, report and review sheet, the palette (empty, query, actions, no results) and its settings card, the Agents card
-states and the panel's connect and update nudges, and the footer's update button and the Updates card. It needs no
-Screen Recording permission, but it can't show Liquid Glass or vibrancy, because the window server draws those; the
-Dashboard snapshots draw a plain stand-in for the sidebar for the same reason.
+settings), every Dashboard page, the Limits empty and Codex-only states, the Local model offline and no-server states,
+the Clean up page, report and review sheet, the palette (empty, query, actions, no results) and its settings card, the
+Agents card states and the panel's connect and update nudges, and the footer's update button and the Updates card. It
+needs no Screen Recording permission, but it can't show Liquid Glass or vibrancy, because the window server draws
+those; the Dashboard snapshots draw a plain stand-in for the sidebar for the same reason.
 
 hoply.dev uses some of these images by file name (`panel`, `panel-approval`, `palette-query` and the Dashboard pages).
 If your change renames or drops one, say so in the pull request.

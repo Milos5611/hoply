@@ -101,13 +101,21 @@ public struct Ledger: Sendable {
     }
 
     public func limitProjections(now: Date = Date()) async throws -> [LimitKind: LimitsProjection] {
-        let start = now.addingTimeInterval(-LimitKind.sevenDay.windowLength - 3600)
+        let longest = try await reader.latestLimitSamples().keys.map(\.windowLength).max() ?? 0
+        let start = now.addingTimeInterval(-max(longest, LimitKind.sevenDay.windowLength) - 3600)
         return LimitsProjection.projections(try await reader.limitSamples(in: DateInterval(start: start,
-                                                                                           end: .distantFuture)))
+                                                                                           end: .distantFuture)),
+                                            now: now)
     }
 
     public func latestLimitSamples() async throws -> [LimitKind: LimitSample] {
         try await reader.latestLimitSamples()
+    }
+
+    public func currentLimitSamples(provider: LimitProvider? = nil) async throws -> [LimitKind: LimitSample] {
+        let current = LimitSample.current(try await reader.latestLimitSamples())
+        guard let provider else { return current }
+        return current.filter { $0.key.provider == provider }
     }
 
     public func copilotAllowance(settings: AppSettings, now: Date = Date()) async throws -> CopilotAllowance {
@@ -140,10 +148,10 @@ public struct Ledger: Sendable {
     }
 
     public func contextWindows(for sessions: [AgentSession]) async throws -> [SessionKey: ContextWindow] {
-        let claude = sessions.filter { $0.key.source == .claudeCode }
-        let calls = try await reader.lastMainCalls(for: claude.map(\.key))
+        let known = sessions.filter { $0.key.source == .claudeCode || $0.key.source == .codexCLI }
+        let calls = try await reader.lastMainCalls(for: known.map(\.key))
         var result: [SessionKey: ContextWindow] = [:]
-        for session in claude {
+        for session in known {
             if let call = calls[session.key] { result[session.key] = ContextWindow(lastCall: call, liveModel: session.model) }
         }
         return result

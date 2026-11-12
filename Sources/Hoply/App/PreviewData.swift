@@ -587,12 +587,14 @@ enum PreviewData {
             localModel: localModel(now: now, entries: entries, days: days),
             contextWindows: [liveKey: ContextWindow(used: 172_400, limit: ContextWindow.standard),
                              SessionKey(source: .claudeCode, id: "auth"): ContextWindow(used: 61_000,
-                                                                                         limit: ContextWindow.standard)],
+                                                                                         limit: ContextWindow.standard),
+                             SessionKey(source: .codexCLI, id: "hero"): ContextWindow(used: 226_100, limit: 258_400)],
             subagentCounts: [liveKey: 3, SessionKey(source: .claudeCode, id: "auth"): 2],
             insights: insights(now: now),
             unpricedModels: [UnpricedModel(model: "claude-nova-preview", calls: unpricedTotals.calls,
                                            tokens: unpricedTotals.tokens)],
-            pricedModels: ["claude-fable-5", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"])
+            pricedModels: ["claude-fable-5", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"],
+            codexLimits: codexLimits(now: now))
     }
 
     // MARK: - Local model
@@ -690,17 +692,100 @@ enum PreviewData {
         return samples.sorted { $0.ts < $1.ts }
     }
 
+    static let codexFiveHour = LimitKind.codex(windowMinutes: 300) ?? .fiveHour
+    static let codexWeek = LimitKind.codex(windowMinutes: 10_080) ?? .sevenDay
+
+    static func codexLimitSamples(now: Date, days: Int = 7) -> [LimitSample] {
+        let calendar = Calendar.current
+        let five: TimeInterval = 5 * 3_600, week: TimeInterval = 7 * 86_400
+        let fiveReset = now.addingTimeInterval(3.1 * 3_600)
+        let weekReset = now.addingTimeInterval(4.6 * 86_400)
+        let currentStart = fiveReset.addingTimeInterval(-five)
+        var times = Array(stride(from: now.addingTimeInterval(-Double(days) * 86_400), to: now, by: 900))
+        times.append(now)
+        let active = times.filter { $0 >= currentStart || codexIsActive(at: $0, calendar: calendar) }
+
+        var samples: [LimitSample] = []
+        for time in active {
+            let windowsBack = (fiveReset.timeIntervalSince(time) / five).rounded(.down)
+            let windowEnd = fiveReset.addingTimeInterval(-windowsBack * five)
+            let start = windowEnd.addingTimeInterval(-five)
+            let used = windowsBack == 0
+                ? 34 * time.timeIntervalSince(start) / now.timeIntervalSince(start)
+                : ((18 + 50 * abs(sin(windowsBack * 2.3))) * pow(time.timeIntervalSince(start) / five, 0.8)).rounded()
+            samples.append(LimitSample(kind: codexFiveHour, ts: time, utilization: used, resetsAt: windowEnd,
+                                       plan: "plus"))
+        }
+        for (index, time) in active.enumerated() {
+            let weeksBack = (weekReset.timeIntervalSince(time) / week).rounded(.down)
+            let weekEnd = weekReset.addingTimeInterval(-weeksBack * week)
+            let inWeek = active.indices.filter { active[$0] >= weekEnd.addingTimeInterval(-week) && active[$0] < weekEnd }
+            guard let first = inWeek.first, let last = inWeek.last else { continue }
+            let peak = weeksBack == 0 ? 31 : 63.0
+            let used = peak * Double(index - first + 1) / Double(last - first + 1)
+            samples.append(LimitSample(kind: codexWeek, ts: time, utilization: used.rounded(), resetsAt: weekEnd,
+                                       plan: "plus"))
+        }
+        return samples.sorted { $0.ts < $1.ts }
+    }
+
+    private static func codexIsActive(at time: Date, calendar: Calendar) -> Bool {
+        let weekday = calendar.component(.weekday, from: time)
+        return weekday != 1 && weekday != 7 && (9..<20).contains(calendar.component(.hour, from: time))
+    }
+
+    static let codexMonth = LimitKind.codex(windowMinutes: 43_200) ?? .sevenDay
+
+    static func codexFreeSamples(now: Date, days: Int = 30) -> [LimitSample] {
+        let calendar = Calendar.current
+        let resetsAt = now.addingTimeInterval(19.4 * 86_400)
+        let start = resetsAt.addingTimeInterval(-codexMonth.windowLength)
+        var active = stride(from: max(start, now.addingTimeInterval(-Double(days) * 86_400)), to: now, by: 900)
+            .filter { codexIsActive(at: $0, calendar: calendar) }
+        active.append(now)
+        return active.enumerated().map { index, time in
+            LimitSample(kind: codexMonth, ts: time, utilization: (23 * Double(index + 1) / Double(active.count)).rounded(),
+                        resetsAt: resetsAt, plan: "free")
+        }
+    }
+
+    static func codexLimits(now: Date, free: Bool = false) -> [LimitKind: LimitSample] {
+        var latest: [LimitKind: LimitSample] = [:]
+        for sample in free ? codexFreeSamples(now: now) : codexLimitSamples(now: now) { latest[sample.kind] = sample }
+        return LimitSample.current(latest)
+    }
+
+    static func codexOnlyHistory(now: Date) -> HistoryPreview {
+        var preview = history(now: now)
+        let samples = codexFreeSamples(now: now)
+        preview.codexLimits = codexLimits(now: now, free: true)
+        preview.limits?.samples = samples.filter { $0.ts >= now.addingTimeInterval(-7 * 86_400) }
+        preview.limits?.projections = LimitsProjection.projections(samples)
+        if let start = preview.limits?.projections[codexMonth]?.windowStart {
+            let first = Calendar.current.startOfDay(for: start)
+            preview.limits?.windowSpend = [codexMonth: preview.overview.daily.points
+                .filter { $0.series == AgentSource.codexCLI.rawValue && $0.day >= first }
+                .reduce(.zero) { $0 + $1.totals }]
+        }
+        return preview
+    }
+
     private static func limits(now: Date, entries: [Entry]) -> LimitsData {
         let calendar = Calendar.current
-        let samples = limitSamples(now: now)
+        let samples = (limitSamples(now: now) + codexLimitSamples(now: now)).sorted { $0.ts < $1.ts }
         let projections = LimitsProjection.projections(samples)
-        func claude(since day: Date) -> LedgerTotals {
-            entries.filter { $0.source == .claudeCode && $0.day >= day }.reduce(.zero) { $0 + $1.totals }
+        func spent(_ source: AgentSource, since day: Date) -> LedgerTotals {
+            entries.filter { $0.source == source && $0.day >= day }.reduce(.zero) { $0 + $1.totals }
         }
-        var spend = [LimitKind.fiveHour: scaled(claude(since: calendar.startOfDay(for: now)), by: 0.6)]
+        let today = calendar.startOfDay(for: now)
+        var spend = [LimitKind.fiveHour: scaled(spent(.claudeCode, since: today), by: 0.6),
+                     codexFiveHour: scaled(spent(.codexCLI, since: today), by: 0.5)]
         if let weekStart = projections[.sevenDay]?.windowStart {
-            spend[.sevenDay] = claude(since: calendar.startOfDay(for: weekStart))
+            spend[.sevenDay] = spent(.claudeCode, since: calendar.startOfDay(for: weekStart))
             spend[scopedKind] = spend[.sevenDay]
+        }
+        if let weekStart = projections[codexWeek]?.windowStart {
+            spend[codexWeek] = spent(.codexCLI, since: calendar.startOfDay(for: weekStart))
         }
         let month = CopilotAllowance.month(containing: now)
         let copilot = entries.filter { $0.source == .copilotCLI && $0.day >= month.start }

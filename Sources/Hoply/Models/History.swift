@@ -87,6 +87,7 @@ final class History {
     private(set) var insights: [SessionKey: SessionInsight] = [:]
     private(set) var unpricedModels: [UnpricedModel] = []
     private(set) var pricedModels: [String] = []
+    private(set) var codexLimits: [LimitKind: LimitSample] = [:]
     private(set) var note: String?
 
     private(set) var page: DashboardPage = .overview
@@ -136,6 +137,10 @@ final class History {
     @ObservationIgnored var onLoaded: ((DashboardPage) -> Void)?
     @ObservationIgnored private(set) var liveModels: [SessionKey: String] = [:]
     @ObservationIgnored var onLiveModels: (() -> Void)?
+    @ObservationIgnored var onLimits: (([LimitSample], [LimitKind: LimitSample]) -> Void)?
+    @ObservationIgnored var onCodexLimits: (() -> Void)?
+    @ObservationIgnored var onSubagents: (([SubagentActivity]) -> Void)?
+    @ObservationIgnored private var codexLimitsGeneration = 0
     @ObservationIgnored private var sampleTask: Task<Void, Never>?
     // Counter resets asked for per server, and how many a later sample write has settled. A Store opened in
     // between re-seeds its baselines from the old connection's buckets, so an unsettled reset is repeated on it.
@@ -170,6 +175,7 @@ final class History {
                 status = .unavailable("History is off: \(Self.describe(error))")
                 pendingUsage = []
                 pendingPrompts = []
+                showCodexLimits([:])
             }
         }
     }
@@ -192,6 +198,8 @@ final class History {
         }
         ledger = nil
         progress = IngestProgress()
+        codexLimitsGeneration += 1
+        showCodexLimits([:])
         open(configuration)
     }
 
@@ -216,6 +224,7 @@ final class History {
         }
         let sessions = liveSessions
         writeSpans(on: ledger, touching: Set(sessions.map(\.key))) { try await ledger.trackStateSpans(of: sessions) }
+        refreshCodexLimits()
         scheduleRefresh(after: .zero)
     }
 
@@ -225,6 +234,11 @@ final class History {
             liveModels.merge(update.models) { _, new in new }
             onLiveModels?()
         }
+        if !update.limits.isEmpty {
+            onLimits?(update.limits, update.previousLimits)
+            refreshCodexLimits()
+        }
+        if !update.subagents.isEmpty { onSubagents?(update.subagents) }
         let day = Calendar.current.startOfDay(for: Date())
         if !update.changedSessions.isEmpty || day != refreshedDay {
             scheduleRefresh()
@@ -338,6 +352,30 @@ final class History {
             note = "Recording limits failed: \(Self.describe(error))"
             return nil
         }
+    }
+
+    private func refreshCodexLimits() {
+        guard let ledger else { return }
+        codexLimitsGeneration += 1
+        let generation = codexLimitsGeneration
+        Task {
+            let current: [LimitKind: LimitSample]
+            do {
+                current = try await ledger.currentLimitSamples(provider: .codex)
+            } catch {
+                note = "Reading Codex limits failed: \(Self.describe(error))"
+                return
+            }
+            guard generation == codexLimitsGeneration else { return }
+            showCodexLimits(current)
+            if isDashboardVisible, page == .limits { reload(.limits) }
+        }
+    }
+
+    private func showCodexLimits(_ current: [LimitKind: LimitSample]) {
+        guard current != codexLimits else { return }
+        codexLimits = current
+        onCodexLimits?()
     }
 
     // Chained behind pending sample writes, so the old connection's last reading still lands on its baseline.
@@ -698,7 +736,7 @@ final class History {
                     guard let start = projection.windowStart, start < now else { continue }
                     let end = min(projection.resetsAt ?? now, now)
                     spend[kind] = try await reader.totalsBySource(in: DateInterval(start: start, end: max(end, start)))[
-                        .claudeCode] ?? .zero
+                        kind.provider.source] ?? .zero
                 }
                 let copilot = try await ledger.copilotAllowance(settings: plan, now: now)
                 let month = try await reader.totalsBySource(in: copilot.month)[.copilotCLI] ?? .zero
@@ -767,6 +805,7 @@ struct HistoryPreview {
     var insights: [SessionKey: SessionInsight] = [:]
     var unpricedModels: [UnpricedModel] = []
     var pricedModels: [String] = []
+    var codexLimits: [LimitKind: LimitSample] = [:]
 }
 
 extension History {
@@ -796,6 +835,7 @@ extension History {
         insights = preview.insights
         unpricedModels = preview.unpricedModels
         pricedModels = preview.pricedModels
+        codexLimits = preview.codexLimits
         self.page = page
     }
 

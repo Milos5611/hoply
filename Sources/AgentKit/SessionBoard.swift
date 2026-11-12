@@ -224,6 +224,25 @@ public struct SessionBoard: Sendable {
         return changed
     }
 
+    // Never creates a session: a subagent's file outlives its parent's live row.
+    @discardableResult
+    public mutating func noteSubagents(_ activity: [SubagentActivity]) -> Bool {
+        var changed = false
+        for item in activity.sorted(by: { $0.time < $1.time }) {
+            guard var session = sessions[item.session], session.state != .ended else { continue }
+            let before = session.subagents
+            if item.ended {
+                Self.stop(&session, subagent: item.agentID, type: item.type, at: item.time)
+            } else {
+                Self.touch(&session, subagent: item.agentID, type: item.type, at: item.time, restart: true)
+            }
+            guard session.subagents != before else { continue }
+            sessions[item.session] = session
+            changed = true
+        }
+        return changed
+    }
+
     static func title(from prompt: String?) -> String? {
         guard let prompt else { return nil }
         let firstLine = prompt

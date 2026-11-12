@@ -136,7 +136,8 @@ struct SessionRow: View {
         case .permission: text = "Waiting for your approval since \(since)"
         case .input: text = "Asked you a question at \(since)"
         case .limited(let until):
-            text = "Waiting since \(since). The Claude plan limit is reached; it resets at \(Format.clock(until))"
+            let plan = LimitProvider(source: session.key.source)?.displayName ?? "plan"
+            text = "Waiting since \(since). The \(plan) plan limit is reached; it resets at \(Format.clock(until))"
         case .yourTurn: text = failed ? "The turn failed at \(since)" : "Finished its turn at \(since)"
         case .working: text = "Working since \(since)"
         case .idle: text = "Idle since \(since)"

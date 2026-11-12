@@ -158,17 +158,37 @@ enum Format {
 
     static func resetTime(_ date: Date?) -> String {
         guard let date else { return "" }
-        let formatter = date.timeIntervalSinceNow < 20 * 3_600 ? timeFormatter : dayTimeFormatter
-        return "Resets \(formatter.string(from: date))"
+        return "Resets \(clock(date))"
     }
 
     static func day(_ date: Date) -> String {
         dayFormatter.string(from: date)
     }
 
+    // A weekday alone repeats after 7 days, so a 30-day window's reset needs the date.
     static func clock(_ date: Date, now: Date = Date()) -> String {
-        let formatter = abs(date.timeIntervalSince(now)) < 20 * 3_600 ? timeFormatter : dayTimeFormatter
+        let distance = abs(date.timeIntervalSince(now))
+        let formatter = distance < 20 * 3_600 ? timeFormatter : distance < 6 * 86_400 ? dayTimeFormatter : dateTimeFormatter
         return formatter.string(from: date)
+    }
+
+    private static let codexPlans = [
+        "free": "Free", "go": "Go", "plus": "Plus", "pro": "Pro 200", "prolite": "Pro 100", "promax": "Pro 500",
+        "team": "Business", "self_serve_business_usage_based": "Business", "business": "Enterprise",
+        "self_serve_business_prolite": "Business Premium", "enterprise_cbp_automation": "Enterprise (Automation)",
+        "enterprise": "Enterprise", "ent26": "Enterprise", "enterprise_cbp_usage_based": "Enterprise", "edu": "Edu",
+        "edu_plus": "Edu Plus", "edu_pro": "Edu Pro", "sci": "Academic Researchers",
+        "sci_plus": "Academic Researchers Plus",
+    ]
+
+    // Codex's own /status labels (tui/src/subscription.rs, 0.167.1), so "pro" reads as Codex shows it.
+    static func codexPlan(_ raw: String?) -> String? {
+        let raw = (raw ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        guard !raw.isEmpty, raw != "unknown" else { return nil }
+        if let known = codexPlans[raw] { return known }
+        return raw.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == " " })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
     }
 
     static func timeOfDay(minutes: Int) -> String {

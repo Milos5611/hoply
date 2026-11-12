@@ -281,7 +281,7 @@ struct SessionDetail: View {
         let live = model.sessions.first { $0.key == session.key }
         if let context = insight?.context {
             Card(prominent: true, padding: 14) {
-                ContextGauge(context: context)
+                ContextGauge(context: context, source: session.key.source)
             }
         }
         let rows = SubagentRow.rows(ledger: insight?.subagents ?? [], live: live?.subagents ?? [])
@@ -405,6 +405,7 @@ struct SessionDetail: View {
 
 struct ContextGauge: View {
     let context: ContextWindow
+    let source: AgentSource
 
     var body: some View {
         let tint: Color = context.fraction >= 0.95 ? .red : context.isWarning ? .orange : .blue
@@ -438,11 +439,16 @@ struct ContextGauge: View {
                             .offset(x: geometry.size.width * ContextWindow.warnFraction, y: -2)
                     }
                 }
-            Text("\(Format.tokens(context.remaining)) left · the latest main call's prompt")
+            Text("\(Format.tokens(context.remaining)) left · \(reported ? "the latest call, prompt and reply" : "the latest main call's prompt")")
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .help("Input, cache reads and cache writes of the session's latest main-agent call against the model's window. The tick marks 80%, where the panel starts to warn.")
+        .help(reported
+              ? "The session's latest call, prompt and reply, against the context window Codex reports for the model. The tick marks 80%, where the panel starts to warn."
+              : "Input, cache reads and cache writes of the session's latest main-agent call against the model's window. The tick marks 80%, where the panel starts to warn.")
+    }
+
+    private var reported: Bool { source == .codexCLI
     }
 }
 

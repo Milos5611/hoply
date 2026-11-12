@@ -5,12 +5,14 @@ public struct SessionLastCall: Sendable, Equatable {
     public var model: String?
     public var timestamp: Date
     public var tokens: TokenCounts
+    public var contextLimit: Int?
 
-    public init(key: SessionKey, model: String?, timestamp: Date, tokens: TokenCounts) {
+    public init(key: SessionKey, model: String?, timestamp: Date, tokens: TokenCounts, contextLimit: Int? = nil) {
         self.key = key
         self.model = model
         self.timestamp = timestamp
         self.tokens = tokens
+        self.contextLimit = contextLimit
     }
 }
 
@@ -32,7 +34,12 @@ public struct ContextWindow: Sendable, Equatable {
         self.init(used: used, limit: limit)
     }
 
+    // A reported window (Codex) counts the reply too: Codex's `tokens_in_context_window` is the call's total.
     public init?(lastCall: SessionLastCall, liveModel: String? = nil) {
+        if let limit = lastCall.contextLimit, limit > 0 {
+            self.init(used: lastCall.tokens.total, limit: limit)
+            return
+        }
         self.init(used: lastCall.tokens.promptTokens, model: lastCall.model, liveModel: liveModel)
     }
 

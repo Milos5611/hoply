@@ -1,7 +1,7 @@
 import Foundation
 
 public enum Schema {
-    public static let migrations: [String] = [v1, v2, v3, v4]
+    public static let migrations: [String] = [v1, v2, v3, v4, v5]
 
     static let v1 = """
     CREATE TABLE projects (
@@ -148,6 +148,11 @@ public enum Schema {
         dismissed_at REAL NOT NULL
     );
     CREATE INDEX state_spans_open ON state_spans(source, session_id) WHERE end_at IS NULL;
+    """
+
+    static let v5 = """
+    ALTER TABLE limit_samples ADD COLUMN plan TEXT;
+    ALTER TABLE sessions ADD COLUMN context_window INTEGER;
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {

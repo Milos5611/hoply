@@ -70,8 +70,9 @@ final class AppModel {
                         limits: limitSamples, localModelPatterns: settings.localModelPatterns, now: Date())
     }
     var limitSamples: [LimitSample] {
-        guard let claudeLimits, let claudeLimitsFetchedAt else { return [] }
-        return claudeLimits.samples(at: claudeLimitsFetchedAt)
+        let codex = Array(history.codexLimits.values)
+        guard let claudeLimits, let claudeLimitsFetchedAt else { return codex }
+        return claudeLimits.samples(at: claudeLimitsFetchedAt) + codex
     }
     var defaultEditor: Editor? {
         editors.first { $0.id == defaultEditorID } ?? editors.first
@@ -134,6 +135,9 @@ final class AppModel {
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
         history.onLiveModels = { [weak self] in self?.applyLiveModels() }
+        history.onLimits = { [weak self] samples, previous in self?.codexLimitsRead(samples, previous: previous) }
+        history.onCodexLimits = { [weak self] in self?.checkLimitedSessions(now: Date()) }
+        history.onSubagents = { [weak self] activity in self?.applySubagents(activity) }
         projectEdits.onEdited = { [weak self] in self?.projectsEdited() }
         history.open(LedgerConfiguration(settings: settings))
         ResumeLauncher.prune()
@@ -193,6 +197,10 @@ final class AppModel {
 
     private func applyLiveModels() {
         if board.noteModels(history.liveModels) { publishSessions() }
+    }
+
+    private func applySubagents(_ activity: [SubagentActivity]) {
+        if board.noteSubagents(activity) { publishSessions() }
     }
 
     private func publishSessions() {
@@ -461,7 +469,7 @@ final class AppModel {
         if cameOnScreen { modelServers.cameOnScreen() }
     }
 
-    // MARK: - Claude plan limits
+    // MARK: - Plan limits
 
     func refreshClaudeLimits() async {
         guard settings.claudeLimitsEnabled, !isFetchingLimits else { return }
@@ -494,6 +502,10 @@ final class AppModel {
         guard epoch == limitsEpoch else { return }
         perform(policy.limitsUpdated(limits.samples(at: fetched), previous: previous, now: Date()))
         checkLimitedSessions(now: Date())
+    }
+
+    private func codexLimitsRead(_ samples: [LimitSample], previous: [LimitKind: LimitSample]) {
+        perform(policy.limitsUpdated(samples, previous: previous, now: Date()))
     }
 
     func toggleNotifications() {

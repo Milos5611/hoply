@@ -132,6 +132,7 @@ public struct NotificationPolicy: Sendable {
 
     public static let cooldown: TimeInterval = 120
     public static let limitThresholds: [Double] = [80, 95]
+    public static let limitAlertFreshness: TimeInterval = 600
     public static let offlineAlertAfter: TimeInterval = 120
     public static let offlineCheckGap: TimeInterval = 90
     public static let localModelOfflineID = "local-model:offline"
@@ -161,7 +162,7 @@ public struct NotificationPolicy: Sendable {
     private var lastLimitSamples: [LimitKind: LimitSample] = [:]
     private var postedLimitAlerts: [String: Date] = [:]
     private var modelServers: [String: LocalModelWatch] = [:]
-    private var limitedWatch: LimitedWatch?
+    private var limitedWatches: [LimitProvider: LimitedWatch] = [:]
 
     public init(preferences: NotificationPreferences = NotificationPreferences(), calendar: Calendar = .current) {
         self.preferences = preferences
@@ -240,13 +241,13 @@ public struct NotificationPolicy: Sendable {
         }
     }
 
-    // MARK: - Claude limits
+    // MARK: - Plan limits
 
     public mutating func limitsUpdated(_ samples: [LimitSample], previous stored: [LimitKind: LimitSample]?,
                                        now: Date = Date()) -> NotificationActions {
         postedLimitAlerts = postedLimitAlerts.filter { now.timeIntervalSince($0.value) < 86_400 }
         var actions = NotificationActions()
-        for sample in samples {
+        for sample in samples.sorted(by: { $0.ts < $1.ts }) {
             let previous = [stored?[sample.kind], lastLimitSamples[sample.kind]]
                 .compactMap { $0 }
                 .filter { $0.kind == sample.kind && $0.ts <= sample.ts }
@@ -254,7 +255,9 @@ public struct NotificationPolicy: Sendable {
             if (lastLimitSamples[sample.kind]?.ts ?? .distantPast) <= sample.ts {
                 lastLimitSamples[sample.kind] = sample
             }
-            guard let threshold = Self.crossedThreshold(previous: previous, current: sample) else { continue }
+            // A reading read back from an older rollout line still raises the floor, but is no news.
+            guard let threshold = Self.crossedThreshold(previous: previous, current: sample),
+                  now.timeIntervalSince(sample.ts) <= Self.limitAlertFreshness else { continue }
             let id = Self.limitID(sample, threshold: threshold)
             guard postedLimitAlerts[id] == nil, preferences.enabled, preferences.limitAlerts,
                   !isQuiet(at: now) else { continue }
@@ -281,9 +284,9 @@ public struct NotificationPolicy: Sendable {
         let body = sample.resetsAt.map { resetsAt in
             resetsAt > now ? "Resets in \(duration(resetsAt.timeIntervalSince(now)))." : "Resets soon."
         } ?? ""
+        let title = "\(sample.kind.provider.displayName) \(sample.kind.limitPhrase) at \(percent)%"
         return NotificationRequest(id: id, kind: .limit, interruption: threshold >= 95 ? .active : .passive,
-                                   title: "Claude \(sample.kind.limitPhrase) at \(percent)%", body: body,
-                                   threadID: limitsThreadID)
+                                   title: title, body: body, threadID: limitsThreadID)
     }
 
     // MARK: - Limited sessions
@@ -295,33 +298,48 @@ public struct NotificationPolicy: Sendable {
     public mutating func limitedSessionsChecked(_ sessions: [AgentSession], limits: [LimitSample],
                                                 localModelPatterns: [String] = [],
                                                 now: Date = Date()) -> NotificationActions {
-        var blocked: [(session: SessionKey, window: LimitSample)] = []
+        var blocked: [LimitProvider: [(session: SessionKey, window: LimitSample)]] = [:]
         for session in sessions {
             if let window = LimitedSessions.blockingWindow(for: session, limits: limits,
                                                            localModelPatterns: localModelPatterns, now: now) {
-                blocked.append((session.key, window))
+                blocked[window.kind.provider, default: []].append((session.key, window))
             }
         }
+        var actions = NotificationActions()
+        for provider in LimitProvider.allCases {
+            if let request = limitedSessionsChecked(provider, blocked: blocked[provider] ?? [], sessions: sessions,
+                                                    limits: limits, now: now) {
+                actions.post.append(request)
+            }
+        }
+        return actions
+    }
+
+    private mutating func limitedSessionsChecked(_ provider: LimitProvider,
+                                                 blocked: [(session: SessionKey, window: LimitSample)],
+                                                 sessions: [AgentSession], limits: [LimitSample],
+                                                 now: Date) -> NotificationRequest? {
         if let last = blocked.max(by: { ($0.window.resetsAt ?? now) < ($1.window.resetsAt ?? now) }),
            let resetsAt = last.window.resetsAt {
-            limitedWatch = LimitedWatch(kind: last.window.kind, resetsAt: resetsAt, sessions: Set(blocked.map(\.session)))
-            return NotificationActions()
+            limitedWatches[provider] = LimitedWatch(kind: last.window.kind, resetsAt: resetsAt,
+                                                    sessions: Set(blocked.map(\.session)))
+            return nil
         }
-        guard let watch = limitedWatch else { return NotificationActions() }
+        guard let watch = limitedWatches[provider] else { return nil }
         let waiting = sessions.filter { watch.sessions.contains($0.key) && $0.state == .yourTurn && !$0.awaitsInput }
         guard !waiting.isEmpty else {
-            limitedWatch = nil
-            return NotificationActions()
+            limitedWatches[provider] = nil
+            return nil
         }
         // Without a reading (limits switched off, a failed fetch) only the clock can tell.
         let newest = limits.filter { $0.kind == watch.kind }.max { $0.ts < $1.ts }
-        guard now >= watch.resetsAt || newest != nil else { return NotificationActions() }
-        limitedWatch = nil
+        guard now >= watch.resetsAt || newest != nil else { return nil }
+        limitedWatches[provider] = nil
 
         let id = Self.limitResetID(watch.kind, resetsAt: watch.resetsAt)
         postedLimitAlerts = postedLimitAlerts.filter { now.timeIntervalSince($0.value) < 86_400 }
         guard postedLimitAlerts[id] == nil, preferences.enabled, preferences.limitAlerts, !isQuiet(at: now) else {
-            return NotificationActions()
+            return nil
         }
         postedLimitAlerts[id] = now
         let body: String
@@ -331,9 +349,10 @@ public struct NotificationPolicy: Sendable {
         } else {
             body = "\(waiting.count) sessions can continue."
         }
-        return NotificationActions(post: [NotificationRequest(
-            id: id, kind: .limit, interruption: .active, title: "Claude \(watch.kind.limitPhrase) reset", body: body,
-            threadID: Self.limitsThreadID, session: waiting.count == 1 ? waiting.first?.key : nil, cause: .limitReset)])
+        return NotificationRequest(
+            id: id, kind: .limit, interruption: .active,
+            title: "\(provider.displayName) \(watch.kind.limitPhrase) reset", body: body,
+            threadID: Self.limitsThreadID, session: waiting.count == 1 ? waiting.first?.key : nil, cause: .limitReset)
     }
 
     // MARK: - Local model
@@ -415,15 +434,5 @@ public struct NotificationPolicy: Sendable {
         let hours = minutes / 60
         if hours < 24 { return minutes % 60 == 0 ? "\(hours) h" : "\(hours) h \(minutes % 60) min" }
         return hours % 24 == 0 ? "\(hours / 24) d" : "\(hours / 24) d \(hours % 24) h"
-    }
-}
-
-private extension LimitKind {
-    var limitPhrase: String {
-        switch self {
-        case .fiveHour: return "5-hour limit"
-        case .sevenDay: return "weekly limit"
-        default: return "weekly \(scopeName) limit"
-        }
     }
 }

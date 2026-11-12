@@ -76,7 +76,7 @@ enum Snapshot {
                     case .projects: 980
                     case .sessions: 900
                     case .spending: 1_420
-                    case .limits: 1_200
+                    case .limits: 1_520
                     case .localModel: 1_560
                     case .cleanUp: 1_180
                     default: 760
@@ -118,10 +118,14 @@ enum Snapshot {
                 empty.limits?.samples = []
                 empty.limits?.projections = [:]
                 empty.limits?.copilot.allowance = 0
+                empty.codexLimits = [:]
                 model.showPreview(settings: disconnected)
                 model.history.show(empty, page: .limits)
                 try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model, appearance: looks,
                            to: directory.appendingPathComponent("dashboard-limits-empty-\(name).png"))
+                model.history.show(PreviewData.codexOnlyHistory(now: now), page: .limits)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_080), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-limits-codex-\(name).png"))
                 model.showPreview(settings: PreviewData.settings)
 
                 let lastSeen = now.addingTimeInterval(-47 * 60)

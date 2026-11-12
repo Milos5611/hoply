@@ -247,7 +247,15 @@ public actor StoreReader {
                                                     cacheRead: row.int(4), cacheWrite5m: row.int(5),
                                                     cacheWrite1h: row.int(6)))
             }
-            for call in rows { result[call.key] = call }
+            let limits = try db.query("""
+                SELECT id, context_window FROM sessions
+                WHERE source = ? AND id IN (SELECT value FROM json_each(?)) AND context_window > 0
+                """, [source.rawValue, Self.jsonArray(rows.map(\.key.id))]) { row in (row.text(0), row.int(1)) }
+            let windows = Dictionary(limits, uniquingKeysWith: { first, _ in first })
+            for var call in rows {
+                call.contextLimit = windows[call.key.id]
+                result[call.key] = call
+            }
         }
         return result
     }
@@ -354,7 +362,7 @@ public actor StoreReader {
             values.append(Self.jsonArray(kinds.map(\.rawValue)))
         }
         let samples = try db.query("""
-            SELECT kind, ts, utilization, resets_at FROM limit_samples WHERE \(filter) ORDER BY ts, kind
+            SELECT kind, ts, utilization, resets_at, plan FROM limit_samples WHERE \(filter) ORDER BY ts, kind
             """, values) { Self.limitSample($0) }.compactMap { $0 }
         guard let bucket, bucket > 0 else { return samples }
         return Self.peaks(samples, bucket: bucket)
@@ -380,16 +388,17 @@ public actor StoreReader {
     }
 
     static func latestLimitSamples(_ db: SQLiteConnection) throws -> [LimitKind: LimitSample] {
-        let rows = try db.query("SELECT kind, MAX(ts), utilization, resets_at FROM limit_samples GROUP BY kind") {
+        let rows = try db.query("SELECT kind, MAX(ts), utilization, resets_at, plan FROM limit_samples GROUP BY kind") {
             Self.limitSample($0)
         }
         return Dictionary(rows.compactMap { $0.map { ($0.kind, $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
-    private static func limitSample(_ row: SQLiteRow) -> LimitSample? {
+    static func limitSample(_ row: SQLiteRow) -> LimitSample? {
         guard let kind = LimitKind(rawValue: row.text(0)) else { return nil }
         return LimitSample(kind: kind, ts: Date(timeIntervalSince1970: row.double(1)), utilization: row.double(2),
-                           resetsAt: row.optionalDouble(3).map(Date.init(timeIntervalSince1970:)))
+                           resetsAt: row.optionalDouble(3).map(Date.init(timeIntervalSince1970:)),
+                           plan: row.optionalText(4))
     }
 
     // MARK: - Samples
