@@ -1,8 +1,8 @@
 {
-  "sessionStart": {"sessionId": "cp-9", "timestamp": 1794228411042, "cwd": "/Users/milos/Project/yasm-backend", "source": "new", "initialPrompt": "Add pagination to the orders endpoint"},
-  "userPromptSubmitted": {"sessionId": "cp-9", "timestamp": 1794228412042, "cwd": "/Users/milos/Project/yasm-backend", "prompt": "Also add tests"},
-  "preToolUse": {"sessionId": "cp-9", "timestamp": 1794228413042, "cwd": "/Users/milos/Project/yasm-backend", "toolName": "bash", "toolArgs": "{\"command\":\"dotnet test\"}"},
-  "postToolUse": {"sessionId": "cp-9", "timestamp": 1794228414042, "cwd": "/Users/milos/Project/yasm-backend", "toolName": "bash", "toolArgs": "{}", "toolResult": {"resultType": "success"}},
-  "agentStop": {"sessionId": "cp-9", "timestamp": 1794228415042, "cwd": "/Users/milos/Project/yasm-backend", "transcriptPath": "/tmp/t.jsonl", "stopReason": "end_turn"},
-  "sessionEnd": {"sessionId": "cp-9", "timestamp": 1794228416042, "cwd": "/Users/milos/Project/yasm-backend", "reason": "user_exit"}
+  "sessionStart": {"sessionId": "cp-9", "timestamp": 1794228411042, "cwd": "/Users/dev/Project/yasm-backend", "source": "new", "initialPrompt": "Add pagination to the orders endpoint"},
+  "userPromptSubmitted": {"sessionId": "cp-9", "timestamp": 1794228412042, "cwd": "/Users/dev/Project/yasm-backend", "prompt": "Also add tests"},
+  "preToolUse": {"sessionId": "cp-9", "timestamp": 1794228413042, "cwd": "/Users/dev/Project/yasm-backend", "toolName": "bash", "toolArgs": "{\"command\":\"dotnet test\"}"},
+  "postToolUse": {"sessionId": "cp-9", "timestamp": 1794228414042, "cwd": "/Users/dev/Project/yasm-backend", "toolName": "bash", "toolArgs": "{}", "toolResult": {"resultType": "success"}},
+  "agentStop": {"sessionId": "cp-9", "timestamp": 1794228415042, "cwd": "/Users/dev/Project/yasm-backend", "transcriptPath": "/tmp/t.jsonl", "stopReason": "end_turn"},
+  "sessionEnd": {"sessionId": "cp-9", "timestamp": 1794228416042, "cwd": "/Users/dev/Project/yasm-backend", "reason": "user_exit"}
 }

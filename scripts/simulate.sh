@@ -33,7 +33,7 @@ otlp_chat_span() { # service, conversation id, model, input tokens, output token
     "$(attr gen_ai.usage.output_tokens intValue "$5")"
 }
 
-CLAUDE_CWD="$HOME/Project/fiba"
+CLAUDE_CWD="$HOME/Project/CoreStory"
 # Real Claude Code hooks always send transcript_path; this one doesn't exist, so the ledger ignores it.
 CLAUDE_TRANSCRIPT="${TMPDIR:-/tmp}/hoply-sim/sim-claude.jsonl"
 COPILOT_CWD="$HOME/Project/yasm-backend"

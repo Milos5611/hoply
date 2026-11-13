@@ -7,7 +7,7 @@ final class SessionBoardTests: XCTestCase {
 
     private func hook(_ kind: AgentEvent.Kind, at seconds: TimeInterval, key: SessionKey? = nil) -> AgentEvent {
         AgentEvent(key: key ?? claude, kind: kind, time: t0.addingTimeInterval(seconds),
-                   cwd: "/Users/milos/Project/fiba", fromHook: true)
+                   cwd: "/Users/dev/Project/corestory", fromHook: true)
     }
 
     private func telemetry(_ kind: AgentEvent.Kind, at seconds: TimeInterval, key: SessionKey? = nil) -> AgentEvent {
@@ -18,7 +18,7 @@ final class SessionBoardTests: XCTestCase {
         var board = SessionBoard()
         board.apply(hook(.sessionStarted, at: 0))
         XCTAssertEqual(board.sessions[claude]?.state, .idle)
-        XCTAssertEqual(board.sessions[claude]?.project, "fiba")
+        XCTAssertEqual(board.sessions[claude]?.project, "corestory")
 
         board.apply(hook(.promptSubmitted("Fix the flaky login test\nand explain why"), at: 1))
         XCTAssertEqual(board.sessions[claude]?.state, .working)

@@ -55,7 +55,7 @@ final class SessionInsightBoardTests: XCTestCase {
 
     @discardableResult
     private func hook(_ kind: AgentEvent.Kind, at seconds: TimeInterval, agent: String? = nil,
-                      cwd: String = "/r/fiba") -> StateChange? {
+                      cwd: String = "/r/corestory") -> StateChange? {
         board.apply(AgentEvent(key: key, kind: kind, time: t0.addingTimeInterval(seconds), cwd: cwd, fromHook: true,
                                agentID: agent, agentType: agent == nil ? nil : "Explore"))
     }
@@ -103,10 +103,10 @@ final class SessionInsightBoardTests: XCTestCase {
         hook(.promptSubmitted("Go"), at: 0)
         XCTAssertNil(hook(.subagentStarted(id: "a1", type: "Explore"), at: 1))
         hook(.subagentStarted(id: "a2", type: "general-purpose"), at: 2)
-        hook(.toolStarted("Grep"), at: 3, agent: "a3", cwd: "/r/fiba/.claude/worktrees/w1")
+        hook(.toolStarted("Grep"), at: 3, agent: "a3", cwd: "/r/corestory/.claude/worktrees/w1")
         XCTAssertEqual(session.subagents.map(\.id), ["a1", "a2", "a3"])
         XCTAssertEqual(session.workingSubagentCount, 3)
-        XCTAssertEqual(session.cwd, "/r/fiba", "a subagent's worktree is not the session's cwd")
+        XCTAssertEqual(session.cwd, "/r/corestory", "a subagent's worktree is not the session's cwd")
         XCTAssertNil(session.lastTool)
 
         hook(.subagentStopped(id: "a1", type: "Explore"), at: 10)
@@ -385,7 +385,7 @@ final class MonogramTests: XCTestCase {
     func testLetters() {
         let cases: [(String, String)] = [
             ("hoply", "H"), ("yasm-backend", "YB"), ("yasm_backend", "YB"), ("yasm.backend.api", "YB"),
-            ("yasmBackend", "YB"), ("HTTPServer", "HS"), ("Mobile UI", "MU"), ("fiba", "F"), ("fiba2", "F2"),
+            ("yasmBackend", "YB"), ("HTTPServer", "HS"), ("Mobile UI", "MU"), ("corestory", "C"), ("corestory2", "C2"),
             ("v2", "V2"), ("3d-engine", "3D"), ("2048", "2"), ("UI", "UI"), ("API", "A"), (".github", "G"),
             ("@scope/pkg", "SP"), ("проект", "П"), ("мой проект", "МП"), ("東京", "東京"), ("東京プロジェクト", "東"),
             ("🚀 launch", "🚀"), ("launch 🚀", "L"), ("", "?"), ("   ", "?"), ("---", "?"), ("Unassigned", "U"),

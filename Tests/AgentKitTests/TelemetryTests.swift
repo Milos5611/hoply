@@ -157,7 +157,7 @@ final class HookMapperTests: XCTestCase {
 
         let start = HookMapper.events(source: .claudeCode, eventName: nil, json: try XCTUnwrap(payloads["SessionStart"]))
         XCTAssertEqual(start.first?.key, SessionKey(source: .claudeCode, id: "abc123"))
-        XCTAssertEqual(start.first?.cwd, "/Users/milos/Project/fiba")
+        XCTAssertEqual(start.first?.cwd, "/Users/dev/Project/corestory")
         XCTAssertEqual(start.first?.model, "claude-opus-5")
         XCTAssertEqual(start.first?.fromHook, true)
     }

@@ -26,7 +26,7 @@ final class SessionPidTests: XCTestCase {
         ScannedProcess(
             identity: ProcessIdentity(pid: pid, startedAt: Date(timeIntervalSince1970: started ?? 1_000 + Double(pid))),
             parentPID: parent, groupID: group ?? pid, uid: uid, name: name, executable: executable,
-            arguments: arguments, cwd: "/Users/dev/Project/fiba",
+            arguments: arguments, cwd: "/Users/dev/Project/corestory",
             listeners: ports.map { ListeningSocket(port: $0, family: .ipv6, address: "::") })
     }
 
@@ -112,7 +112,7 @@ final class SessionPidTests: XCTestCase {
             process(611, parent: 610, name: "zsh", executable: "/bin/zsh", ["/bin/zsh", "-c", "npm run dev"]),
             process(612, parent: 611, group: 611, ["node", "/p/node_modules/.bin/vite"], ports: [5174]),
         ])
-        let folder = "/Users/dev/Project/fiba"
+        let folder = "/Users/dev/Project/corestory"
         let byDirectory = [DevServerClassifier.Session(key: claudeA, cwd: folder),
                            DevServerClassifier.Session(key: claudeB, cwd: folder)]
         XCTAssertEqual(classifier.servers(in: snapshot, sessions: byDirectory).map(\.sessionMatch),
@@ -172,20 +172,20 @@ final class PathRulesTests: XCTestCase {
 
 final class GitRemoteTests: XCTestCase {
     func testSshAndHttpsFormsOfOneRepositoryAgree() {
-        let forms = ["git@github.com:Acme/Fiba.git", "https://github.com/acme/fiba", "https://github.com/acme/fiba.git/",
-                     "ssh://git@github.com:22/acme/fiba.git", "https://user:secret@github.com/acme/fiba.git",
-                     "git://GitHub.com/acme/fiba", "github.com:acme/fiba", "  https://github.com/acme/fiba\n"]
-        for form in forms { XCTAssertEqual(GitRemote.identity(form), "github.com/acme/fiba", form) }
+        let forms = ["git@github.com:Acme/CoreStory.git", "https://github.com/acme/corestory", "https://github.com/acme/corestory.git/",
+                     "ssh://git@github.com:22/acme/corestory.git", "https://user:secret@github.com/acme/corestory.git",
+                     "git://GitHub.com/acme/corestory", "github.com:acme/corestory", "  https://github.com/acme/corestory\n"]
+        for form in forms { XCTAssertEqual(GitRemote.identity(form), "github.com/acme/corestory", form) }
         XCTAssertEqual(GitRemote.identity("https://gitlab.example.com:8443/group/sub/repo.git"),
                        "gitlab.example.com/group/sub/repo")
-        XCTAssertNotEqual(GitRemote.identity("git@github.com:acme/fiba.git"), GitRemote.identity("git@github.com:acme/fiba-web.git"))
-        XCTAssertNotEqual(GitRemote.identity("git@github.com:acme/fiba.git"), GitRemote.identity("git@gitlab.com:acme/fiba.git"))
-        XCTAssertEqual(GitRemote.identity("/srv/git/fiba.git"), "file:/srv/git/fiba")
-        XCTAssertEqual(GitRemote.identity("file:///srv/git/fiba.git"), "file:/srv/git/fiba")
-        for bad in ["", "../fiba", "fiba", "https://", "ftp://example.com/x", "git@github.com:", "a b:c/d"] {
+        XCTAssertNotEqual(GitRemote.identity("git@github.com:acme/corestory.git"), GitRemote.identity("git@github.com:acme/corestory-web.git"))
+        XCTAssertNotEqual(GitRemote.identity("git@github.com:acme/corestory.git"), GitRemote.identity("git@gitlab.com:acme/corestory.git"))
+        XCTAssertEqual(GitRemote.identity("/srv/git/corestory.git"), "file:/srv/git/corestory")
+        XCTAssertEqual(GitRemote.identity("file:///srv/git/corestory.git"), "file:/srv/git/corestory")
+        for bad in ["", "../corestory", "corestory", "https://", "ftp://example.com/x", "git@github.com:", "a b:c/d"] {
             XCTAssertNil(GitRemote.identity(bad), bad)
         }
-        XCTAssertFalse(GitRemote.identity("https://user:secret@github.com/acme/fiba.git")?.contains("secret") ?? true)
+        XCTAssertFalse(GitRemote.identity("https://user:secret@github.com/acme/corestory.git")?.contains("secret") ?? true)
     }
 
     func testOriginUrlFromConfig() {
@@ -193,31 +193,31 @@ final class GitRemoteTests: XCTestCase {
             [core]
             \trepositoryformatversion = 0
             [remote "upstream"]
-            \turl = git@github.com:other/fiba.git
+            \turl = git@github.com:other/corestory.git
             # url = git@github.com:commented/out.git
             [Remote "origin"]
-            \tURL = "git@github.com:acme/fiba.git"
+            \tURL = "git@github.com:acme/corestory.git"
             \tfetch = +refs/heads/*:refs/remotes/origin/*
             [branch "main"]
             \tremote = origin
             \turl = not-this
             """
-        XCTAssertEqual(GitRemote.url(inConfig: config), "git@github.com:acme/fiba.git")
-        XCTAssertEqual(GitRemote.url(inConfig: config, remote: "upstream"), "git@github.com:other/fiba.git")
+        XCTAssertEqual(GitRemote.url(inConfig: config), "git@github.com:acme/corestory.git")
+        XCTAssertEqual(GitRemote.url(inConfig: config, remote: "upstream"), "git@github.com:other/corestory.git")
         XCTAssertNil(GitRemote.url(inConfig: "[remote \"Origin\"]\nurl = x\n"), "remote names are case-sensitive")
         XCTAssertNil(GitRemote.url(inConfig: "[core]\nbare = false\n"))
         XCTAssertNil(GitRemote.url(inConfig: ""))
     }
 
     func testOriginOfARepoAndOfALinkedWorktree() {
-        let fs = RepoFileSystem(directories: ["/p/fiba/.git"], files: [
-            "/p/fiba/.git/config": "[remote \"origin\"]\n\turl = git@github.com:acme/fiba.git\n",
-            "/p/fiba-wt/.git": "gitdir: /p/fiba/.git/worktrees/wt\n",
-            "/p/fiba/.git/worktrees/wt/commondir": "../..\n",
+        let fs = RepoFileSystem(directories: ["/p/corestory/.git"], files: [
+            "/p/corestory/.git/config": "[remote \"origin\"]\n\turl = git@github.com:acme/corestory.git\n",
+            "/p/corestory-wt/.git": "gitdir: /p/corestory/.git/worktrees/wt\n",
+            "/p/corestory/.git/worktrees/wt/commondir": "../..\n",
             "/p/plain/readme": "x",
         ])
-        XCTAssertEqual(GitRemote.originURL(ofRepoAt: "/p/fiba", fileSystem: fs), "git@github.com:acme/fiba.git")
-        XCTAssertEqual(GitRemote.originURL(ofRepoAt: "/p/fiba-wt", fileSystem: fs), "git@github.com:acme/fiba.git")
+        XCTAssertEqual(GitRemote.originURL(ofRepoAt: "/p/corestory", fileSystem: fs), "git@github.com:acme/corestory.git")
+        XCTAssertEqual(GitRemote.originURL(ofRepoAt: "/p/corestory-wt", fileSystem: fs), "git@github.com:acme/corestory.git")
         XCTAssertNil(GitRemote.originURL(ofRepoAt: "/p/plain", fileSystem: fs))
         XCTAssertNil(GitRemote.originURL(ofRepoAt: "/p/gone", fileSystem: fs))
     }
@@ -226,21 +226,21 @@ final class GitRemoteTests: XCTestCase {
         func project(_ id: Int64, _ name: String) -> ProjectRef {
             ProjectRef(id: id, root: "/p/\(name)", name: name, kind: .repo)
         }
-        let projects = [(project: project(1, "fiba"), originURL: "git@github.com:acme/fiba.git"),
-                        (project: project(2, "fiba-copy"), originURL: "https://github.com/acme/fiba"),
+        let projects = [(project: project(1, "corestory"), originURL: "git@github.com:acme/corestory.git"),
+                        (project: project(2, "corestory-copy"), originURL: "https://github.com/acme/corestory"),
                         (project: project(3, "other"), originURL: "git@github.com:acme/other.git"),
                         (project: project(4, "odd"), originURL: "../relative")]
         let suggestions = MergeSuggestion.clones(projects)
         XCTAssertEqual(suggestions.count, 1)
-        XCTAssertEqual(suggestions.first?.id, "clone:github.com/acme/fiba:1,2")
+        XCTAssertEqual(suggestions.first?.id, "clone:github.com/acme/corestory:1,2")
         XCTAssertEqual(suggestions.first?.projects.map(\.id), [1, 2])
-        XCTAssertEqual(suggestions.first?.summary, "fiba and fiba-copy share origin github.com/acme/fiba")
-        XCTAssertEqual(MergeSuggestion.clones(projects, dismissed: ["clone:github.com/acme/fiba:1,2"]), [])
+        XCTAssertEqual(suggestions.first?.summary, "corestory and corestory-copy share origin github.com/acme/corestory")
+        XCTAssertEqual(MergeSuggestion.clones(projects, dismissed: ["clone:github.com/acme/corestory:1,2"]), [])
 
-        let third = projects + [(project: project(5, "fiba-3"), originURL: "ssh://git@github.com/acme/fiba.git")]
-        let again = MergeSuggestion.clones(third, dismissed: ["clone:github.com/acme/fiba:1,2"])
-        XCTAssertEqual(again.map(\.id), ["clone:github.com/acme/fiba:1,2,5"], "a new clone brings the suggestion back")
-        XCTAssertEqual(again.first?.summary, "fiba, fiba-copy and fiba-3 share origin github.com/acme/fiba")
+        let third = projects + [(project: project(5, "corestory-3"), originURL: "ssh://git@github.com/acme/corestory.git")]
+        let again = MergeSuggestion.clones(third, dismissed: ["clone:github.com/acme/corestory:1,2"])
+        XCTAssertEqual(again.map(\.id), ["clone:github.com/acme/corestory:1,2,5"], "a new clone brings the suggestion back")
+        XCTAssertEqual(again.first?.summary, "corestory, corestory-copy and corestory-3 share origin github.com/acme/corestory")
     }
 }
 
@@ -279,11 +279,11 @@ final class QwenPromptTests: XCTestCase {
 
     func testAUserPromptBecomesOnePromptRecord() throws {
         let prompt = try XCTUnwrap(TelemetryUsage.prompt(log("qwen-code.user_prompt", resource: [
-            "hoply.cwd": .string("/Users/dev/Project/fiba"), "process.pid": .int(4242),
+            "hoply.cwd": .string("/Users/dev/Project/corestory"), "process.pid": .int(4242),
         ])))
         XCTAssertEqual(prompt.dedupeKey, "qwp:q1:p7:1794228000123456789")
         XCTAssertEqual(prompt.session, SessionKey(source: .qwenCode, id: "q1"))
-        XCTAssertEqual(prompt.cwd, "/Users/dev/Project/fiba")
+        XCTAssertEqual(prompt.cwd, "/Users/dev/Project/corestory")
         XCTAssertEqual(prompt.processID, 4242)
         XCTAssertEqual(TelemetryUsage.prompt(log("qwen-code.user_prompt")), TelemetryUsage.prompt(log("qwen-code.user_prompt")))
         XCTAssertNotEqual(TelemetryUsage.prompt(log("qwen-code.user_prompt"))?.dedupeKey,
@@ -323,11 +323,11 @@ final class QwenPromptTests: XCTestCase {
     func testPromptsAloneStillMakeASessionUpdate() {
         let t0 = Date(timeIntervalSince1970: 1_794_200_000)
         let batch = TelemetryUsage.ledgerBatch([], prompts: [
-            PromptRecord(dedupeKey: "a", source: .qwenCode, sessionID: "q1", timestamp: t0, cwd: "/p/fiba"),
+            PromptRecord(dedupeKey: "a", source: .qwenCode, sessionID: "q1", timestamp: t0, cwd: "/p/corestory"),
             PromptRecord(dedupeKey: "b", source: .qwenCode, sessionID: "q1", timestamp: t0.addingTimeInterval(60)),
         ])
         XCTAssertEqual(batch.sessions, [SessionUpdate(key: SessionKey(source: .qwenCode, id: "q1"), firstAt: t0,
-                                                      lastAt: t0.addingTimeInterval(60), cwd: "/p/fiba")])
+                                                      lastAt: t0.addingTimeInterval(60), cwd: "/p/corestory")])
         XCTAssertEqual(batch.prompts.count, 2)
         XCTAssertFalse(batch.isEmpty)
         XCTAssertFalse(LedgerBatch(prompts: batch.prompts).isEmpty)

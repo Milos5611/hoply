@@ -58,9 +58,9 @@ final class TelemetryUsageTests: XCTestCase {
 
     func testCwdAndPidComeFromResourceAttributes() throws {
         let row = try XCTUnwrap(TelemetryUsage.record(qwen(["input_token_count": .int(10)], resource: [
-            "hoply.cwd": .string("/Users/dev/Project/fiba"), "process.pid": .int(4242),
+            "hoply.cwd": .string("/Users/dev/Project/corestory"), "process.pid": .int(4242),
         ])))
-        XCTAssertEqual(row.cwd, "/Users/dev/Project/fiba")
+        XCTAssertEqual(row.cwd, "/Users/dev/Project/corestory")
         XCTAssertEqual(row.processID, 4242)
         let blank = try XCTUnwrap(TelemetryUsage.record(qwen([:], resource: ["hoply.cwd": .string(""),
                                                                             "process.pid": .int(0)])))
@@ -117,13 +117,13 @@ final class TelemetryUsageTests: XCTestCase {
     func testLedgerBatchHasOneSessionUpdatePerSession() throws {
         let early = try XCTUnwrap(TelemetryUsage.record(qwen(["input_token_count": .int(10)], nanos: 1_794_228_000_000_000_000)))
         var late = try XCTUnwrap(TelemetryUsage.record(qwen(["input_token_count": .int(10)], nanos: 1_794_228_060_000_000_000)))
-        late.cwd = "/Users/dev/Project/fiba"
+        late.cwd = "/Users/dev/Project/corestory"
         let batch = TelemetryUsage.ledgerBatch([late, early])
         XCTAssertEqual(batch.usage.count, 2)
         XCTAssertEqual(batch.sessions.count, 1)
         XCTAssertEqual(batch.sessions.first?.firstAt, early.timestamp)
         XCTAssertEqual(batch.sessions.first?.lastAt, late.timestamp)
-        XCTAssertEqual(batch.sessions.first?.cwd, "/Users/dev/Project/fiba")
+        XCTAssertEqual(batch.sessions.first?.cwd, "/Users/dev/Project/corestory")
     }
 
     func testRouterReturnsUsageOnlyForTelemetryLedgers() throws {

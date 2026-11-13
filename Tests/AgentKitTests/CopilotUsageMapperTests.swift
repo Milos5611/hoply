@@ -4,7 +4,7 @@ import XCTest
 
 /// Rows shaped like Copilot CLI's `session-store.db` (schema_version 7), with usage numbers from real events.
 final class CopilotUsageMapperTests: XCTestCase {
-    private let session = CopilotSession(id: "s1", cwd: "/Users/dev/Project/fiba", branch: "main",
+    private let session = CopilotSession(id: "s1", cwd: "/Users/dev/Project/corestory", branch: "main",
                                          summary: "Build Event Reports Page", createdAt: "2026-09-17T11:18:17.432Z",
                                          updatedAt: "2026-09-17 17:39:52", turns: 2)
 
@@ -28,7 +28,7 @@ final class CopilotUsageMapperTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(record.nativeUSD), 0.00233388, accuracy: 1e-12, "1 AIU = $0.01")
         XCTAssertEqual(record.requestMultiplier, 0.33)
         XCTAssertEqual(record.turnIndex, 3)
-        XCTAssertEqual(record.cwd, "/Users/dev/Project/fiba")
+        XCTAssertEqual(record.cwd, "/Users/dev/Project/corestory")
         XCTAssertEqual(record.gitBranch, "main")
         XCTAssertFalse(record.isSidechain)
     }
@@ -94,7 +94,7 @@ final class CopilotUsageMapperTests: XCTestCase {
         XCTAssertEqual(update.key, SessionKey(source: .copilotCLI, id: "s1"))
         XCTAssertEqual(update.firstAt, CopilotUsageMapper.date("2026-09-17T11:18:17.432Z"))
         XCTAssertEqual(update.lastAt, usage.timestamp, "the last call is later than updated_at")
-        XCTAssertEqual(update.cwd, "/Users/dev/Project/fiba")
+        XCTAssertEqual(update.cwd, "/Users/dev/Project/corestory")
         XCTAssertEqual(update.branch, "main")
         XCTAssertTrue(update.placeIsAuthoritative)
         XCTAssertEqual(update.title, "Build Event Reports Page")

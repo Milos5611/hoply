@@ -16,8 +16,8 @@ final class SessionGroupingTests: XCTestCase {
 
     func testWaitingFirstThenProjectsWorkingFirst() {
         let board = board([
-            ("a", "/r/fiba", .promptSubmitted("one"), 0),
-            ("b", "/r/fiba", .promptSubmitted("two"), 10),
+            ("a", "/r/corestory", .promptSubmitted("one"), 0),
+            ("b", "/r/corestory", .promptSubmitted("two"), 10),
             ("b", nil, .turnFinished("done"), 20),
             ("c", "/r/api", .promptSubmitted("three"), 30),
             ("c", nil, .turnFinished(nil), 40),
@@ -28,36 +28,36 @@ final class SessionGroupingTests: XCTestCase {
         let grouping = SessionGrouping(sessions: board.ordered)
         XCTAssertEqual(grouping.waiting.map(\.key.id), ["c", "b"])
         XCTAssertEqual(grouping.oldestWaitSince, t0.addingTimeInterval(20))
-        XCTAssertEqual(grouping.projects.map(\.name), ["Other", "fiba", "api"])
-        XCTAssertEqual(grouping.projects.map(\.id), ["", "/r/fiba", "/r/api"])
+        XCTAssertEqual(grouping.projects.map(\.name), ["Other", "corestory", "api"])
+        XCTAssertEqual(grouping.projects.map(\.id), ["", "/r/corestory", "/r/api"])
         XCTAssertEqual(grouping.projects[1].sessions.map(\.key.id), ["a"])
         XCTAssertEqual(grouping.projects[2].lastActivity, t0.addingTimeInterval(50))
     }
 
     func testResolvedProjectsGroupWorktreesAndSubfoldersTogether() {
         let board = board([
-            ("main", "/r/fiba", .promptSubmitted("one"), 0),
-            ("tree", "/r/fiba-feature", .promptSubmitted("two"), 10),
-            ("sub", "/r/fiba/src/api", .sessionStarted, 20),
+            ("main", "/r/corestory", .promptSubmitted("one"), 0),
+            ("tree", "/r/corestory-feature", .promptSubmitted("two"), 10),
+            ("sub", "/r/corestory/src/api", .sessionStarted, 20),
             ("api", "/r/api", .sessionStarted, 30),
             ("none", nil, .sessionStarted, 40),
         ])
-        let fiba = ProjectRef(id: 7, root: "/r/fiba", name: "fiba", kind: .repo)
-        let resolved = ["/r/fiba": fiba, "/r/fiba-feature": fiba, "/r/fiba/src/api": fiba]
+        let corestory = ProjectRef(id: 7, root: "/r/corestory", name: "corestory", kind: .repo)
+        let resolved = ["/r/corestory": corestory, "/r/corestory-feature": corestory, "/r/corestory/src/api": corestory]
         let grouping = SessionGrouping(sessions: board.ordered, projects: resolved)
         XCTAssertEqual(grouping.projects.map(\.id), ["project:7", "", "/r/api"])
         let group = grouping.projects[0]
-        XCTAssertEqual(group.name, "fiba")
-        XCTAssertEqual(group.path, "/r/fiba")
-        XCTAssertEqual(group.project, fiba)
+        XCTAssertEqual(group.name, "corestory")
+        XCTAssertEqual(group.path, "/r/corestory")
+        XCTAssertEqual(group.project, corestory)
         XCTAssertEqual(Set(group.sessions.map(\.key.id)), ["main", "tree", "sub"])
         XCTAssertEqual(group.lastActivity, t0.addingTimeInterval(20))
         XCTAssertEqual(grouping.projects[2].name, "api", "an unresolved cwd still groups on its own")
         XCTAssertNil(grouping.projects[2].project)
 
-        let renamed = ProjectRef(id: 7, root: "/r/fiba", name: "fiba", displayName: "FIBA 3x3", kind: .repo)
-        XCTAssertEqual(SessionGrouping(sessions: board.ordered, projects: ["/r/fiba": renamed]).projects
-            .first { $0.id == "project:7" }?.name, "FIBA 3x3")
+        let renamed = ProjectRef(id: 7, root: "/r/corestory", name: "corestory", displayName: "CoreStory Engine", kind: .repo)
+        XCTAssertEqual(SessionGrouping(sessions: board.ordered, projects: ["/r/corestory": renamed]).projects
+            .first { $0.id == "project:7" }?.name, "CoreStory Engine")
         XCTAssertEqual(SessionGrouping(sessions: board.ordered).projects.count, 5, "no lookup: one group per cwd")
     }
 

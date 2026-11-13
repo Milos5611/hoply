@@ -6,11 +6,11 @@ extension PreviewData {
 
     static func cleanupScan(now: Date) -> CleanupScan {
         let home = NSHomeDirectory()
-        let fiba = projectRefs[0], backend = projectRefs[1]
+        let coreStory = projectRefs[0], backend = projectRefs[1]
         func daysAgo(_ days: Double) -> Date { now.addingTimeInterval(-days * 86_400) }
         func worktree(_ name: String, branch: String, megabytes: Int64, idle: Double,
                       kept: [CleanupKeepReason] = []) -> CleanupCandidate {
-            CleanupCandidate(kind: .worktree, path: "\(home)/Project/fiba.worktrees/\(name)", title: name, project: fiba,
+            CleanupCandidate(kind: .worktree, path: "\(home)/Project/CoreStory.worktrees/\(name)", title: name, project: coreStory,
                              branch: branch, bytes: megabytes * megabyte, lastActive: daysAgo(idle), keepReasons: kept)
         }
         func cache(_ label: String, _ path: String, project: ProjectRef, megabytes: Int64, idle: Double,
@@ -20,8 +20,8 @@ extension PreviewData {
         }
         func transcript(_ title: String, id: String, megabytes: Int64, age: Double,
                         kept: [CleanupKeepReason] = []) -> CleanupCandidate {
-            CleanupCandidate(kind: .transcript, path: "\(home)/.claude/projects/-Users-dev-Project-fiba/\(id).jsonl",
-                             title: title, project: fiba, bytes: megabytes * megabyte, lastActive: daysAgo(age),
+            CleanupCandidate(kind: .transcript, path: "\(home)/.claude/projects/-Users-dev-Project-CoreStory/\(id).jsonl",
+                             title: title, project: coreStory, bytes: megabytes * megabyte, lastActive: daysAgo(age),
                              keepReasons: kept)
         }
         return CleanupScan(candidates: [
@@ -33,7 +33,7 @@ extension PreviewData {
                      kept: [.notMerged(branch: "feature/standings-api", into: "main")]),
             cache("Next.js build", "apps/web/.next", project: backend, megabytes: 1_240, idle: 31),
             cache("Turborepo cache", ".turbo", project: backend, megabytes: 318, idle: 31),
-            cache("Next.js build", ".next", project: fiba, megabytes: 986, idle: 0,
+            cache("Next.js build", ".next", project: coreStory, megabytes: 986, idle: 0,
                   kept: [.devServerRunning, .recentlyActive(idleDays: 0, requiredDays: 14)]),
             cache("pytest cache", ".pytest_cache", project: backend, megabytes: 3, idle: 31,
                   kept: [.tooSmall(bytes: 3 * megabyte, minimumBytes: 50 * megabyte)]),
@@ -62,13 +62,13 @@ extension PreviewData {
     }
 
     static func cleanupLog(now: Date) -> [CleanupLogEntry] {
-        let fiba = projectRefs[0]
+        let coreStory = projectRefs[0]
         return [
             CleanupLogEntry(timestamp: now.addingTimeInterval(-6 * 86_400), kind: .worktree,
-                            path: "\(NSHomeDirectory())/Project/fiba.worktrees/bracket-view", bytes: 397 * megabyte,
-                            project: fiba, detail: "feature/bracket-view"),
+                            path: "\(NSHomeDirectory())/Project/CoreStory.worktrees/bracket-view", bytes: 397 * megabyte,
+                            project: coreStory, detail: "feature/bracket-view"),
             CleanupLogEntry(timestamp: now.addingTimeInterval(-6 * 86_400), kind: .buildCache,
-                            path: "\(fiba.root)/apps/admin/.vite", bytes: 84 * megabyte, project: fiba,
+                            path: "\(coreStory.root)/apps/admin/.vite", bytes: 84 * megabyte, project: coreStory,
                             detail: "Vite cache"),
         ]
     }

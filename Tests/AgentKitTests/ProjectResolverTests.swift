@@ -22,9 +22,9 @@ final class ProjectResolverTests: XCTestCase {
     private let resolver = ProjectResolver(home: "/Users/dev")
 
     func testRepoFolderHomeAndScratch() {
-        let fs = FakeFileSystem(directories: ["/Users/dev/Project/fiba/.git", "/Users/dev/.git"])
-        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/Project/fiba/src/api", fileSystem: fs),
-                       ProjectResolution(root: "/Users/dev/Project/fiba", name: "fiba", kind: .repo))
+        let fs = FakeFileSystem(directories: ["/Users/dev/Project/corestory/.git", "/Users/dev/.git"])
+        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/Project/corestory/src/api", fileSystem: fs),
+                       ProjectResolution(root: "/Users/dev/Project/corestory", name: "corestory", kind: .repo))
         XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/Project/notes/", fileSystem: fs),
                        ProjectResolution(root: "/Users/dev/Project/notes", name: "notes", kind: .folder),
                        "a dotfiles repo at ~/.git must not swallow folders below home")
@@ -38,14 +38,14 @@ final class ProjectResolverTests: XCTestCase {
 
     func testLinkedWorktreeBelongsToTheMainRepo() {
         let fs = FakeFileSystem(
-            directories: ["/Users/dev/Project/fiba/.git"],
+            directories: ["/Users/dev/Project/corestory/.git"],
             files: [
-                "/Users/dev/Project/fiba-wt/feature/.git": "gitdir: /Users/dev/Project/fiba/.git/worktrees/feature\n",
-                "/Users/dev/Project/fiba/.git/worktrees/feature/commondir": "../..\n",
+                "/Users/dev/Project/corestory-wt/feature/.git": "gitdir: /Users/dev/Project/corestory/.git/worktrees/feature\n",
+                "/Users/dev/Project/corestory/.git/worktrees/feature/commondir": "../..\n",
             ])
-        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/Project/fiba-wt/feature/web", fileSystem: fs),
-                       ProjectResolution(root: "/Users/dev/Project/fiba", name: "fiba", kind: .repo,
-                                         worktree: "/Users/dev/Project/fiba-wt/feature"))
+        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/Project/corestory-wt/feature/web", fileSystem: fs),
+                       ProjectResolution(root: "/Users/dev/Project/corestory", name: "corestory", kind: .repo,
+                                         worktree: "/Users/dev/Project/corestory-wt/feature"))
     }
 
     func testRelativeGitdirAndSubmodules() {
@@ -65,8 +65,8 @@ final class ProjectResolverTests: XCTestCase {
     }
 
     func testSymlinkedCwdResolvesToTheRealRepo() {
-        let fs = FakeFileSystem(directories: ["/Volumes/Work/fiba/.git"], links: ["/Users/dev/fiba": "/Volumes/Work/fiba"])
-        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/fiba/src", fileSystem: fs).root, "/Volumes/Work/fiba")
+        let fs = FakeFileSystem(directories: ["/Volumes/Work/corestory/.git"], links: ["/Users/dev/corestory": "/Volumes/Work/corestory"])
+        XCTAssertEqual(resolver.resolve(cwd: "/Users/dev/corestory/src", fileSystem: fs).root, "/Volumes/Work/corestory")
     }
 
     func testPathHelpers() {

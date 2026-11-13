@@ -11,7 +11,7 @@ final class NotificationPolicyTests: XCTestCase {
 
     /// 2026-11-09 12:00 UTC.
     private let t0 = NotificationPolicyTests.utc.date(from: DateComponents(year: 2026, month: 11, day: 9, hour: 12))!
-    private let fiba = ProjectRef(id: 7, root: "/r/fiba", name: "fiba", displayName: "FIBA", kind: .repo)
+    private let corestory = ProjectRef(id: 7, root: "/r/corestory", name: "corestory", displayName: "CoreStory", kind: .repo)
     private var board = SessionBoard()
     private var policy = NotificationPolicy(calendar: NotificationPolicyTests.utc)
 
@@ -22,7 +22,7 @@ final class NotificationPolicyTests: XCTestCase {
     }
 
     @discardableResult
-    private func send(_ id: String, _ kind: AgentEvent.Kind, at time: Date, cwd: String? = "/r/fiba/src",
+    private func send(_ id: String, _ kind: AgentEvent.Kind, at time: Date, cwd: String? = "/r/corestory/src",
                       project: ProjectRef? = nil) -> NotificationActions {
         let event = AgentEvent(key: SessionKey(source: .claudeCode, id: id), kind: kind, time: time, cwd: cwd,
                                fromHook: true)
@@ -31,7 +31,7 @@ final class NotificationPolicyTests: XCTestCase {
     }
 
     @discardableResult
-    private func send(_ id: String, _ kind: AgentEvent.Kind, at seconds: TimeInterval, cwd: String? = "/r/fiba/src",
+    private func send(_ id: String, _ kind: AgentEvent.Kind, at seconds: TimeInterval, cwd: String? = "/r/corestory/src",
                       project: ProjectRef? = nil) -> NotificationActions {
         send(id, kind, at: at(seconds), cwd: cwd, project: project)
     }
@@ -43,8 +43,8 @@ final class NotificationPolicyTests: XCTestCase {
     // MARK: - Sessions
 
     func testPermissionIsActiveAndNamedAfterTheResolvedProject() throws {
-        XCTAssertTrue(send("a", .promptSubmitted("Fix the login bug"), at: 0, project: fiba).isEmpty)
-        let actions = send("a", .needsPermission("Bash"), at: 5, project: fiba)
+        XCTAssertTrue(send("a", .promptSubmitted("Fix the login bug"), at: 0, project: corestory).isEmpty)
+        let actions = send("a", .needsPermission("Bash"), at: 5, project: corestory)
         let request = try XCTUnwrap(actions.post.first)
         XCTAssertEqual(actions.post.count, 1)
         XCTAssertEqual(request.id, "session:claude-code:a")
@@ -52,8 +52,8 @@ final class NotificationPolicyTests: XCTestCase {
         XCTAssertEqual(request.interruption, .active)
         XCTAssertTrue(request.playsSound)
         XCTAssertEqual(request.title, "Claude Code needs permission")
-        XCTAssertEqual(request.body, "Fix the login bug · FIBA")
-        XCTAssertEqual(request.threadID, "/r/fiba", "threads per project root")
+        XCTAssertEqual(request.body, "Fix the login bug · CoreStory")
+        XCTAssertEqual(request.threadID, "/r/corestory", "threads per project root")
         XCTAssertEqual(request.session, SessionKey(source: .claudeCode, id: "a"))
     }
 
@@ -68,7 +68,7 @@ final class NotificationPolicyTests: XCTestCase {
         XCTAssertFalse(request.playsSound)
         XCTAssertEqual(request.title, "Claude Code is waiting for you")
         XCTAssertEqual(request.body, "Quick one · src", "unresolved: the cwd's folder name")
-        XCTAssertEqual(request.threadID, "/r/fiba/src", "unresolved: threads per cwd")
+        XCTAssertEqual(request.threadID, "/r/corestory/src", "unresolved: threads per cwd")
 
         send("b", .promptSubmitted("x"), at: 0)
         send("b", .needsPermission(nil), at: 50)
@@ -179,25 +179,25 @@ final class NotificationPolicyTests: XCTestCase {
     }
 
     func testMutedRootsSilenceSessionsOnly() {
-        policy.preferences.mutedProjectRoots = ["/r/fiba", "/r/api/"]
-        send("a", .promptSubmitted("x"), at: 0, project: fiba)
-        XCTAssertTrue(send("a", .needsPermission(nil), at: 5, project: fiba).post.isEmpty, "muted project root")
+        policy.preferences.mutedProjectRoots = ["/r/corestory", "/r/api/"]
+        send("a", .promptSubmitted("x"), at: 0, project: corestory)
+        XCTAssertTrue(send("a", .needsPermission(nil), at: 5, project: corestory).post.isEmpty, "muted project root")
         send("b", .promptSubmitted("x"), at: 0, cwd: "/r/api")
         XCTAssertTrue(send("b", .needsPermission(nil), at: 5, cwd: "/r/api").post.isEmpty, "unresolved: muted cwd")
         send("c", .promptSubmitted("x"), at: 0)
         XCTAssertTrue(send("c", .needsPermission(nil), at: 5).post.isEmpty,
                       "unresolved: a cwd under a muted root is muted until the project resolves")
-        send("d", .promptSubmitted("x"), at: 0, cwd: "/r/fibabar/src")
-        XCTAssertEqual(send("d", .needsPermission(nil), at: 5, cwd: "/r/fibabar/src").post.count, 1,
+        send("d", .promptSubmitted("x"), at: 0, cwd: "/r/corestorybar/src")
+        XCTAssertEqual(send("d", .needsPermission(nil), at: 5, cwd: "/r/corestorybar/src").post.count, 1,
                        "path components, not a string prefix")
         let limit = policy.limitsUpdated([sample(85, at: 0)], previous: [:], now: at(0))
         XCTAssertEqual(limit.post.count, 1, "mute leaves limit alerts alone")
     }
 
     func testAResolvedProjectIsMutedByItsExactRootOnly() {
-        policy.preferences.mutedProjectRoots = ["/r", "/r/fiba/src"]
-        send("a", .promptSubmitted("x"), at: 0, project: fiba)
-        XCTAssertEqual(send("a", .needsPermission(nil), at: 5, project: fiba).post.count, 1,
+        policy.preferences.mutedProjectRoots = ["/r", "/r/corestory/src"]
+        send("a", .promptSubmitted("x"), at: 0, project: corestory)
+        XCTAssertEqual(send("a", .needsPermission(nil), at: 5, project: corestory).post.count, 1,
                        "neither a muted parent nor the muted cwd mutes a resolved repo")
         policy.preferences.mutedProjectRoots = ["/"]
         send("b", .promptSubmitted("x"), at: 200, cwd: "/tmp/x")
@@ -424,12 +424,12 @@ final class NotificationPolicyTests: XCTestCase {
         settings.quietHoursEnabled = true
         settings.quietHoursStart = 23 * 60
         settings.quietHoursEnd = 7 * 60
-        settings.mutedProjectRoots = ["/r/fiba"]
+        settings.mutedProjectRoots = ["/r/corestory"]
         settings.limitAlertsEnabled = false
         settings.localModelAlertsEnabled = false
         XCTAssertEqual(NotificationPreferences(settings: settings),
                        NotificationPreferences(enabled: false, quietHours: QuietHours(start: 23 * 60, end: 7 * 60),
-                                               mutedProjectRoots: ["/r/fiba"], limitAlerts: false,
+                                               mutedProjectRoots: ["/r/corestory"], limitAlerts: false,
                                                localModelAlerts: false))
     }
 
@@ -437,13 +437,13 @@ final class NotificationPolicyTests: XCTestCase {
 
     func testAQuestionPostsItsOwnActiveNotificationAtOnce() throws {
         send("s1", .promptSubmitted("Fix it"), at: 0)
-        let asked = send("s1", .questionAsked("Which framework?"), at: 3, project: fiba)
+        let asked = send("s1", .questionAsked("Which framework?"), at: 3, project: corestory)
         let request = try XCTUnwrap(asked.post.first)
         XCTAssertEqual(request.cause, .input)
         XCTAssertEqual(request.kind, .permission, "routed like a session notification")
         XCTAssertEqual(request.interruption, .active)
         XCTAssertEqual(request.title, "Claude Code has a question")
-        XCTAssertEqual(request.body, "Fix it · FIBA")
+        XCTAssertEqual(request.body, "Fix it · CoreStory")
         XCTAssertEqual(request.session, SessionKey(source: .claudeCode, id: "s1"))
 
         XCTAssertEqual(send("s1", .toolFinished("AskUserQuestion"), at: 20).withdraw, [id("s1")])

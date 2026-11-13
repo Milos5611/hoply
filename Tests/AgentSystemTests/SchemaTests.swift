@@ -102,9 +102,9 @@ final class SchemaTests: XCTestCase {
         try Schema.configure(db)
         try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(3)))
         try db.execute("""
-            INSERT INTO projects (id, root, name, kind) VALUES (1, '/p/fiba', 'fiba', 'repo');
-            INSERT INTO path_map (cwd, project_id) VALUES ('/p/fiba/src', 1);
-            INSERT INTO sessions (source, id, project_id, cwd, turns) VALUES ('qwen-code', 'q1', 1, '/p/fiba/src', 3);
+            INSERT INTO projects (id, root, name, kind) VALUES (1, '/p/corestory', 'corestory', 'repo');
+            INSERT INTO path_map (cwd, project_id) VALUES ('/p/corestory/src', 1);
+            INSERT INTO sessions (source, id, project_id, cwd, turns) VALUES ('qwen-code', 'q1', 1, '/p/corestory/src', 3);
             INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, output) VALUES ('qw:q1:p1:1', 'qwen-code', 'q1', 1, 1, 10);
             """)
         try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(4)))

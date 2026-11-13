@@ -3,7 +3,7 @@ import XCTest
 
 final class DevServerClassifierTests: XCTestCase {
     private let home = "/Users/dev"
-    private let fiba = ProjectRef(id: 7, root: "/Users/dev/Project/fiba", name: "fiba", kind: .repo)
+    private let corestory = ProjectRef(id: 7, root: "/Users/dev/Project/corestory", name: "corestory", kind: .repo)
     private let hoplyPID: Int32 = 900
     private var classifier: DevServerClassifier {
         DevServerClassifier(hubPort: 4318, ownPID: hoplyPID, uid: 501, homeDirectory: home)
@@ -11,7 +11,7 @@ final class DevServerClassifierTests: XCTestCase {
 
     private func process(_ pid: Int32, parent: Int32 = 1, group: Int32? = nil, uid: UInt32 = 501, name: String = "node",
                          executable: String? = "/opt/homebrew/bin/node", _ arguments: [String] = ["node"],
-                         cwd: String? = "/Users/dev/Project/fiba", memoryMB: UInt64? = nil, started: TimeInterval? = nil,
+                         cwd: String? = "/Users/dev/Project/corestory", memoryMB: UInt64? = nil, started: TimeInterval? = nil,
                          ports: [Int] = [], address: String = "::") -> ScannedProcess {
         ScannedProcess(
             identity: ProcessIdentity(pid: pid, startedAt: Date(timeIntervalSince1970: started ?? 1_000 + Double(pid))),
@@ -29,7 +29,7 @@ final class DevServerClassifierTests: XCTestCase {
         [
             process(100, name: "zsh", executable: "/bin/zsh", ["-zsh"]),
             process(200, parent: 100, name: "npm", ["npm", "run", "dev"], memoryMB: 60),
-            process(201, parent: 200, group: 200, ["node", "/Users/dev/Project/fiba/node_modules/.bin/next", "dev"],
+            process(201, parent: 200, group: 200, ["node", "/Users/dev/Project/corestory/node_modules/.bin/next", "dev"],
                     memoryMB: 100),
             process(202, parent: 201, group: 200, ["next-server (v15.1.0)"], memoryMB: 252, ports: [3000]),
         ]
@@ -37,15 +37,15 @@ final class DevServerClassifierTests: XCTestCase {
 
     func testNamesAServerUnderItsProject() throws {
         let servers = classifier.servers(in: ProcessSnapshot(processes: nextTree),
-                                         projects: ["/Users/dev/Project/fiba": fiba])
+                                         projects: ["/Users/dev/Project/corestory": corestory])
         let server = try XCTUnwrap(servers.first)
         XCTAssertEqual(servers.count, 1)
-        XCTAssertEqual(server.projectName, "fiba")
+        XCTAssertEqual(server.projectName, "corestory")
         XCTAssertEqual(server.framework, .nextJS)
         XCTAssertEqual(server.frameworkName, "Next.js")
         XCTAssertEqual(server.portLabel, ":3000")
         XCTAssertEqual(server.memoryLabel, "412 MB")
-        XCTAssertEqual(server.displayName, "fiba · Next.js :3000 · 412 MB")
+        XCTAssertEqual(server.displayName, "corestory · Next.js :3000 · 412 MB")
         XCTAssertEqual(server.url.absoluteString, "http://localhost:3000")
         XCTAssertEqual(server.groupKey, "project:7")
         XCTAssertEqual(server.process.pid, 202)
@@ -58,8 +58,8 @@ final class DevServerClassifierTests: XCTestCase {
     func testWithoutALedgerServersGroupByDirectory() throws {
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: nextTree)).first)
         XCTAssertNil(server.project)
-        XCTAssertEqual(server.groupKey, "/Users/dev/Project/fiba")
-        XCTAssertEqual(server.projectName, "fiba")
+        XCTAssertEqual(server.groupKey, "/Users/dev/Project/corestory")
+        XCTAssertEqual(server.projectName, "corestory")
         XCTAssertNil(server.stopRefusal)
     }
 
@@ -106,7 +106,7 @@ final class DevServerClassifierTests: XCTestCase {
                     ["Hoply"], cwd: "/Users/dev", ports: [4400]),
             process(18, ports: [1024]))
         XCTAssertEqual(classifier.servers(in: snapshot).map(\.port), [1024])
-        XCTAssertEqual(classifier.candidateDirectories(in: snapshot), ["/Users/dev/Project/fiba"])
+        XCTAssertEqual(classifier.candidateDirectories(in: snapshot), ["/Users/dev/Project/corestory"])
     }
 
     func testInstalledAppsCountOnlyInsideARepoOrWithAKnownRuntime() {
@@ -117,16 +117,16 @@ final class DevServerClassifierTests: XCTestCase {
                              executable: "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
                              ["Python", "-m", "http.server"], cwd: "/Users/dev/notes", ports: [8000])
         XCTAssertEqual(classifier.servers(in: snapshot(editor, python)).map(\.process.pid), [21])
-        let inRepo = classifier.servers(in: snapshot(editor), projects: ["/Users/dev/Project/fiba": fiba])
-        XCTAssertEqual(inRepo.map(\.displayName), ["fiba · Editor Helper :8123"])
-        let home = ProjectRef(id: 1, root: "/Users/dev/Project/fiba", name: "Home", kind: .home)
-        XCTAssertEqual(classifier.servers(in: snapshot(editor), projects: ["/Users/dev/Project/fiba": home]), [])
+        let inRepo = classifier.servers(in: snapshot(editor), projects: ["/Users/dev/Project/corestory": corestory])
+        XCTAssertEqual(inRepo.map(\.displayName), ["corestory · Editor Helper :8123"])
+        let home = ProjectRef(id: 1, root: "/Users/dev/Project/corestory", name: "Home", kind: .home)
+        XCTAssertEqual(classifier.servers(in: snapshot(editor), projects: ["/Users/dev/Project/corestory": home]), [])
     }
 
     func testEphemeralPortsNeedARecognisedFramework() {
         let snapshot = snapshot(
             process(30, ["node", "/Users/dev/.vscode/extensions/ts/server.js"], ports: [51234]),
-            process(31, ["node", "/Users/dev/Project/fiba/node_modules/vite/bin/vite.js", "--port", "0"],
+            process(31, ["node", "/Users/dev/Project/corestory/node_modules/vite/bin/vite.js", "--port", "0"],
                     ports: [60001]))
         XCTAssertEqual(classifier.servers(in: snapshot).map(\.port), [60001])
     }
@@ -148,7 +148,7 @@ final class DevServerClassifierTests: XCTestCase {
             (["python", "manage.py", "runserver"], nil, .django),
             (["python3", "-m", "http.server", "8080"], "/usr/bin/python3", .pythonHTTPServer),
             (["ruby", "bin/rails", "server"], nil, .rails),
-            (["puma 6.4.2 (tcp://localhost:3000) [fiba]"], "/opt/homebrew/bin/ruby", .puma),
+            (["puma 6.4.2 (tcp://localhost:3000) [corestory]"], "/opt/homebrew/bin/ruby", .puma),
             (["dotnet", "run"], "/usr/local/share/dotnet/dotnet", .dotnet),
             (["bun", "run", "dev"], "/Users/dev/.bun/bin/bun", .bun),
             (["deno", "run", "-A", "main.ts"], "/opt/homebrew/bin/deno", .deno),
@@ -173,7 +173,7 @@ final class DevServerClassifierTests: XCTestCase {
             process(40, name: "caddy", executable: "/opt/homebrew/bin/caddy", ["caddy", "run"], memoryMB: 1536,
                     ports: [2019]))).first)
         XCTAssertEqual(server.framework, .other)
-        XCTAssertEqual(server.displayName, "fiba · caddy :2019 · 1.5 GB")
+        XCTAssertEqual(server.displayName, "corestory · caddy :2019 · 1.5 GB")
     }
 
     func testTheLauncherNamesTheFrameworkWhenTheListenerDoesNot() throws {
@@ -197,7 +197,7 @@ final class DevServerClassifierTests: XCTestCase {
     }
 
     func testTiesAServerToTheSessionWhoseProcessStartedIt() throws {
-        let sessions = [DevServerClassifier.Session(key: qwen, pid: 999, cwd: "/Users/dev/Project/fiba"),
+        let sessions = [DevServerClassifier.Session(key: qwen, pid: 999, cwd: "/Users/dev/Project/corestory"),
                         DevServerClassifier.Session(key: claude, pid: 600, cwd: "/Users/dev/Project/other")]
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: agentTree), sessions: sessions).first)
         XCTAssertEqual(server.session, claude)
@@ -206,8 +206,8 @@ final class DevServerClassifierTests: XCTestCase {
     }
 
     func testFindsTheAgentAmongTheAncestorsWhenNoPidIsKnown() throws {
-        let sessions = [DevServerClassifier.Session(key: qwen, cwd: "/Users/dev/Project/fiba"),
-                        DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/fiba")]
+        let sessions = [DevServerClassifier.Session(key: qwen, cwd: "/Users/dev/Project/corestory"),
+                        DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/corestory")]
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: agentTree), sessions: sessions).first)
         XCTAssertEqual(server.session, claude)
         XCTAssertEqual(server.sessionMatch, .lineage)
@@ -215,9 +215,9 @@ final class DevServerClassifierTests: XCTestCase {
 
     func testFallsBackToTheSessionDirectory() throws {
         let sessions = [DevServerClassifier.Session(key: qwen, cwd: "/Users/dev/Project"),
-                        DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/fiba"),
+                        DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/corestory"),
                         DevServerClassifier.Session(key: SessionKey(source: .copilotCLI, id: "c"),
-                                                    cwd: "/Users/dev/Project/fiba/web")]
+                                                    cwd: "/Users/dev/Project/corestory/web")]
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: nextTree), sessions: sessions).first)
         XCTAssertEqual(server.session, claude)
         XCTAssertEqual(server.sessionMatch, .directory)
@@ -239,7 +239,7 @@ final class DevServerClassifierTests: XCTestCase {
 
     // MARK: - Stop
 
-    private func decide(_ pid: Int32, in processes: [ScannedProcess], root: String = "/Users/dev/Project/fiba",
+    private func decide(_ pid: Int32, in processes: [ScannedProcess], root: String = "/Users/dev/Project/corestory",
                         started: TimeInterval? = nil, protected: Set<Int32> = []) -> DevServerStop.Decision {
         DevServerStop.decide(
             process: ProcessIdentity(pid: pid, startedAt: Date(timeIntervalSince1970: started ?? 1_000 + Double(pid))),
@@ -262,11 +262,11 @@ final class DevServerClassifierTests: XCTestCase {
         var tree = nextTree
         tree[1].cwd = "/Users/dev/Project"
         XCTAssertEqual(decide(202, in: tree).refusal, .leaderOutsideProject)
-        tree[1].cwd = "/Users/dev/Project/fiba-old"
+        tree[1].cwd = "/Users/dev/Project/corestory-old"
         XCTAssertEqual(decide(202, in: tree).refusal, .leaderOutsideProject)
         tree[1].cwd = nil
         XCTAssertEqual(decide(202, in: tree).refusal, .leaderOutsideProject)
-        tree[1].cwd = "/Users/dev/Project/fiba/web"
+        tree[1].cwd = "/Users/dev/Project/corestory/web"
         XCTAssertNotNil(decide(202, in: tree).target)
     }
 
@@ -300,19 +300,19 @@ final class DevServerClassifierTests: XCTestCase {
         tree[1].cwd = "/Users/dev"
         let home = ProjectRef(id: 1, root: "/Users/dev", name: "Home", kind: .home)
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: tree),
-                                                      projects: ["/Users/dev/Project/fiba": home]).first)
+                                                      projects: ["/Users/dev/Project/corestory": home]).first)
         XCTAssertEqual(server.stopRefusal, .leaderOutsideProject)
         XCTAssertFalse(server.canStop)
     }
 
     func testAServerInALinkedWorktreeOutsideTheRepoRootCanBeStopped() throws {
-        let worktree = "/Users/dev/Project/fiba.worktrees/landing-hero"
+        let worktree = "/Users/dev/Project/corestory.worktrees/landing-hero"
         var tree = nextTree
         for index in tree.indices { tree[index].cwd = worktree }
-        let fiba = ProjectRef(id: 1, root: "/Users/dev/Project/fiba", name: "fiba", kind: .repo)
+        let corestory = ProjectRef(id: 1, root: "/Users/dev/Project/corestory", name: "corestory", kind: .repo)
         let server = try XCTUnwrap(classifier.servers(in: ProcessSnapshot(processes: tree),
-                                                      projects: [worktree: fiba]).first)
-        XCTAssertEqual(server.project, fiba)
+                                                      projects: [worktree: corestory]).first)
+        XCTAssertEqual(server.project, corestory)
         XCTAssertNil(server.stopRefusal)
     }
 

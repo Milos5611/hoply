@@ -93,9 +93,9 @@ final class CopilotStoreTests: XCTestCase {
 
     func testTotalsMatchCopilotsOwnFigures() async throws {
         let directory = try TempDirectory()
-        try directory.mkdir("fiba/.git")
+        try directory.mkdir("corestory/.git")
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba/src"))
+        try seed(copilot, cwd: directory.path("corestory/src"))
         let ledger = try makeLedger(directory)
         await ledger.ingest.start()
 
@@ -117,7 +117,7 @@ final class CopilotStoreTests: XCTestCase {
         XCTAssertEqual(s1?.title, "Initialize Project Setup")
         XCTAssertEqual(s1?.turns, 2)
         XCTAssertEqual(s1?.branch, "main")
-        XCTAssertEqual(s1?.project?.name, "fiba")
+        XCTAssertEqual(s1?.project?.name, "corestory")
         XCTAssertEqual(s1?.project?.kind, .repo)
         XCTAssertEqual(s1?.totals.premiumRequests ?? 0, 16, accuracy: 1e-9)
         XCTAssertEqual(s1?.firstAt, CopilotUsageMapper.date("2026-09-17T11:00:00.000Z"))
@@ -133,13 +133,13 @@ final class CopilotStoreTests: XCTestCase {
     func testResumesFromTheCursorAndPicksUpAppendedRows() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         let ledger = try makeLedger(directory)
         await ledger.ingest.start()
         var cursor = try await ledger.store.cursors(source: .copilotCLI)[copilot.path]
         XCTAssertEqual(cursor?.offset, 6)
 
-        try copilot.session("s3", cwd: directory.path("fiba"), summary: "Second")
+        try copilot.session("s3", cwd: directory.path("corestory"), summary: "Second")
         try copilot.turn("s3", 0)
         try copilot.event("s3", turn: 0, multiplier: 1, at: "2026-09-18T09:00:00.000Z")
         try copilot.write("UPDATE sessions SET summary = 'Renamed', updated_at = '2026-09-18T10:00:00.000Z' WHERE id = 's2'")
@@ -164,7 +164,7 @@ final class CopilotStoreTests: XCTestCase {
     func testRecreatedDatabaseRestartsAtZeroAndKeepsHistory() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         let ledger = try makeLedger(directory)
         await ledger.ingest.start()
 
@@ -207,7 +207,7 @@ final class CopilotStoreTests: XCTestCase {
     func testIngestingTwiceChangesNothing() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         let ledger = try makeLedger(directory)
         await ledger.ingest.start()
         let first = try await copilotTotals(ledger)
@@ -227,7 +227,7 @@ final class CopilotStoreTests: XCTestCase {
     func testRepricingNeverTouchesNativelyPricedRows() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         try copilot.event("s2", turn: 0, multiplier: 0.33, model: "claude-haiku-4.5", nano: .some(nil),
                           at: "2026-09-17T17:44:40.000Z")
         let ledger = try makeLedger(directory)
@@ -250,7 +250,7 @@ final class CopilotStoreTests: XCTestCase {
     func testMissingAIUFallsBackToThePriceTable() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try copilot.session("s1", cwd: directory.path("fiba"))
+        try copilot.session("s1", cwd: directory.path("corestory"))
         try copilot.event("s1", turn: 0, model: "claude-haiku-4.5", nano: .some(nil), at: "2026-09-17T11:00:00.000Z")
         try copilot.event("s1", turn: 1, model: "gpt-9-preview", nano: .some(nil), at: "2026-09-17T11:01:00.000Z")
         let ledger = try makeLedger(directory)
@@ -288,7 +288,7 @@ final class CopilotStoreTests: XCTestCase {
     func testDatabaseWithoutWALFilesIsReadFromASnapshotAndLeftUntouched() async throws {
         let directory = try TempDirectory()
         let source = try CopilotDatabase(home: directory.path("source"))
-        try seed(source, cwd: directory.path("fiba"))
+        try seed(source, cwd: directory.path("corestory"))
         let home = directory.path("copilot")
         try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
         try FileManager.default.copyItem(atPath: source.path, toPath: home + "/session-store.db")
@@ -306,7 +306,7 @@ final class CopilotStoreTests: XCTestCase {
     func testInPlaceReadsNeverWriteTheDatabaseOrItsWAL() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         let database = try Data(contentsOf: URL(fileURLWithPath: copilot.path))
         let wal = try Data(contentsOf: URL(fileURLWithPath: copilot.path + "-wal"))
         let ledger = try makeLedger(directory)
@@ -321,7 +321,7 @@ final class CopilotStoreTests: XCTestCase {
     func testCopilotChangesReachTheUpdatesStream() async throws {
         let directory = try TempDirectory()
         let copilot = try CopilotDatabase(home: directory.path("copilot"))
-        try seed(copilot, cwd: directory.path("fiba"))
+        try seed(copilot, cwd: directory.path("corestory"))
         let ledger = try makeLedger(directory)
         let collector = Task { () -> Set<SessionKey> in
             var changed = Set<SessionKey>()

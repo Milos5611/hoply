@@ -17,7 +17,7 @@ enum PreviewData {
 
     static func approvalEvents(now: Date) -> [AgentEvent] {
         [AgentEvent(key: approvalSession, kind: .promptSubmitted("Upgrade the build to Node 24"), time: now - 300,
-                    cwd: "\(NSHomeDirectory())/Project/fiba", model: "claude-opus-5", fromHook: true),
+                    cwd: "\(NSHomeDirectory())/Project/CoreStory", model: "claude-opus-5", fromHook: true),
          AgentEvent(key: approvalSession, kind: .needsPermission("Allow Bash?"), time: now - 20, fromHook: true)]
     }
 
@@ -42,7 +42,7 @@ enum PreviewData {
         let home = NSHomeDirectory()
         return [
             AgentEvent(key: auth, kind: .promptSubmitted("Refactor the auth middleware to use refresh tokens"),
-                       time: at(46), cwd: "\(home)/Project/fiba", model: "claude-opus-5", fromHook: true),
+                       time: at(46), cwd: "\(home)/Project/CoreStory", model: "claude-opus-5", fromHook: true),
             AgentEvent(key: auth, kind: .usage(.init(inputTokens: 21_000, outputTokens: 9_000, cacheTokens: 24_000, costUSD: 0.21)),
                        time: at(5), fromHook: false),
             AgentEvent(key: auth, kind: .turnFinished("Middleware now refreshes tokens; all 214 tests pass."),
@@ -60,11 +60,11 @@ enum PreviewData {
             AgentEvent(key: notes, kind: .turnFinished("Stopped at the Thursday notes: usage limit reached."),
                        time: at(21), fromHook: true),
             AgentEvent(key: lint, kind: .promptSubmitted("Fix the analyzer warnings in the rule engine"),
-                       time: at(14), cwd: "\(home)/Project/FIBA3x3.RuleEngine", model: "claude-sonnet-5", fromHook: true),
+                       time: at(14), cwd: "\(home)/Project/CoreStory.RuleEngine", model: "claude-sonnet-5", fromHook: true),
             AgentEvent(key: lint, kind: .turnFailed(error: "overloaded_error", message: "API Error: 529 Overloaded"),
                        time: at(6), fromHook: true),
             AgentEvent(key: pricing, kind: .promptSubmitted("Build the pricing section"),
-                       time: at(42), cwd: "\(home)/Project/fiba", model: "claude-sonnet-5", fromHook: true),
+                       time: at(42), cwd: "\(home)/Project/CoreStory", model: "claude-sonnet-5", fromHook: true),
             AgentEvent(key: pricing, kind: .subagentStarted(id: "a1", type: "Explore"), time: at(30), fromHook: true),
             AgentEvent(key: pricing, kind: .subagentStopped(id: "a1", type: "Explore"), time: at(24), fromHook: true),
             AgentEvent(key: pricing, kind: .subagentStarted(id: "a2", type: "code-reviewer"), time: at(3), fromHook: true),
@@ -78,7 +78,7 @@ enum PreviewData {
             AgentEvent(key: docs, kind: .sessionStarted, time: at(8), cwd: "\(home)/Project/hoply",
                        model: "claude-opus-5", fromHook: true),
             AgentEvent(key: hero, kind: .promptSubmitted("Polish the landing page hero animation"),
-                       time: at(18), cwd: "\(home)/Project/fiba.worktrees/landing-hero", model: "gpt-6.1-sol",
+                       time: at(18), cwd: "\(home)/Project/CoreStory.worktrees/landing-hero", model: "gpt-6.1-sol",
                        fromHook: true),
             AgentEvent(key: hero, kind: .toolStarted("Bash"), time: at(0.4), fromHook: true),
             AgentEvent(key: store, kind: .promptSubmitted("Speed up the Copilot store reader"),
@@ -257,10 +257,10 @@ enum PreviewData {
     static var projectRefs: [ProjectRef] {
         let home = NSHomeDirectory()
         return [
-            ProjectRef(id: 1, root: "\(home)/Project/fiba", name: "fiba", kind: .repo),
+            ProjectRef(id: 1, root: "\(home)/Project/CoreStory", name: "CoreStory", kind: .repo),
             ProjectRef(id: 2, root: "\(home)/Project/yasm-backend", name: "yasm-backend", kind: .repo),
             ProjectRef(id: 3, root: "\(home)/Project/hoply", name: "hoply", kind: .repo),
-            ProjectRef(id: 4, root: "\(home)/Project/FIBA3x3.RuleEngine", name: "FIBA3x3.RuleEngine", kind: .repo),
+            ProjectRef(id: 4, root: "\(home)/Project/CoreStory.RuleEngine", name: "CoreStory.RuleEngine", kind: .repo),
             ProjectRef(id: 5, root: "\(home)/Documents/notes", name: "notes", kind: .folder),
             ProjectRef(id: 6, root: home, name: "Home", kind: .home),
         ]
@@ -269,10 +269,10 @@ enum PreviewData {
     static var projectsByCwd: [String: ProjectRef] {
         let home = NSHomeDirectory()
         let refs = projectRefs
-        return ["\(home)/Project/fiba": refs[0], "\(home)/Project/fiba.worktrees/landing-hero": refs[0],
+        return ["\(home)/Project/CoreStory": refs[0], "\(home)/Project/CoreStory.worktrees/landing-hero": refs[0],
                 "\(home)/Project/yasm-backend": refs[1], "\(home)/Project/hoply": refs[2],
                 "\(home)/Project/hoply/Sources/AgentSystem": refs[2],
-                "\(home)/Project/FIBA3x3.RuleEngine": refs[3], "\(home)/Documents/notes": refs[4]]
+                "\(home)/Project/CoreStory.RuleEngine": refs[3], "\(home)/Documents/notes": refs[4]]
     }
 
     static func devServers(now: Date) -> DevServerScan {
@@ -289,17 +289,17 @@ enum PreviewData {
                                addresses.map { ListeningSocket(port: port, family: $0.contains(":") ? .ipv6 : .ipv4, address: $0) }
                            } ?? [])
         }
-        let fiba = "\(home)/Project/fiba", backend = "\(home)/Project/yasm-backend"
+        let coreStory = "\(home)/Project/CoreStory", backend = "\(home)/Project/yasm-backend"
         let sparkdash = "\(home)/Project/sparkdash"
         let node = "/opt/homebrew/bin/node"
         let snapshot = ProcessSnapshot(takenAt: now.addingTimeInterval(-6), processes: [
-            process(4100, minutesAgo: 42, executable: "\(home)/.local/bin/claude", arguments: ["claude"], cwd: fiba),
+            process(4100, minutesAgo: 42, executable: "\(home)/.local/bin/claude", arguments: ["claude"], cwd: coreStory),
             process(4210, parent: 4100, minutesAgo: 40, executable: node,
-                    arguments: ["node", "\(fiba)/node_modules/next/dist/bin/next", "dev"], cwd: fiba, megabytes: 96),
+                    arguments: ["node", "\(coreStory)/node_modules/next/dist/bin/next", "dev"], cwd: coreStory, megabytes: 96),
             process(4211, parent: 4210, group: 4210, minutesAgo: 40, executable: node,
-                    arguments: ["next-server (v15.4.1)"], cwd: fiba, megabytes: 316, port: 3000),
+                    arguments: ["next-server (v15.4.1)"], cwd: coreStory, megabytes: 316, port: 3000),
             process(5300, minutesAgo: 190, executable: node,
-                    arguments: ["node", "\(fiba)/node_modules/vite/bin/vite.js"], cwd: "\(fiba)/apps/admin",
+                    arguments: ["node", "\(coreStory)/node_modules/vite/bin/vite.js"], cwd: "\(coreStory)/apps/admin",
                     megabytes: 148, port: 5173, addresses: ["127.0.0.1", "::1"]),
             process(6100, minutesAgo: 1_500, executable: "/opt/homebrew/bin/python3.13",
                     arguments: ["python3.13", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0"], cwd: sparkdash,
@@ -309,11 +309,11 @@ enum PreviewData {
                     arguments: ["dotnet", "run"], cwd: backend, megabytes: 231, port: 5080),
         ])
         var projects = projectsByCwd
-        projects["\(fiba)/apps/admin"] = projectRefs[0]
+        projects["\(coreStory)/apps/admin"] = projectRefs[0]
         projects[sparkdash] = ProjectRef(id: 7, root: sparkdash, name: "sparkdash", kind: .repo)
         let sessions = [
-            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "pricing"), pid: 4100, cwd: fiba),
-            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "auth"), cwd: fiba),
+            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "pricing"), pid: 4100, cwd: coreStory),
+            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "auth"), cwd: coreStory),
             DevServerClassifier.Session(key: SessionKey(source: .copilotCLI, id: "orders"), cwd: backend),
             DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "schema"), cwd: backend),
         ]
@@ -337,8 +337,8 @@ enum PreviewData {
 
     static var gitStats: [String: GitDiffStat] {
         let home = NSHomeDirectory()
-        return ["\(home)/Project/fiba": GitDiffStat(filesChanged: 5, added: 120, removed: 34, untracked: 3),
-                "\(home)/Project/fiba.worktrees/landing-hero": GitDiffStat(filesChanged: 2, added: 48, removed: 6),
+        return ["\(home)/Project/CoreStory": GitDiffStat(filesChanged: 5, added: 120, removed: 34, untracked: 3),
+                "\(home)/Project/CoreStory.worktrees/landing-hero": GitDiffStat(filesChanged: 2, added: 48, removed: 6),
                 "\(home)/Project/hoply": GitDiffStat(untracked: 2)]
     }
 
@@ -423,24 +423,24 @@ enum PreviewData {
         return [short, liveSpans(now: now), spans(now: now, long)]
     }
 
-    static let fibaCopy = ProjectRef(id: 8, root: "\(NSHomeDirectory())/Work/fiba-copy", name: "fiba-copy", kind: .repo)
+    static let coreStoryCopy = ProjectRef(id: 8, root: "\(NSHomeDirectory())/Work/CoreStory-copy", name: "CoreStory-copy", kind: .repo)
 
     static func projectEdits(now: Date) -> ProjectEditsPreview {
         let home = NSHomeDirectory()
         let refs = projectRefs
-        let archived = ProjectRef(id: 9, root: "\(home)/Project/archive/fiba-web", name: "fiba-web", kind: .repo)
-        let scratch = ProjectRef(id: 10, root: "\(home)/Project/fiba-spike", name: "fiba-spike", kind: .folder)
-        let suggestion = MergeSuggestion(id: "clone:github.com/acme/fiba:1,8", remote: "github.com/acme/fiba",
-                                         projects: [refs[0], fibaCopy])
+        let archived = ProjectRef(id: 9, root: "\(home)/Project/archive/CoreStory-web", name: "CoreStory-web", kind: .repo)
+        let scratch = ProjectRef(id: 10, root: "\(home)/Project/CoreStory-spike", name: "CoreStory-spike", kind: .folder)
+        let suggestion = MergeSuggestion(id: "clone:github.com/acme/CoreStory:1,8", remote: "github.com/acme/CoreStory",
+                                         projects: [refs[0], coreStoryCopy])
         return ProjectEditsPreview(
-            projects: refs + [fibaCopy],
+            projects: refs + [coreStoryCopy],
             merged: [MergedProject(project: archived, into: refs[0]), MergedProject(project: scratch, into: refs[0])],
-            folders: [PathAssignment(path: "\(home)/Design/fiba-assets", project: refs[0])],
+            folders: [PathAssignment(path: "\(home)/Design/CoreStory-assets", project: refs[0])],
             sessions: [SessionAssignment(key: liveKey, title: "Build the pricing section", project: refs[0])],
             suggestions: [suggestion],
             usage: [refs[0].id: ProjectEdits.Usage(sessions: 163, totals: totals(usd: 1_284, local: false),
                                                    firstActive: now.addingTimeInterval(-212 * 86_400)),
-                    fibaCopy.id: ProjectEdits.Usage(sessions: 41, totals: totals(usd: 96.4, local: false),
+                    coreStoryCopy.id: ProjectEdits.Usage(sessions: 41, totals: totals(usd: 96.4, local: false),
                                                     firstActive: now.addingTimeInterval(-34 * 86_400))])
     }
 
@@ -551,9 +551,9 @@ enum PreviewData {
                                     projects: projectSlices, models: modelSlices, efficiency: efficiency)
 
         let sessions = sessionSummaries(now: now, projects: projectRefs)
-        let fiba = summaries[0]
-        let fibaDaily = series(points(month.filter { $0.project == 0 }) { $0.model }, lastDays: 30)
-        let fibaSessions = sessions.filter { $0.project?.id == fiba.project?.id }
+        let coreStory = summaries[0]
+        let coreStoryDaily = series(points(month.filter { $0.project == 0 }) { $0.model }, lastDays: 30)
+        let coreStorySessions = sessions.filter { $0.project?.id == coreStory.project?.id }
         let unassigned = summaries.first { $0.project == nil }.map { summary in
             ProjectDetailData(range: .month, summary: summary,
                               daily: series(points(month.filter { $0.project == nil }) { $0.model }, lastDays: 30),
@@ -580,8 +580,8 @@ enum PreviewData {
             today: todayBySource, overview: overview, spending: spending,
             sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first,
             projects: ProjectsData(range: .month, projects: summaries),
-            projectDetail: ProjectDetailData(range: .month, summary: fiba, daily: fibaDaily,
-                                             sessions: SessionPage(sessions: fibaSessions, totalCount: fiba.sessionCount)),
+            projectDetail: ProjectDetailData(range: .month, summary: coreStory, daily: coreStoryDaily,
+                                             sessions: SessionPage(sessions: coreStorySessions, totalCount: coreStory.sessionCount)),
             unassignedDetail: unassigned,
             limits: limits(now: now, entries: entries),
             localModel: localModel(now: now, entries: entries, days: days),
@@ -800,7 +800,7 @@ enum PreviewData {
         let home = NSHomeDirectory()
         let facts: [Int?: (sessions: Int, minutesAgo: Double, branches: [String], worktrees: [String])] = [
             0: (41, 0.4, ["auth-refresh", "feature/pricing", "landing-hero", "main"],
-                ["\(home)/Project/fiba.worktrees/landing-hero"]),
+                ["\(home)/Project/CoreStory.worktrees/landing-hero"]),
             1: (26, 1, ["async-client", "main", "orders-paging"], []),
             2: (33, 3, ["main", "v2-ledger"], []),
             3: (12, 1_400, ["fix/flaky-ref", "main"], []),
@@ -912,7 +912,7 @@ enum PreviewData {
             let total = models.reduce(LedgerTotals.zero) { $0 + $1.totals }
             let id = row.id ?? String(format: "%08x-preview-%02d", 0x5e55_1000 + index * 7_919, index)
             let cwd = row.branch == "landing-hero" && row.minutesAgo < 60
-                ? "\(home)/Project/fiba.worktrees/landing-hero" : project?.root
+                ? "\(home)/Project/CoreStory.worktrees/landing-hero" : project?.root
             return SessionSummary(
                 key: SessionKey(source: row.source, id: id), project: project, title: row.title, cwd: cwd,
                 branch: row.branch, firstAt: last.addingTimeInterval(-row.hours * 3_600), lastAt: last,
@@ -920,7 +920,7 @@ enum PreviewData {
                 nativeCostUSD: row.native ? row.usd * 0.987 : nil,
                 linesAdded: row.source == .claudeCode ? row.turns * 23 : nil,
                 linesRemoved: row.source == .claudeCode ? row.turns * 7 : nil,
-                prURL: row.native ? "https://github.com/fiba/fiba-web/pull/482" : nil,
+                prURL: row.native ? "https://github.com/corestory/CoreStory-web/pull/482" : nil,
                 transcriptPath: row.source == .claudeCode ? "\(home)/.claude/projects/-preview/\(id).jsonl" : nil)
         }
     }

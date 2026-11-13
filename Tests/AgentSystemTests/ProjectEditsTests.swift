@@ -243,19 +243,19 @@ final class ProjectEditsTests: XCTestCase {
             try directory.mkdir("\(name)/.git")
             if let url { try directory.write("\(name)/.git/config", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = \(url)\n") }
         }
-        try repo("fiba", url: "git@github.com:acme/fiba.git")
-        try repo("fiba-second", url: "https://github.com/Acme/fiba")
+        try repo("corestory", url: "git@github.com:acme/corestory.git")
+        try repo("corestory-second", url: "https://github.com/Acme/corestory")
         try repo("other", url: "git@github.com:acme/other.git")
         try repo("local", url: nil)
         var (store, reader) = try open(directory)
-        for name in ["fiba", "fiba-second", "other", "local"] {
+        for name in ["corestory", "corestory-second", "other", "local"] {
             try await store.apply(batch(name, cwd: directory.path(name)))
         }
         let suggestions = try await store.mergeSuggestions()
         XCTAssertEqual(suggestions.count, 1)
         let suggestion = try XCTUnwrap(suggestions.first)
-        XCTAssertEqual(suggestion.remote, "github.com/acme/fiba")
-        XCTAssertEqual(Set(suggestion.projects.map(\.name)), ["fiba", "fiba-second"])
+        XCTAssertEqual(suggestion.remote, "github.com/acme/corestory")
+        XCTAssertEqual(Set(suggestion.projects.map(\.name)), ["corestory", "corestory-second"])
         let untouched = try await callsByProject(reader)
         XCTAssertEqual(untouched.count, 4, "a suggestion merges nothing")
 

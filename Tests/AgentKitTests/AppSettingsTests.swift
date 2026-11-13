@@ -66,7 +66,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(older.copilotUSDPerPremiumRequest, 0.04)
         XCTAssertEqual(older.port, 4400, "older keys survive")
 
-        let wrong = #"{"quietHoursEnabled":"yes","quietHoursStart":"22:00","mutedProjectRoots":"/r/fiba","limitAlertsEnabled":1.5,"copilotMonthlyAllowance":"1500","copilotUSDPerPremiumRequest":"cheap","quietHoursEnd":420,"vllmName":"ZGX"}"#
+        let wrong = #"{"quietHoursEnabled":"yes","quietHoursStart":"22:00","mutedProjectRoots":"/r/corestory","limitAlertsEnabled":1.5,"copilotMonthlyAllowance":"1500","copilotUSDPerPremiumRequest":"cheap","quietHoursEnd":420,"vllmName":"ZGX"}"#
         let settings = AppSettings.decode(Data(wrong.utf8))
         XCTAssertFalse(settings.quietHoursEnabled)
         XCTAssertEqual(settings.quietHoursStart, 1320)
@@ -83,7 +83,7 @@ final class AppSettingsTests: XCTestCase {
         changed.quietHoursEnabled = true
         changed.quietHoursStart = 23 * 60
         changed.quietHoursEnd = 6 * 60 + 30
-        changed.mutedProjectRoots = ["/r/fiba", "/r/api"]
+        changed.mutedProjectRoots = ["/r/corestory", "/r/api"]
         changed.limitAlertsEnabled = false
         changed.localModelAlertsEnabled = false
         changed.copilotMonthlyAllowance = 0
