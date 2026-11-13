@@ -222,7 +222,7 @@ final class DevServerClassifierTests: XCTestCase {
         XCTAssertEqual(server.session, claude)
         XCTAssertEqual(server.sessionMatch, .directory)
 
-        let elsewhere = [DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/fib")]
+        let elsewhere = [DevServerClassifier.Session(key: claude, cwd: "/Users/dev/Project/core")]
         XCTAssertNil(classifier.servers(in: ProcessSnapshot(processes: nextTree), sessions: elsewhere).first?.session)
     }
 

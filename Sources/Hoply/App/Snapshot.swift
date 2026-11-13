@@ -74,7 +74,7 @@ enum Snapshot {
                                .padding(12).frame(width: 448),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-palette-\(name).png"))
-                for (state, query) in [("empty", ""), ("query", "fib"), ("actions", ">"), ("no-results", "zzqx")] {
+                for (state, query) in [("empty", ""), ("query", "core"), ("actions", ">"), ("no-results", "zzqx")] {
                     model.palette.show(query: query, sessions: PreviewData.paletteSessions(now: now),
                                        projects: PreviewData.paletteProjects(now: now))
                     try render(PaletteView(plainBackground: true).padding(PaletteWindowController.margin),
