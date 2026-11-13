@@ -137,6 +137,8 @@ final class History {
     @ObservationIgnored var onLoaded: ((DashboardPage) -> Void)?
     @ObservationIgnored private(set) var liveModels: [SessionKey: String] = [:]
     @ObservationIgnored var onLiveModels: (() -> Void)?
+    @ObservationIgnored private(set) var liveTitles: [SessionKey: String] = [:]
+    @ObservationIgnored var onLiveTitles: (() -> Void)?
     @ObservationIgnored var onLimits: (([LimitSample], [LimitKind: LimitSample]) -> Void)?
     @ObservationIgnored var onCodexLimits: (() -> Void)?
     @ObservationIgnored var onSubagents: (([SubagentActivity]) -> Void)?
@@ -619,6 +621,7 @@ final class History {
             let sessions = liveSessions
             let keys = sessions.map(\.key)
             let totals = try await reader.sessionTotals(for: keys)
+            let titles = try await reader.sessionTitles(for: keys)
             let today = try await reader.todayBySource(now: now)
             let windows = try await ledger.contextWindows(for: sessions)
             let subagents = try await ledger.subagentCounts(for: keys)
@@ -628,6 +631,10 @@ final class History {
             if windows != contextWindows { contextWindows = windows }
             if subagents != subagentCounts { subagentCounts = subagents }
             refreshedDay = Calendar.current.startOfDay(for: now)
+            if titles != liveTitles {
+                liveTitles = titles
+                onLiveTitles?()
+            }
         } catch {
             note = "Reading history failed: \(Self.describe(error))"
         }

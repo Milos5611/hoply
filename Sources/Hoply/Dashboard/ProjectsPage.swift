@@ -338,7 +338,7 @@ struct ProjectDetailView: View {
                     Button { model.history.closeProject() } label: {
                         Label("Projects", systemImage: "chevron.left")
                     }
-                    .help("Back to all projects")
+                    .tooltip("Back to all projects")
                 }
                 ToolbarItem(placement: .primaryAction) { ProjectRangePicker() }
             }

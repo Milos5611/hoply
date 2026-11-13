@@ -311,7 +311,7 @@ struct DevServersCard: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
-                    .help("Show all dev servers in the Dashboard")
+                    .tooltip("Show all dev servers in the Dashboard")
                 }
                 ForEach(groups) { group in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {

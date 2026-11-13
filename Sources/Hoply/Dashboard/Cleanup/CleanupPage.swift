@@ -62,7 +62,7 @@ private struct CleanupControls: View {
             Label("Scan", systemImage: "arrow.clockwise")
         }
         .disabled(cleanup.isScanning || cleanup.isRunning)
-        .help("Look through your projects again")
+        .tooltip("Look through your projects again")
         Button { cleanup.isReviewing = true } label: {
             Text(selected.isEmpty ? "Review…" : "Review \(CleanupSummary.items(selected.count))…")
         }

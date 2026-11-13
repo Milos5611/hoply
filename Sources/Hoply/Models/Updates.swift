@@ -26,19 +26,25 @@ final class Updates: NSObject {
     var cardUpdate: PendingUpdate? { reminder.showsCard ? reminder.pending : nil }
     var canUpdate: Bool { pending?.stage == .ready || canCheck }
 
+    let runningVersion: String?
+
+    private static var shortVersion: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+
     var version: String {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build))"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(Self.shortVersion ?? "?") (\(build))"
     }
 
     init(live: Bool) {
+        // Preview models get none, so --snapshot PNGs (the site's screenshots) never show a version that goes stale.
+        runningVersion = live ? Self.shortVersion : nil
         super.init()
         guard live, Bundle.main.bundleURL.pathExtension == "app",
               UpdateFeed(info: Bundle.main.infoDictionary ?? [:]) != nil else { return }
         reminder = UpdateReminder(notifiedVersion: UserDefaults.standard.string(forKey: Self.notifiedVersionKey),
-                                  runningVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+                                  runningVersion: runningVersion)
         let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
                                  userDriver: SPUStandardUserDriver(hostBundle: .main, delegate: self), delegate: self)
         do {

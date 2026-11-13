@@ -224,6 +224,18 @@ public struct SessionBoard: Sendable {
         return changed
     }
 
+    @discardableResult
+    public mutating func noteTitles(_ titles: [SessionKey: String]) -> Bool {
+        var changed = false
+        for (key, title) in titles {
+            guard let session = sessions[key], session.title != title,
+                  !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            sessions[key]?.title = title
+            changed = true
+        }
+        return changed
+    }
+
     // Never creates a session: a subagent's file outlives its parent's live row.
     @discardableResult
     public mutating func noteSubagents(_ activity: [SubagentActivity]) -> Bool {

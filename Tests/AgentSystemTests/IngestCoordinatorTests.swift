@@ -91,6 +91,20 @@ final class IngestCoordinatorTests: XCTestCase {
         XCTAssertEqual(updates.last?.progress.fraction, 1)
     }
 
+    func testATailThatOnlyRetitlesTheSessionReportsIt() async throws {
+        let directory = try TempDirectory()
+        try seed(directory)
+        let ledger = try makeLedger(directory)
+        await ledger.ingest.start()
+        let reported = firstUpdateAfterBackfill(in: ledger.ingest.updates, touching: key)
+        try directory.append(mainFile, #"{"type":"ai-title","aiTitle":"Demo, renamed","sessionId":"\#(sessionID)"}"# + "\n")
+        await ledger.ingest.tailTranscript(atPath: directory.path(mainFile))
+        let update = await reported.value
+        XCTAssertNotNil(update, "a title-only tail still names its session, so the app re-reads the title")
+        let titles = try await ledger.reader.sessionTitles(for: [key])
+        XCTAssertEqual(titles, [key: "Demo, renamed"])
+    }
+
     func testFileSystemEventsTriggerATail() async throws {
         let directory = try TempDirectory()
         try seed(directory)

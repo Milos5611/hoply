@@ -135,6 +135,7 @@ final class AppModel {
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
         history.onLiveModels = { [weak self] in self?.applyLiveModels() }
+        history.onLiveTitles = { [weak self] in self?.applyLiveTitles() }
         history.onLimits = { [weak self] samples, previous in self?.codexLimitsRead(samples, previous: previous) }
         history.onCodexLimits = { [weak self] in self?.checkLimitedSessions(now: Date()) }
         history.onSubagents = { [weak self] activity in self?.applySubagents(activity) }
@@ -199,12 +200,17 @@ final class AppModel {
         if board.noteModels(history.liveModels) { publishSessions() }
     }
 
+    private func applyLiveTitles() {
+        if board.noteTitles(history.liveTitles) { publishSessions() }
+    }
+
     private func applySubagents(_ activity: [SubagentActivity]) {
         if board.noteSubagents(activity) { publishSessions() }
     }
 
     private func publishSessions() {
         board.noteModels(history.liveModels)
+        board.noteTitles(history.liveTitles)
         sessions = board.ordered
         history.track(sessions)
         resolveProjects()

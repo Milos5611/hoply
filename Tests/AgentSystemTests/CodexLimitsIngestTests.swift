@@ -255,6 +255,24 @@ final class CodexLimitsIngestTests: XCTestCase {
         XCTAssertEqual(again?.title, "Kept")
     }
 
+    func testAnIndexRenameReportsTheSession() async throws {
+        let directory = try TempDirectory()
+        let then = Date().addingTimeInterval(-86_400)
+        try directory.write(rollout(root), meta(root, at: then)
+                            + tokens(at: then.addingTimeInterval(5), total: 1_000, output: 10, fiveHour: 1, weekly: 1))
+        try directory.write("codex/session_index.jsonl", index(root, "First name"))
+        let ledger = try makeLedger(directory)
+        await ledger.ingest.start()
+        let key = SessionKey(source: .codexCLI, id: root)
+        let reported = firstUpdateAfterBackfill(in: ledger.ingest.updates, touching: key)
+        try directory.append("codex/session_index.jsonl", index(root, "Renamed"))
+        await ledger.ingest.rescan()
+        let update = await reported.value
+        XCTAssertNotNil(update, "a rename touches no rollout, yet the app must re-read the title")
+        let titles = try await ledger.reader.sessionTitles(for: [key])
+        XCTAssertEqual(titles, [key: "Renamed"])
+    }
+
     func testARewrittenIndexIsReadFromTheStart() async throws {
         let directory = try TempDirectory()
         let then = Date().addingTimeInterval(-86_400)

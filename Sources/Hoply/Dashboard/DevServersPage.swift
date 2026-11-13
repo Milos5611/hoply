@@ -40,7 +40,7 @@ struct DevServersPage: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                     .disabled(devServers.isScanning)
-                    .help("Scan for listening processes now")
+                    .tooltip("Scan for listening processes now")
                 }
                 if let notice = devServers.notice {
                     Card(prominent: true, tint: notice.isError ? .red : .green) {
@@ -222,18 +222,16 @@ private struct DevServerRow: View {
                 DevServerAction(symbol: "safari", help: "Open \(server.url.absoluteString)") {
                     WorkspaceActions.openInBrowser(server.url)
                 }
-                DevServerAction(symbol: "link", help: "Copy URL") {
+                DevServerAction(symbol: "link", help: "Copy the URL") {
                     WorkspaceActions.copy(server.url.absoluteString)
                 }
-                DevServerAction(symbol: "folder", help: "Reveal in Finder") {
+                DevServerAction(symbol: "folder", help: "Show in Finder") {
                     WorkspaceActions.revealInFinder(server.cwd)
                 }
                 DevServerAction(symbol: "stop.fill", help: server.stopRefusal?.reason ?? "Stop this server…",
-                                tint: .red) {
+                                tint: .red, enabled: server.canStop) {
                     devServers.askStop(server)
                 }
-                .disabled(!server.canStop)
-                .help(server.stopRefusal?.reason ?? "Stop this server…")
             }
         }
     }
@@ -256,6 +254,7 @@ private struct DevServerAction: View {
     let symbol: String
     let help: String
     var tint: Color = .primary
+    var enabled = true
     let action: () -> Void
 
     @Environment(\.isEnabled) private var isEnabled
@@ -265,13 +264,15 @@ private struct DevServerAction: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.5))
+                .foregroundStyle(isEnabled && enabled ? tint : Color.secondary.opacity(0.5))
                 .frame(width: 30, height: 26)
                 .background(shape.fill(Color.primary.opacity(0.05)))
                 .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
                 .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .help(help)
+        // Outside .disabled, so a refused Stop still shows its reason on hover.
+        .disabled(!enabled)
+        .tooltip(help)
     }
 }

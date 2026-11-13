@@ -47,7 +47,7 @@ struct DashboardView: View {
                             Button { columns = columns == .detailOnly ? .all : .detailOnly } label: {
                                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
                             }
-                            .help(columns == .detailOnly ? "Show the sidebar" : "Hide the sidebar")
+                            .tooltip(columns == .detailOnly ? "Show the sidebar" : "Hide the sidebar")
                         }
                     }
             }

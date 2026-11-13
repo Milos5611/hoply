@@ -150,6 +150,32 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(summary?.cwd, cwd, "subagent lines never replace the main thread's cwd")
     }
 
+    func testSessionTitlesForLiveKeys() async throws {
+        let (store, reader) = try open(try TempDirectory())
+        let codex = SessionKey(source: .codexCLI, id: "s1")
+        let copilot = SessionKey(source: .copilotCLI, id: "cp1")
+        try await store.apply(LedgerBatch(sessions: [
+            session(title: "AI title", rank: 2), session("untitled"), session("blank", title: ""),
+            session("not-live", title: "Elsewhere", rank: 2),
+            SessionUpdate(key: codex, cwd: cwd, title: "Codex thread", titleRank: 3),
+            SessionUpdate(key: copilot, cwd: cwd, title: "Copilot summary", titleRank: 2),
+        ]))
+        let untitled = SessionKey(source: .claudeCode, id: "untitled")
+        let blank = SessionKey(source: .claudeCode, id: "blank")
+        let missing = SessionKey(source: .claudeCode, id: "missing")
+
+        var titles = try await reader.sessionTitles(for: [key, untitled, blank, missing, codex, copilot])
+        XCTAssertEqual(titles, [key: "AI title", codex: "Codex thread", copilot: "Copilot summary"],
+                       "only non-empty titles of the asked keys, each under its own source")
+
+        _ = try await store.applyTitles(["s1": "Renamed"], source: .codexCLI, rank: 3)
+        try await store.apply(LedgerBatch(sessions: [session(title: "Custom", rank: 3)]))
+        titles = try await reader.sessionTitles(for: [key, codex])
+        XCTAssertEqual(titles, [key: "Custom", codex: "Renamed"])
+        titles = try await reader.sessionTitles(for: [])
+        XCTAssertEqual(titles, [:])
+    }
+
     func testCursorsRoundTripAndReset() async throws {
         let (store, _) = try open(try TempDirectory())
         let cursor = IngestCursor(source: .claudeCode, path: "/x.jsonl",

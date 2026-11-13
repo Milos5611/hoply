@@ -25,6 +25,20 @@ public actor StoreReader {
         return result
     }
 
+    public func sessionTitles(for keys: [SessionKey]) throws -> [SessionKey: String] {
+        var result: [SessionKey: String] = [:]
+        for (source, ids) in Dictionary(grouping: keys, by: \.source) {
+            let rows = try db.query("""
+                SELECT id, title FROM sessions
+                WHERE source = ? AND id IN (SELECT value FROM json_each(?)) AND title <> ''
+                """, [source.rawValue, Self.jsonArray(ids.map(\.id))]) { row in
+                (SessionKey(source: source, id: row.text(0)), row.text(1))
+            }
+            for (key, title) in rows { result[key] = title }
+        }
+        return result
+    }
+
     public func totalsBySource(in range: DateInterval) throws -> [AgentSource: LedgerTotals] {
         let rows = try db.query("""
             SELECT source, \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ? GROUP BY source

@@ -110,22 +110,32 @@ struct PanelFooter: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help(statusText)
             }
-            Spacer()
-            if model.history.progress.isBackfilling {
-                BackfillIndicator(progress: model.history.progress)
-            } else if model.cleanup.reclaimableBytes >= ReclaimableButton.minimumBytes {
-                ReclaimableButton(bytes: model.cleanup.reclaimableBytes)
+            Spacer(minLength: 6)
+            Group {
+                if model.history.progress.isBackfilling {
+                    BackfillIndicator(progress: model.history.progress)
+                } else if model.cleanup.reclaimableBytes >= ReclaimableButton.minimumBytes {
+                    ReclaimableButton(bytes: model.cleanup.reclaimableBytes)
+                }
+                if let version = model.updates.runningVersion {
+                    Text("v\(version)")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .help("Hoply \(model.updates.version)")
+                }
+                Button {
+                    model.quit()
+                } label: {
+                    Image(systemName: "power")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .tooltip("Quit Hoply")
             }
-            Button {
-                model.quit()
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .help("Quit Hoply")
+            .fixedSize()
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)

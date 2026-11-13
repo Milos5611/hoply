@@ -131,6 +131,49 @@ final class SessionBoardTests: XCTestCase {
         XCTAssertNil(SessionBoard.title(from: "   \n  "))
         XCTAssertEqual(SessionBoard.title(from: String(repeating: "a", count: 100))?.count, 80)
     }
+
+    func testLedgerTitleReplacesTheFirstPromptTitle() {
+        var board = SessionBoard()
+        board.apply(hook(.promptSubmitted("how many unique downloads i have"), at: 0))
+        XCTAssertEqual(board.sessions[claude]?.title, "how many unique downloads i have")
+
+        XCTAssertTrue(board.noteTitles([claude: "Unique downloads count"]))
+        XCTAssertEqual(board.sessions[claude]?.title, "Unique downloads count")
+        XCTAssertFalse(board.noteTitles([claude: "Unique downloads count"]), "an unchanged title changes nothing")
+
+        board.apply(hook(.turnFinished(nil), at: 5))
+        board.apply(hook(.promptSubmitted("and per country?"), at: 9))
+        XCTAssertEqual(board.sessions[claude]?.title, "Unique downloads count", "a later prompt keeps the ledger title")
+
+        XCTAssertTrue(board.noteTitles([claude: "Downloads by country"]), "a rename in the ledger wins again")
+        XCTAssertEqual(board.sessions[claude]?.title, "Downloads by country")
+    }
+
+    func testNoteTitlesNeverCreatesASessionAndIgnoresEmptyTitles() {
+        var board = SessionBoard()
+        let ghost = SessionKey(source: .codexCLI, id: "gone")
+        XCTAssertFalse(board.noteTitles([ghost: "Old thread"]))
+        XCTAssertNil(board.sessions[ghost])
+
+        board.apply(hook(.promptSubmitted("Fix the login test"), at: 0))
+        XCTAssertFalse(board.noteTitles([claude: ""]))
+        XCTAssertFalse(board.noteTitles([claude: "  \n"]))
+        XCTAssertFalse(board.noteTitles([:]))
+        XCTAssertEqual(board.sessions[claude]?.title, "Fix the login test")
+    }
+
+    func testARestartedSessionGetsTheLedgerTitleBackOnTheNextNote() {
+        var board = SessionBoard()
+        let titles = [claude: "Unique downloads count"]
+        board.apply(hook(.sessionStarted, at: 0))
+        board.noteTitles(titles)
+        board.apply(hook(.sessionEnded(nil), at: 10))
+        board.apply(hook(.sessionStarted, at: 20))
+        XCTAssertNil(board.sessions[claude]?.title, "a restart is a new live session")
+        XCTAssertTrue(board.noteTitles(titles))
+        board.apply(hook(.promptSubmitted("next question"), at: 21))
+        XCTAssertEqual(board.sessions[claude]?.title, "Unique downloads count")
+    }
 }
 
 final class PrometheusAndVLLMTests: XCTestCase {

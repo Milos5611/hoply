@@ -111,6 +111,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             menu.addItem(update)
         }
         menu.addItem(.separator())
+        if let version = model.updates.runningVersion {
+            let about = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
+            about.isEnabled = false
+            menu.addItem(about)
+        }
         menu.addItem(item("Quit Hoply", #selector(quit)))
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
