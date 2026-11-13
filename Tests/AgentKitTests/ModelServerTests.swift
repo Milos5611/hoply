@@ -19,6 +19,66 @@ final class ModelServerTests: XCTestCase {
         .failure(RemoteError(.http(status: status), endpoint: "Box"))
     }
 
+    private typealias Answers = [ModelServerRoute: Result<Data, RemoteError>]
+
+    private func answer(_ status: Int, _ type: String, _ fixture: String) throws -> Result<Data, RemoteError> {
+        let endpoint = try XCTUnwrap(RemoteEndpoint(baseURL: "http://127.0.0.1:8080", name: "Box"))
+        return endpoint.classify(status: status, contentType: type, location: nil, body: try Fixture.data(fixture),
+                                 auth: .none)
+    }
+
+    private let json = "application/json; charset=utf-8"
+
+    private func ollamaAnswers(ps: String = "ollama_ps_loaded.json") throws -> Answers {
+        var answers: Answers = [:]
+        for route in ModelServerRoute.allCases {
+            switch route {
+            case .ollamaVersion: answers[route] = try answer(200, json, "ollama_version.json")
+            case .ollamaTags: answers[route] = try answer(200, json, "ollama_tags.json")
+            case .ollamaRunning: answers[route] = try answer(200, json, ps)
+            case .openAIModels: answers[route] = try answer(200, "application/json", "ollama_v1_models.json")
+            case .metrics, .lmStudioModels, .llamaCppProps, .tgiInfo:
+                answers[route] = try answer(404, "text/plain", "ollama_not_found.txt")
+            }
+        }
+        return answers
+    }
+
+    private func lmStudioAnswers(models: String = "lmstudio_v0_models_loaded.json") throws -> Answers {
+        let unexpected = try Fixture.text("lmstudio_unexpected_endpoint.jsonl").split(separator: "\n")
+        let endpoint = try XCTUnwrap(RemoteEndpoint(baseURL: "http://127.0.0.1:1234", name: "Box"))
+        var answers: Answers = [:]
+        for route in ModelServerRoute.allCases {
+            switch route {
+            case .lmStudioModels: answers[route] = try answer(200, json, models)
+            case .openAIModels: answers[route] = try answer(200, json, "lmstudio_v1_models.json")
+            case .metrics, .ollamaVersion, .ollamaTags, .ollamaRunning, .llamaCppProps, .tgiInfo:
+                let body = try XCTUnwrap(unexpected.first { $0.hasSuffix("(GET \(route.path))\"}") }, route.path)
+                answers[route] = endpoint.classify(status: 200, contentType: json, location: nil, body: Data(body.utf8),
+                                                   auth: .none)
+            }
+        }
+        return answers
+    }
+
+    private func llamaCppAnswers(metrics: String? = "llamacpp_metrics_after.txt") throws -> Answers {
+        var answers: Answers = [:]
+        for route in ModelServerRoute.allCases {
+            switch route {
+            case .metrics:
+                answers[route] = try metrics.map { try answer(200, "text/plain; version=0.0.4", $0) }
+                    ?? answer(501, json, "llamacpp_metrics_disabled.json")
+            case .openAIModels:
+                answers[route] = try answer(200, json, metrics == nil ? "llamacpp_v1_models_no_alias.json" : "llamacpp_v1_models.json")
+            case .llamaCppProps:
+                answers[route] = try answer(200, json, metrics == nil ? "llamacpp_props_no_metrics.json" : "llamacpp_props.json")
+            case .ollamaVersion, .ollamaTags, .ollamaRunning, .lmStudioModels, .tgiInfo:
+                answers[route] = try answer(404, json, "llamacpp_not_found.json")
+            }
+        }
+        return answers
+    }
+
     // MARK: - Settings
 
     func testLegacySettingsBecomeOneServerWithTheFixedID() throws {
@@ -326,27 +386,141 @@ final class ModelServerTests: XCTestCase {
         XCTAssertFalse(vllm.capabilities.contains(.loadedModels))
     }
 
-    func testLlamaCppWithAndWithoutMetrics() throws {
-        let full = try snapshot([.metrics: .success(try Fixture.data("synthetic_llamacpp_metrics.txt")),
-                                 .openAIModels: .success(try shapes("llamacpp_models")),
-                                 .llamaCppProps: .success(try shapes("llamacpp_props"))]).get()
-        XCTAssertEqual(full.engine, .llamaCpp)
-        XCTAssertEqual(full.metrics, ModelServerMetrics(running: 1, waiting: 2, kvCacheUsage: 0.25, promptTokensTotal: 18_240,
-                                                        generationTokensTotal: 5_120, generationTokensCounter: 5_120))
-        XCTAssertEqual(full.models.map(\.id), ["qwen2.5-coder-7b-q4_k_m.gguf"])
-        XCTAssertEqual(full.models.first?.contextLength, 32_768)
-        XCTAssertEqual(full.version, "b4589-abc1234")
-        XCTAssertTrue(full.hints.isEmpty)
+    func testLlamaCppMetricsWhileTwoRequestsStreamAndAfter() throws {
+        let expected: [(String, ModelServerMetrics)] = [
+            ("llamacpp_metrics_idle.txt", ModelServerMetrics(running: 0, waiting: 0, promptTokensTotal: 0,
+                                                             generationTokensTotal: 0, generationTokensCounter: 0)),
+            ("llamacpp_metrics_busy.txt", ModelServerMetrics(running: 2, waiting: 0, promptTokensTotal: 76,
+                                                             generationTokensTotal: 152, generationTokensCounter: 0)),
+            ("llamacpp_metrics_after.txt", ModelServerMetrics(running: 0, waiting: 0, promptTokensTotal: 76,
+                                                              generationTokensTotal: 1_200, generationTokensCounter: 1_200)),
+        ]
+        var snapshots: [ModelServerSnapshot] = []
+        for (index, (name, metrics)) in expected.enumerated() {
+            let samples = PrometheusParser.parse(try Fixture.text(name))
+            XCTAssertEqual(PrometheusDialect.detect(samples)?.engine, .llamaCpp, name)
+            XCTAssertEqual(PrometheusDialect.detect(samples)?.metrics(from: samples), metrics,
+                           "\(name): no KV cache at b12110, and predicted_tokens_seconds is never the rate")
+            snapshots.append(try snapshot(try llamaCppAnswers(metrics: name), at: TimeInterval(index) * 5).get())
+        }
 
-        let bare = try snapshot([.metrics: missing(501), .openAIModels: .success(try shapes("llamacpp_models")),
-                                 .llamaCppProps: .success(try shapes("llamacpp_props"))]).get()
+        let streaming = ModelServerStatus.compute(previous: snapshots[0], current: snapshots[1])
+        XCTAssertEqual(try XCTUnwrap(streaming.generationTokensPerSecond), 30.4, accuracy: 1e-9,
+                       "tokens_predicted_total is still 0; busy slot-steps (76 decodes × 2 slots) move")
+        XCTAssertEqual(try XCTUnwrap(streaming.promptTokensPerSecond), 15.2, accuracy: 1e-9)
+        let finished = ModelServerStatus.compute(previous: snapshots[1], current: snapshots[2])
+        XCTAssertEqual(try XCTUnwrap(finished.generationTokensPerSecond), 209.6, accuracy: 1e-9,
+                       "not the 1,200 tokens the counter adds at once")
+        XCTAssertEqual(finished.promptTokensPerSecond, 0)
+
+        let after = snapshots[2]
+        XCTAssertEqual(after.engine, .llamaCpp)
+        XCTAssertEqual(after.version, "b12110-cd959bae9")
+        XCTAssertEqual(after.models, [ServedModel(id: "smollm2-135m", contextLength: 2_048, ownedBy: "llamacpp")],
+                       "meta.n_ctx is a slot's context (-c 4096 -np 2), n_ctx_train the model's")
+        XCTAssertEqual(after.primaryModel, "smollm2-135m")
+        XCTAssertTrue(after.hints.isEmpty)
+        XCTAssertEqual(after.capabilities, [.models, .generationRate, .promptRate, .running, .waiting, .version])
+        let observed = ModelServerSeries.observations(finished, server: "lc")
+        XCTAssertEqual(observed.first { $0.series == "model.lc.generation_tokens" }?.value, 1_200,
+                       "daily totals count finished tokens, not slot-steps")
+
+        let big = PrometheusParser.parse("llamacpp:tokens_predicted_total 1.23457e+06\nllamacpp:n_decode_total 1e+06\n")
+        XCTAssertEqual(big.map(\.value), [1_234_570, 1_000_000], "llama.cpp prints six significant digits")
+    }
+
+    func testLlamaCppWithoutMetricsReportsItsModelsAndWhy() throws {
+        let bare = try snapshot(try llamaCppAnswers(metrics: nil)).get()
         XCTAssertEqual(bare.engine, .llamaCpp)
         XCTAssertEqual(bare.hints, [.metricsDisabled(.llamaCpp)])
+        XCTAssertEqual(ModelServerHint.metricsDisabled(.llamaCpp).text, "Start llama-server with --metrics to see throughput.")
+        XCTAssertEqual(bare.models, [ServedModel(
+            id: "/Users/x/.ollama/models/blobs/sha256-f535f83ec568d040f88ddc04a199fa6da90923bbb41d4dcaed02caa924d6ef57",
+            contextLength: 2_048, ownedBy: "llamacpp")], "without --alias the id is the model's path")
+        XCTAssertEqual(bare.version, "b12110-cd959bae9")
         XCTAssertEqual(bare.capabilities, [.models, .version], "nothing it doesn't report is claimed")
         XCTAssertTrue(bare.metrics.isEmpty)
+        XCTAssertEqual(ModelServerAvailability(.success(ModelServerStatus(snapshot: bare))), .online)
+        let refused = try XCTUnwrap(llamaCppAnswers(metrics: nil)[.metrics])
+        guard case .failure(let error) = refused else { return XCTFail("501 is an error") }
+        XCTAssertEqual(error.kind, .http(status: 501))
+        XCTAssertFalse(error.isUnreachable)
+        XCTAssertFalse(error.isAuthFailure)
 
-        let propsOnly = try snapshot([.llamaCppProps: .success(try shapes("llamacpp_props")), .openAIModels: missing()]).get()
-        XCTAssertEqual(propsOnly.models, [ServedModel(id: "qwen2.5-coder-7b-q4_k_m.gguf", loaded: true, contextLength: 8_192)])
+        let propsSay = try snapshot([.openAIModels: answer(200, json, "llamacpp_v1_models_no_alias.json"),
+                                     .llamaCppProps: answer(200, json, "llamacpp_props_no_metrics.json")]).get()
+        XCTAssertEqual(propsSay.hints, [.metricsDisabled(.llamaCpp)], "props' endpoint_metrics: false is enough")
+
+        var proxied = try llamaCppAnswers()
+        proxied[.metrics] = try answer(404, json, "llamacpp_not_found.json")
+        XCTAssertEqual(try snapshot(proxied).get().hints, [.metricsMissing(.llamaCpp)],
+                       "metrics are on, so --metrics is not the advice when /metrics doesn't answer")
+
+        let propsOnly = try snapshot([.llamaCppProps: answer(200, json, "llamacpp_props.json"), .openAIModels: missing()]).get()
+        XCTAssertEqual(propsOnly.models, [ServedModel(id: "smollm2-135m", loaded: true, contextLength: 2_048)])
+    }
+
+    func testOllamaReportsModelsButNoActivity() throws {
+        let idle = try snapshot(try ollamaAnswers(ps: "ollama_ps_idle.json")).get()
+        XCTAssertEqual(idle.engine, .ollama)
+        XCTAssertEqual(idle.version, "0.40.16")
+        XCTAssertEqual(idle.models, [ServedModel(id: "smollm2:135m", loaded: false, contextLength: 8_192,
+                                                 detail: "134.52M · F16")])
+        XCTAssertEqual(idle.primaryModel, "smollm2:135m")
+        XCTAssertNil(idle.memoryBytes)
+        XCTAssertEqual(idle.capabilities, [.models, .loadedModels, .version])
+        XCTAssertTrue(idle.hints.isEmpty, "Ollama has no /metrics to miss")
+
+        let busy = try snapshot(try ollamaAnswers(ps: "ollama_ps_busy.json"), at: 5).get()
+        let loaded = try snapshot(try ollamaAnswers(), at: 10).get()
+        XCTAssertEqual(loaded.models, [ServedModel(id: "smollm2:135m", loaded: true, memoryBytes: 502_959_963,
+                                                   contextLength: 8_192, detail: "134.52M · F16")])
+        XCTAssertEqual(busy.models, loaded.models, "/api/ps looks the same while it generates")
+        XCTAssertEqual(loaded.memoryBytes, 502_959_963)
+        XCTAssertEqual(loaded.capabilities, [.models, .loadedModels, .memory, .version])
+        XCTAssertTrue(loaded.metrics.isEmpty)
+        XCTAssertNil(ModelServerStatus.compute(previous: idle, current: busy).generationTokensPerSecond)
+
+        var noPS = try ollamaAnswers()
+        noPS[.ollamaRunning] = missing(500)
+        XCTAssertEqual(try snapshot(noPS).get().models.map(\.loaded), [nil], "unknown, not unloaded")
+    }
+
+    func testRealServersAreDetectedFromTheirAnswersToEveryRoute() throws {
+        let servers: [(String, Answers, ModelEngine)] = [
+            ("Ollama idle", try ollamaAnswers(ps: "ollama_ps_idle.json"), .ollama),
+            ("Ollama busy", try ollamaAnswers(ps: "ollama_ps_busy.json"), .ollama),
+            ("Ollama loaded", try ollamaAnswers(), .ollama),
+            ("llama.cpp idle", try llamaCppAnswers(metrics: "llamacpp_metrics_idle.txt"), .llamaCpp),
+            ("llama.cpp busy", try llamaCppAnswers(metrics: "llamacpp_metrics_busy.txt"), .llamaCpp),
+            ("llama.cpp after", try llamaCppAnswers(), .llamaCpp),
+            ("llama.cpp without --metrics", try llamaCppAnswers(metrics: nil), .llamaCpp),
+            ("LM Studio idle", try lmStudioAnswers(models: "lmstudio_v0_models.json"), .lmStudio),
+            ("LM Studio loaded", try lmStudioAnswers(), .lmStudio),
+        ]
+        for (name, answers, engine) in servers {
+            XCTAssertEqual(Set(answers.keys), Set(ModelServerRoute.allCases), name)
+            for case .failure(let error) in answers.values {
+                XCTAssertFalse(error.isUnreachable || error.isAuthFailure, "\(name): \(error.kind)")
+            }
+            let detected = try snapshot(answers).get()
+            XCTAssertEqual(detected.engine, engine, name)
+            let own = Set(ModelServerDetector.routes(for: engine))
+            let asked = try snapshot(answers.filter { own.contains($0.key) }, engine: engine).get()
+            XCTAssertEqual(asked.engine, engine, name)
+            XCTAssertEqual(asked.models, detected.models, name)
+            XCTAssertEqual(asked.metrics, detected.metrics, name)
+            XCTAssertEqual(asked.version, detected.version, name)
+            XCTAssertEqual(asked.hints, detected.hints, name)
+        }
+
+        var modelsOnly = try llamaCppAnswers()
+        modelsOnly[.metrics] = nil
+        modelsOnly[.llamaCppProps] = nil
+        let byOwner = try snapshot(modelsOnly).get()
+        XCTAssertEqual(byOwner.engine, .llamaCpp, "its /v1/models also carries an Ollama-shaped models array")
+        XCTAssertEqual(byOwner.models.map(\.id), ["smollm2-135m"])
+        XCTAssertEqual(byOwner.hints, [.metricsMissing(.llamaCpp)])
     }
 
     func testSGLangAndTGI() throws {
@@ -369,29 +543,55 @@ final class ModelServerTests: XCTestCase {
         XCTAssertFalse(tgi.capabilities.contains(.kvCache))
     }
 
-    func testOllamaAndLMStudioAndPlainOpenAI() throws {
-        let ollama = try snapshot([.metrics: missing(), .openAIModels: .success(try shapes("ollama_openai_models")),
-                                   .ollamaVersion: .success(try shapes("ollama_version")),
-                                   .ollamaTags: .success(try shapes("ollama_tags")),
-                                   .ollamaRunning: .success(try shapes("ollama_ps")),
-                                   .lmStudioModels: missing(), .llamaCppProps: missing(), .tgiInfo: missing()]).get()
-        XCTAssertEqual(ollama.engine, .ollama)
-        XCTAssertEqual(ollama.version, "0.12.3")
-        XCTAssertEqual(ollama.models, [
-            ServedModel(id: "qwen3:8b", loaded: true, memoryBytes: 6_654_289_920, contextLength: 8_192, detail: "8.2B · Q4_K_M"),
-            ServedModel(id: "llama3.2:latest", loaded: false, detail: "3.2B · Q4_K_M")])
-        XCTAssertEqual(ollama.primaryModel, "qwen3:8b")
-        XCTAssertEqual(ollama.memoryBytes, 6_654_289_920)
-        XCTAssertEqual(ollama.capabilities, [.models, .loadedModels, .memory, .version])
-        XCTAssertTrue(ollama.hints.isEmpty, "Ollama has no /metrics to miss")
+    func testLMStudioAnswersEveryRouteWith200AndOnlyItsOwnAreRead() throws {
+        for (route, result) in try lmStudioAnswers() where route != .lmStudioModels && route != .openAIModels {
+            guard case .failure(let error) = result else { return XCTFail("\(route.path): a 200 error reply isn't data") }
+            XCTAssertEqual(error.kind, .errorReply(status: 200, message: "Unexpected endpoint or method. (GET \(route.path))"))
+            XCTAssertFalse(error.isUnreachable || error.isAuthFailure, route.path)
+        }
 
-        let studio = try snapshot([.lmStudioModels: .success(try shapes("lmstudio_models")),
-                                   .openAIModels: .success(try shapes("lmstudio_openai_models")), .metrics: missing()]).get()
-        XCTAssertEqual(studio.engine, .lmStudio)
-        XCTAssertEqual(studio.models.map(\.loaded), [true, false])
-        XCTAssertEqual(studio.models.first?.contextLength, 8_192)
-        XCTAssertEqual(studio.primaryModel, "qwen2.5-coder-14b-instruct")
+        let idle = try snapshot(try lmStudioAnswers(models: "lmstudio_v0_models.json")).get()
+        XCTAssertEqual(idle.engine, .lmStudio)
+        XCTAssertEqual(idle.models, [
+            ServedModel(id: "smollm2-135m-instruct", loaded: false, contextLength: 8_192, ownedBy: "hoply", detail: "llama · F16"),
+            ServedModel(id: "text-embedding-nomic-embed-text-v1.5", loaded: false, contextLength: 2_048, ownedBy: "nomic-ai",
+                        detail: "nomic-bert · Q4_K_M")])
+        XCTAssertNil(idle.primaryModel, "two models, none loaded")
+        XCTAssertNil(idle.metricsPrefix)
+        XCTAssertTrue(idle.metrics.isEmpty)
+        XCTAssertTrue(idle.hints.isEmpty, "its /metrics error reply is no unreadable Prometheus endpoint")
+        XCTAssertEqual(idle.capabilities, [.models, .loadedModels])
 
+        let loaded = try snapshot(try lmStudioAnswers()).get()
+        XCTAssertEqual(loaded.engine, .lmStudio)
+        XCTAssertEqual(loaded.models.map(\.loaded), [true, false])
+        XCTAssertEqual(loaded.models.first?.contextLength, 4_096, "the loaded context, not the model's 8,192")
+        XCTAssertEqual(loaded.primaryModel, "smollm2-135m-instruct")
+        XCTAssertEqual(loaded.capabilities, [.models, .loadedModels], "no rate, memory or version to claim")
+        XCTAssertTrue(loaded.hints.isEmpty)
+
+        let own = Set(ModelServerDetector.routes(for: .lmStudio))
+        let asked = try snapshot(try lmStudioAnswers().filter { own.contains($0.key) }, engine: .lmStudio).get()
+        XCTAssertEqual(asked.models, loaded.models)
+
+        let asOpenAI = try snapshot(try lmStudioAnswers().filter { [.openAIModels, .metrics].contains($0.key) },
+                                    engine: .openAICompatible).get()
+        XCTAssertEqual(asOpenAI.models.map(\.id), ["smollm2-135m-instruct", "text-embedding-nomic-embed-text-v1.5"])
+        XCTAssertTrue(asOpenAI.hints.isEmpty)
+
+        let endpoint = try XCTUnwrap(RemoteEndpoint(baseURL: "http://127.0.0.1:1234", name: "Box"))
+        func kind(_ body: String) -> RemoteError.Kind? {
+            if case .failure(let error) = endpoint.classify(status: 200, contentType: json, location: nil,
+                                                            body: Data(body.utf8), auth: .none) { return error.kind }
+            return nil
+        }
+        XCTAssertEqual(kind(#" {"error":{"message":"nope","type":"x"}}"#), .errorReply(status: 200, message: "nope"))
+        XCTAssertNil(kind(#"{"error":null,"data":[]}"#))
+        XCTAssertNil(kind(#"{"error":"partial","data":[{"id":"m"}]}"#), "data next to an error is still data")
+        XCTAssertNil(kind(#"{"models":[]}"#))
+    }
+
+    func testPlainOpenAIAndUnknownPrometheus() throws {
         let proxy = try snapshot([.openAIModels: .success(try shapes("litellm_models")), .metrics: missing(),
                                   .ollamaVersion: missing(), .lmStudioModels: missing()]).get()
         XCTAssertEqual(proxy.engine, .openAICompatible)

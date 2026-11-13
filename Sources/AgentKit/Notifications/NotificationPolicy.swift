@@ -5,6 +5,7 @@ public enum NotificationKind: String, Sendable, Hashable {
     case yourTurn = "your-turn"
     case limit
     case localModelOffline = "local-model-offline"
+    case update
 }
 
 public enum NotificationCause: String, Sendable, Hashable, CaseIterable {
@@ -14,6 +15,7 @@ public enum NotificationCause: String, Sendable, Hashable, CaseIterable {
     case limit
     case limitReset = "limit-reset"
     case localModelOffline = "local-model-offline"
+    case update
 
     public var kind: NotificationKind {
         switch self {
@@ -21,6 +23,7 @@ public enum NotificationCause: String, Sendable, Hashable, CaseIterable {
         case .yourTurn: return .yourTurn
         case .limit, .limitReset: return .limit
         case .localModelOffline: return .localModelOffline
+        case .update: return .update
         }
     }
 
@@ -30,6 +33,7 @@ public enum NotificationCause: String, Sendable, Hashable, CaseIterable {
         case .yourTurn: self = .yourTurn
         case .limit: self = .limit
         case .localModelOffline: self = .localModelOffline
+        case .update: self = .update
         }
     }
 }

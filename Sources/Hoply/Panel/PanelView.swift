@@ -112,9 +112,7 @@ struct PanelFooter: View {
                     .lineLimit(1)
             }
             Spacer()
-            if let version = model.updates.pendingVersion {
-                UpdateButton(version: version)
-            } else if model.history.progress.isBackfilling {
+            if model.history.progress.isBackfilling {
                 BackfillIndicator(progress: model.history.progress)
             } else if model.cleanup.reclaimableBytes >= ReclaimableButton.minimumBytes {
                 ReclaimableButton(bytes: model.cleanup.reclaimableBytes)
@@ -164,22 +162,6 @@ struct ReclaimableButton: View {
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
         .help("Review merged worktrees, build caches and old transcripts in Clean up")
-    }
-}
-
-struct UpdateButton: View {
-    @Environment(AppModel.self) private var model
-    let version: String
-
-    var body: some View {
-        Button { model.updates.checkForUpdates() } label: {
-            Label("Update to \(version)", systemImage: "arrow.down.circle.fill")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(Color.accentColor)
-        .disabled(!model.updates.canCheck)
-        .help("Hoply \(version) is available. Shows what's new and installs it when you choose.")
     }
 }
 

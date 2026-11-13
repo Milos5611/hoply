@@ -21,6 +21,9 @@ struct PanelSections: View {
     var body: some View {
         let grouping = model.grouping
         VStack(spacing: 10) {
+                if let update = model.updates.cardUpdate {
+                    UpdateCard(update: update)
+                }
                 StatStrip(oldestWait: grouping.waiting.filter { grouping.status(of: $0).needsAction }
                     .map(\.stateSince).min())
                 if !grouping.waiting.isEmpty {

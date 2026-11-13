@@ -338,6 +338,7 @@ final class AppModel {
         modelServers.advance(to: now)
         publishSessions()
         checkLimitedSessions(now: now)
+        perform(updates.tick(now: now, notify: settings.notificationsEnabled && !policy.isQuiet(at: now)))
     }
 
     private func checkLimitedSessions(now: Date) {
@@ -395,6 +396,8 @@ final class AppModel {
             openDashboard(.limits)
         case .localModel:
             openDashboard(.localModel)
+        case .update:
+            if updates.pending == nil { openPanel() } else { updates.update() }
         }
     }
 
@@ -638,7 +641,7 @@ extension AppModel {
                            log: PreviewData.cleanupLog(now: now))
         model.projectEdits.show(PreviewData.projectEdits(now: now))
         model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
-        model.updates.showPreview(enabled: true, pendingVersion: nil)
+        model.updates.showPreview(enabled: true)
         return model
     }
 

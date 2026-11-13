@@ -68,10 +68,22 @@ nonisolated struct HoplyMark: Shape {
         return image
     }
 
-    static func statusBarImage(hollowHub: Bool) -> NSImage {
-        let size = CGSize(width: 16, height: 16)
-        let path = NSBezierPath(cgPath: HoplyMark(hollowHub: hollowHub)
-            .path(in: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)).cgPath)
+    static func statusBarSize(badged: Bool) -> CGSize {
+        CGSize(width: badged ? 20 : 16, height: 16)
+    }
+
+    static func statusBarPath(hollowHub: Bool, badged: Bool) -> Path {
+        let mark = HoplyMark(hollowHub: hollowHub).path(in: CGRect(x: 0, y: 0, width: 16, height: 16).insetBy(dx: 1, dy: 1))
+        guard badged else { return mark }
+        let dot = CGPoint(x: 17.5, y: 3)
+        return mark.union(circle(dot, 2.5))
+    }
+
+    static func statusBarImage(hollowHub: Bool, badged: Bool = false) -> NSImage {
+        let size = statusBarSize(badged: badged)
+        // The path is y-down like SwiftUI; a bitmap context is y-up, and the dot belongs at the top.
+        let path = NSBezierPath(cgPath: statusBarPath(hollowHub: hollowHub, badged: badged)
+            .applying(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)).cgPath)
         let image = NSImage(size: size)
         for scale in [1, 2] {
             guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * scale,
@@ -87,7 +99,19 @@ nonisolated struct HoplyMark: Shape {
             image.addRepresentation(rep)
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Hoply"
+        image.accessibilityDescription = badged ? "Hoply, update available" : "Hoply"
         return image
+    }
+}
+
+nonisolated struct StatusBarMark: Shape {
+    var hollowHub = false
+    var badged = false
+
+    func path(in rect: CGRect) -> Path {
+        let size = HoplyMark.statusBarSize(badged: badged)
+        let scale = min(rect.width / size.width, rect.height / size.height)
+        return HoplyMark.statusBarPath(hollowHub: hollowHub, badged: badged)
+            .applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: rect.minX / scale, y: rect.minY / scale))
     }
 }

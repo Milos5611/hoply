@@ -6,6 +6,7 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
     case session(SessionKey)
     case limits
     case localModel
+    case update
 
     static let kindKey = "kind"
     static let sourceKey = "source"
@@ -24,6 +25,8 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
             self = .limits
         case .localModelOffline:
             self = .localModel
+        case .update:
+            self = .update
         }
     }
 }

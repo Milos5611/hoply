@@ -117,7 +117,16 @@ public struct RemoteEndpoint: Sendable, Equatable {
         }
         if html { return fail(.htmlPage(status: status)) }
         guard (200..<300).contains(status) else { return fail(.http(status: status)) }
+        // LM Studio answers every route it doesn't serve with 200 and {"error": "Unexpected endpoint or method. …"}.
+        if Self.isErrorReply(body) { return fail(.errorReply(status: status, message: Self.errorMessage(body))) }
         return .success(body)
+    }
+
+    static func isErrorReply(_ body: Data) -> Bool {
+        guard body.count <= 4_096, body.first(where: { ![0x20, 0x09, 0x0A, 0x0D].contains($0) }) == UInt8(ascii: "{"),
+              let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+              object.count == 1, let error = object["error"] else { return false }
+        return !(error is NSNull)
     }
 
     static func isAccessHost(_ host: String) -> Bool {
@@ -181,6 +190,7 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
         case redirected(status: Int, host: String?)
         case httpsRequired
         case http(status: Int)
+        case errorReply(status: Int, message: String?)
         case noModelServer
         case insecureHTTPBlocked
         case timedOut
@@ -220,6 +230,7 @@ public struct RemoteError: Error, Equatable, Sendable, LocalizedError {
             return "\(endpoint) redirected to \(host ?? "another address"); check the URL, or a login page may be in front of it"
         case .httpsRequired: return "\(endpoint) only answers over https; change the URL to https://"
         case .http(let status): return "\(endpoint) returned HTTP \(status)"
+        case .errorReply(_, let message): return "\(endpoint) answered with an error" + (message.map { ": \($0)" } ?? "")
         case .noModelServer: return "\(endpoint) answered, but no model server API was found there; check the URL and port"
         case .insecureHTTPBlocked:
             return "macOS blocks plain http to \(endpoint) because it isn't on the local network; use https://"

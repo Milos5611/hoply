@@ -5,15 +5,26 @@ import Sparkle
 
 @Observable
 final class Updates: NSObject {
+    static let notifiedVersionKey = "HoplyUpdateNotifiedVersion"
+    static let changelog = URL(string: "https://hoply.dev/changelog")!
+    private static let minimumCheckInterval: TimeInterval = 3600
+
     private(set) var isEnabled = false
     private(set) var canCheck = false
     private(set) var automaticallyChecks = false
-    private(set) var pendingVersion: String?
+    private(set) var automaticallyDownloads = false
+    private(set) var allowsAutomaticDownloads = false
+    private(set) var reminder = UpdateReminder()
     private(set) var startError: String?
 
     @ObservationIgnored var onWillShowUpdate: (() -> Void)?
     @ObservationIgnored private var updater: SPUUpdater?
+    @ObservationIgnored private var installNow: (() -> Void)?
     @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
+
+    var pending: PendingUpdate? { reminder.pending }
+    var cardUpdate: PendingUpdate? { reminder.showsCard ? reminder.pending : nil }
+    var canUpdate: Bool { pending?.stage == .ready || canCheck }
 
     var version: String {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -26,8 +37,10 @@ final class Updates: NSObject {
         super.init()
         guard live, Bundle.main.bundleURL.pathExtension == "app",
               UpdateFeed(info: Bundle.main.infoDictionary ?? [:]) != nil else { return }
+        reminder = UpdateReminder(notifiedVersion: UserDefaults.standard.string(forKey: Self.notifiedVersionKey),
+                                  runningVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
         let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
-                                 userDriver: SPUStandardUserDriver(hostBundle: .main, delegate: self), delegate: nil)
+                                 userDriver: SPUStandardUserDriver(hostBundle: .main, delegate: self), delegate: self)
         do {
             try updater.start()
         } catch {
@@ -43,7 +56,15 @@ final class Updates: NSObject {
             Task { @MainActor in self?.canCheck = updater.canCheckForUpdates }
         }
         isEnabled = true
-        automaticallyChecks = updater.automaticallyChecksForUpdates
+        readSettings()
+    }
+
+    func update() {
+        if pending?.stage == .ready, let installNow {
+            installNow()
+        } else {
+            checkForUpdates()
+        }
     }
 
     func checkForUpdates() {
@@ -53,22 +74,80 @@ final class Updates: NSObject {
         updater.checkForUpdates()
     }
 
-    func setAutomaticallyChecks(_ on: Bool) {
-        guard let updater else { return }
-        updater.automaticallyChecksForUpdates = on
-        automaticallyChecks = updater.automaticallyChecksForUpdates
+    func later() {
+        reminder.later(until: Date().addingTimeInterval(max(updater?.updateCheckInterval ?? 0, Self.minimumCheckInterval)))
     }
 
-    func showPreview(enabled: Bool, pendingVersion: String?) {
+    func tick(now: Date, notify: Bool) -> NotificationActions {
+        var next = reminder
+        let actions = next.tick(now: now, notify: notify)
+        guard next != reminder else { return actions }
+        if next.notifiedVersion != reminder.notifiedVersion {
+            UserDefaults.standard.set(next.notifiedVersion, forKey: Self.notifiedVersionKey)
+        }
+        reminder = next
+        return actions
+    }
+
+    func setAutomaticallyChecks(_ on: Bool) {
+        updater?.automaticallyChecksForUpdates = on
+        readSettings()
+    }
+
+    func setAutomaticallyDownloads(_ on: Bool) {
+        updater?.automaticallyDownloadsUpdates = on
+        readSettings()
+    }
+
+    private func readSettings() {
+        guard let updater else { return }
+        automaticallyChecks = updater.automaticallyChecksForUpdates
+        allowsAutomaticDownloads = updater.allowsAutomaticUpdates
+        automaticallyDownloads = updater.automaticallyDownloadsUpdates
+    }
+
+    func showPreview(enabled: Bool, pending: PendingUpdate? = nil, automaticallyDownloads: Bool = false) {
         isEnabled = enabled
         canCheck = enabled
         automaticallyChecks = enabled
-        self.pendingVersion = pendingVersion
+        allowsAutomaticDownloads = enabled
+        self.automaticallyDownloads = enabled && automaticallyDownloads
+        reminder = UpdateReminder()
+        if let pending { reminder.found(pending) }
+    }
+}
+
+// Only SPUAutomaticUpdateDriver calls willInstallUpdateOnQuit, after a silent download with automaticallyDownloadsUpdates
+// on. Returning true stalls Sparkle's cycle until the block runs or Hoply quits, when Sparkle installs it anyway.
+extension Updates: SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        installNow = immediateInstallHandler
+        reminder.found(PendingUpdate(version: item.displayVersionString, stage: .ready))
+        return true
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate updateItem: SUAppcastItem,
+                 state: SPUUserUpdateState) {
+        switch choice {
+        case .skip:
+            installNow = nil
+            reminder.clear()
+        case .dismiss:
+            later()
+        default:
+            break
+        }
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
+        installNow = nil
+        reminder.clear()
     }
 }
 
 // Hoply has no Dock icon, so a scheduled check that finds an update never opens Sparkle's window on its own:
-// the panel footer offers it instead, and Sparkle shows it when the user clicks there or checks by hand.
+// the menu bar dot, the panel card and one notification offer it, and Sparkle shows it when the user clicks one.
 extension Updates: @preconcurrency SPUStandardUserDriverDelegate {
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
@@ -79,18 +158,7 @@ extension Updates: @preconcurrency SPUStandardUserDriverDelegate {
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,
                                                    state: SPUUserUpdateState) {
-        if handleShowingUpdate {
-            NSApp.activate()
-        } else {
-            pendingVersion = update.displayVersionString
-        }
-    }
-
-    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-        pendingVersion = nil
-    }
-
-    func standardUserDriverWillFinishUpdateSession() {
-        pendingVersion = nil
+        if handleShowingUpdate { NSApp.activate() }
+        reminder.found(PendingUpdate(version: update.displayVersionString, stage: .available), seen: handleShowingUpdate)
     }
 }

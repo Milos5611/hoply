@@ -31,7 +31,7 @@ public enum ModelServerResponses {
             let meta = entry["meta"] as? [String: Any]
             return ServedModel(id: id,
                                contextLength: int(entry["max_model_len"]) ?? int(entry["context_length"])
-                                   ?? int(entry["max_context_length"]) ?? int(meta?["n_ctx_train"]),
+                                   ?? int(entry["max_context_length"]) ?? int(meta?["n_ctx"]) ?? int(meta?["n_ctx_train"]),
                                ownedBy: text(entry["owned_by"]))
         }
     }
@@ -67,7 +67,8 @@ public enum ModelServerResponses {
                 .joined(separator: " · ")
             return ServedModel(id: id, loaded: loaded,
                                memoryBytes: loaded == true ? bytes(entry["size_vram"]) ?? bytes(entry["size"]) : nil,
-                               contextLength: int(entry["context_length"]), detail: detail.isEmpty ? nil : detail)
+                               contextLength: int(entry["context_length"]) ?? int(details?["context_length"]),
+                               detail: detail.isEmpty ? nil : detail)
         }
         var result = (loaded ?? []).compactMap { model($0, loaded: true) }
         let active = Set(result.map(\.id))
@@ -76,12 +77,13 @@ public enum ModelServerResponses {
         return result
     }
 
-    public static func llamaCppProps(_ data: Data?) -> (model: String?, contextLength: Int?, build: String?)? {
+    public static func llamaCppProps(_ data: Data?)
+        -> (model: String?, contextLength: Int?, build: String?, metricsEnabled: Bool?)? {
         guard let props = object(data),
               props["default_generation_settings"] != nil || props["total_slots"] != nil else { return nil }
         let settings = props["default_generation_settings"] as? [String: Any]
         let path = text(props["model_alias"]) ?? text(props["model_path"]).map { ($0 as NSString).lastPathComponent }
-        return (path, int(settings?["n_ctx"]), text(props["build_info"]))
+        return (path, int(settings?["n_ctx"]), text(props["build_info"]), props["endpoint_metrics"] as? Bool)
     }
 
     public static func tgiInfo(_ data: Data?) -> (model: String, contextLength: Int?, version: String?)? {
@@ -182,9 +184,18 @@ public enum ModelServerDetector {
                 }
             }
             if snapshot.models.isEmpty, let model = metrics.model { snapshot.models = [ServedModel(id: model, loaded: true)] }
-            if engine.reportsPrometheus, dialect == nil, hints.isEmpty { snapshot.hints.append(.metricsDisabled(engine)) }
+            if engine.reportsPrometheus, dialect == nil, hints.isEmpty {
+                let switchedOff = engine == .llamaCpp
+                    && (props?.metricsEnabled == false || failedStatus(answers[.metrics]) == 501)
+                snapshot.hints.append(switchedOff ? .metricsDisabled(engine) : .metricsMissing(engine))
+            }
             return .success(snapshot)
         }
+    }
+
+    static func failedStatus(_ answer: Result<Data, RemoteError>?) -> Int? {
+        if case .failure(let error)? = answer, case .http(let status) = error.kind { return status }
+        return nil
     }
 
     public static func failure(_ answers: [ModelServerRoute: Result<Data, RemoteError>],

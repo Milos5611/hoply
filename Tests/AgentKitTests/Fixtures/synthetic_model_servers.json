@@ -1,19 +1,6 @@
 {
   "_synthetic": "Response shapes written from memory of each engine's HTTP API, not captures. Ids are made up.",
   "vllm_models": {"object": "list", "data": [{"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "object": "model", "created": 1794196800, "owned_by": "vllm", "root": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "parent": null, "max_model_len": 262144}]},
-  "llamacpp_models": {"object": "list", "data": [{"id": "qwen2.5-coder-7b-q4_k_m.gguf", "object": "model", "created": 1794196800, "owned_by": "llamacpp", "meta": {"vocab_type": 2, "n_vocab": 151936, "n_ctx_train": 32768, "n_embd": 3584, "n_params": 7615616512, "size": 4677120000}}]},
-  "llamacpp_props": {"default_generation_settings": {"n_ctx": 8192, "params": {"temperature": 0.8}}, "total_slots": 4, "model_path": "/models/qwen2.5-coder-7b-q4_k_m.gguf", "chat_template": "x", "build_info": "b4589-abc1234"},
-  "ollama_version": {"version": "0.12.3"},
-  "ollama_tags": {"models": [
-    {"name": "qwen3:8b", "model": "qwen3:8b", "modified_at": "2026-10-01T10:00:00Z", "size": 5225388164, "digest": "aaaa", "details": {"format": "gguf", "family": "qwen3", "parameter_size": "8.2B", "quantization_level": "Q4_K_M"}},
-    {"name": "llama3.2:latest", "model": "llama3.2:latest", "modified_at": "2026-09-01T10:00:00Z", "size": 2019393189, "digest": "bbbb", "details": {"format": "gguf", "family": "llama", "parameter_size": "3.2B", "quantization_level": "Q4_K_M"}}]},
-  "ollama_ps": {"models": [
-    {"name": "qwen3:8b", "model": "qwen3:8b", "size": 6654289920, "digest": "aaaa", "details": {"format": "gguf", "family": "qwen3", "parameter_size": "8.2B", "quantization_level": "Q4_K_M"}, "expires_at": "2026-11-10T12:05:00Z", "size_vram": 6654289920, "context_length": 8192}]},
-  "ollama_openai_models": {"object": "list", "data": [{"id": "qwen3:8b", "object": "model", "created": 1794196800, "owned_by": "library"}, {"id": "llama3.2:latest", "object": "model", "created": 1794196800, "owned_by": "library"}]},
-  "lmstudio_models": {"object": "list", "data": [
-    {"id": "qwen2.5-coder-14b-instruct", "object": "model", "type": "llm", "publisher": "lmstudio-community", "arch": "qwen2", "compatibility_type": "gguf", "quantization": "Q4_K_M", "state": "loaded", "max_context_length": 32768, "loaded_context_length": 8192},
-    {"id": "text-embedding-nomic-embed-text-v1.5", "object": "model", "type": "embeddings", "publisher": "nomic-ai", "arch": "nomic-bert", "compatibility_type": "gguf", "quantization": "Q4_K_M", "state": "not-loaded", "max_context_length": 2048}]},
-  "lmstudio_openai_models": {"object": "list", "data": [{"id": "qwen2.5-coder-14b-instruct", "object": "model", "owned_by": "organization_owner"}, {"id": "text-embedding-nomic-embed-text-v1.5", "object": "model", "owned_by": "organization_owner"}]},
   "tgi_info": {"model_id": "mistralai/Mistral-7B-Instruct-v0.3", "model_sha": "cccc", "max_concurrent_requests": 128, "max_input_tokens": 4095, "max_total_tokens": 4096, "version": "3.0.1", "sha": "dddd"},
   "litellm_models": {"object": "list", "data": [{"id": "claude-sonnet-4-5", "object": "model", "created": 1677610602, "owned_by": "openai"}, {"id": "local-qwen", "object": "model", "created": 1677610602, "owned_by": "openai"}]}
 }

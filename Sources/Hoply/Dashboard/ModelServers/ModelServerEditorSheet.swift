@@ -508,6 +508,7 @@ struct ModelServerTestResult: View {
         case .redirected(let status, _): return "Redirect (HTTP \(status))"
         case .httpsRequired: return "Wants https"
         case .http(let status): return status == 404 ? "Not there (HTTP 404)" : "HTTP \(status)"
+        case .errorReply: return "Not there (error reply)"
         case .noModelServer: return "No model server API"
         case .insecureHTTPBlocked: return "Plain http blocked by macOS"
         case .timedOut: return "No answer in time"

@@ -1,6 +1,12 @@
 import Foundation
 
 public struct PrometheusDialect: Sendable, Equatable {
+    struct SlotSteps: Sendable, Equatable {
+        var decodes: String
+        var busySlotsPerDecode: String
+        var acceptedDrafts: String
+    }
+
     public var engine: ModelEngine
     public var prefix: String
     var running: [String]
@@ -9,6 +15,7 @@ public struct PrometheusDialect: Sendable, Equatable {
     var promptTokens: [String]
     var generationTokens: [String]
     var generationTokensLive: [String] = []
+    var generationSteps: SlotSteps? = nil
     var generationRate: [String] = []
     var memoryBytes: [String] = []
 
@@ -30,7 +37,10 @@ public struct PrometheusDialect: Sendable, Equatable {
             PrometheusDialect(engine: .llamaCpp, prefix: "llamacpp:",
                               running: ["requests_processing"], waiting: ["requests_deferred"],
                               kvCache: ["kv_cache_usage_ratio"],
-                              promptTokens: ["prompt_tokens_total"], generationTokens: ["tokens_predicted_total"]),
+                              promptTokens: ["prompt_tokens_total"], generationTokens: ["tokens_predicted_total"],
+                              generationSteps: SlotSteps(decodes: "n_decode_total",
+                                                         busySlotsPerDecode: "n_busy_slots_per_decode",
+                                                         acceptedDrafts: "spec_decode_num_accepted_tokens_total")),
             PrometheusDialect(engine: .sglang, prefix: "sglang:",
                               running: ["num_running_reqs"], waiting: ["num_queue_reqs", "num_waiting_reqs"],
                               kvCache: ["token_usage"],
@@ -75,7 +85,13 @@ public struct PrometheusDialect: Sendable, Equatable {
         let counter = sum(generationTokens)
         // tensorfold counts generated tokens only when a request finishes; adding the tokens held by live
         // streams turns that into a counter that moves while decoding, so tok/s isn't zero until the end.
-        let live = counter.map { $0 + (sum(generationTokensLive) ?? 0) }
+        var live = counter.map { $0 + (sum(generationTokensLive) ?? 0) }
+        // llama.cpp adds tokens only when a request ends, and predicted_tokens_seconds covers only requests ended since the
+        // last scrape (any scrape resets it). A decode yields a token per busy slot plus accepted drafts, so steps move live.
+        if let steps = generationSteps, let decodes = sum([steps.decodes]),
+           let perDecode = sum([steps.busySlotsPerDecode]) {
+            live = (decodes * perDecode).rounded() + (sum([steps.acceptedDrafts]) ?? 0)
+        }
         let model = samples.first { $0.name.hasPrefix(prefix) && $0.labels["model_name"] != nil }?.labels["model_name"]
         return ModelServerMetrics(
             model: model,

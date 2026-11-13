@@ -152,11 +152,9 @@ struct UpdateSettings: View {
                         .monospacedDigit()
                     Spacer(minLength: 0)
                     if updates.isEnabled {
-                        Button(updates.pendingVersion.map { "Update to \($0)…" } ?? "Check for Updates…") {
-                            updates.checkForUpdates()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(!updates.canCheck)
+                        Button(buttonTitle(updates.pending)) { updates.update() }
+                            .buttonStyle(.bordered)
+                            .disabled(!updates.canUpdate)
                     }
                 }
                 if updates.isEnabled {
@@ -164,7 +162,12 @@ struct UpdateSettings: View {
                         get: { updates.automaticallyChecks },
                         set: { updates.setAutomaticallyChecks($0) }
                     ))
-                    Hint("Hoply checks at launch and twice a day. A new version shows at the bottom of the panel; nothing installs until you choose it.")
+                    SwitchRow("Download and install updates automatically", isOn: Binding(
+                        get: { updates.automaticallyDownloads },
+                        set: { updates.setAutomaticallyDownloads($0) }
+                    ))
+                    .disabled(!updates.allowsAutomaticDownloads)
+                    Hint(hint(updates))
                 } else if let error = updates.startError {
                     Hint("Updates are off: \(error)")
                 } else if model.isBundledApp {
@@ -174,6 +177,24 @@ struct UpdateSettings: View {
                 }
             }
         }
+    }
+
+    private func buttonTitle(_ update: PendingUpdate?) -> String {
+        guard let update else { return "Check for Updates…" }
+        switch update.stage {
+        case .ready: return "Restart to Update"
+        case .available: return "Update to \(update.version)…"
+        }
+    }
+
+    private func hint(_ updates: Updates) -> String {
+        if !updates.automaticallyChecks {
+            return "Hoply doesn't look for new versions on its own. Check for Updates… looks now."
+        }
+        if updates.automaticallyDownloads {
+            return "Hoply checks at launch and every hour, downloads a new version in the background and installs it when Hoply quits. A dot on the menu bar icon and a card at the top of the panel say when one is ready."
+        }
+        return "Hoply checks at launch and every hour. A new version shows as a dot on the menu bar icon and a card at the top of the panel; nothing installs until you choose it."
     }
 }
 

@@ -84,7 +84,8 @@ swift run Hoply --snapshot build/snapshots
 It renders sample data (never your real database) to PNGs: the panel (light, dark, full height, settings, full
 settings), every Dashboard page, the Limits empty and Codex-only states, the Local model offline and no-server states,
 the Clean up page, report and review sheet, the palette (empty, query, actions, no results) and its settings card, the
-Agents card states and the panel's connect and update nudges, and the footer's update button and the Updates card. It
+Agents card states and the panel's connect and update nudges, the update card (available and ready), the Updates
+card and the menu bar mark with its update dot. It
 needs no Screen Recording permission, but it can't show Liquid Glass or vibrancy, because the window server draws
 those; the Dashboard snapshots draw a plain stand-in for the sidebar for the same reason.
 
@@ -206,6 +207,10 @@ README in the same pull request.
   helper in `Support.swift`. The OpenTelemetry fixtures are real payloads captured from the official OpenTelemetry JS
   exporters. Hook fixtures are a JSON dictionary of named payloads (`Fixture.hookPayloads`). Several
   OpenTelemetry fixtures come as `.json` + `.pb` pairs, and the tests check that both decode identically.
+- Model server fixtures are real responses from vLLM, tensorfold, Ollama 0.40.16, llama.cpp `b12110` and LM Studio
+  0.4.28 (`vllm_*`, `tensorfold_*`, `ollama_*`, `llamacpp_*`, `lmstudio_*`), including what each server answers on
+  the routes it doesn't serve; SGLang and TGI are still `synthetic_`. A capture of either, or of a newer version of
+  the others, is welcome.
 - `AgentSystemTests` use temp directories (`TempDirectory`) and in-memory SQLite. Apart from the opt-in
   `HOPLY_REAL_*` tests, which only read, they never touch your real `~/.claude`, `~/.codex` or `~/.copilot`; they
   use a folder as the Trash and only signal child processes they start themselves.

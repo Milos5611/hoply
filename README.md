@@ -25,10 +25,13 @@ macOS 26 Tahoe. Release builds are signed with a Developer ID and notarized by A
 one-time question for an app from the internet.
 Hoply is free during early access.
 
-**Updates.** Hoply checks for a new version at launch and twice a day and shows it at the bottom of the panel. Nothing
-installs until you choose it. You can turn the check off in Settings → Updates; "Check for Updates…" is also in the menu
-bar icon's right-click menu. The Homebrew cask is marked `auto_updates`, so `brew upgrade` leaves Hoply to its own
-updater unless you pass `--greedy`.
+**Updates.** Hoply checks for a new version at launch and every hour. When it finds one, the menu bar icon gets a dot,
+a card at the top of the panel offers it (Later hides the card for an hour; the dot stays until you update), and one
+notification says so while Hoply's notifications are on. Nothing installs until you choose it, unless you turn on
+"Download and install updates automatically" in Settings → Updates: then Hoply downloads the new version in the
+background, installs it the next time it quits, and the card's Restart to Update installs it right away. You can turn
+the check off in Settings → Updates; "Check for Updates…" is also in the menu bar icon's right-click menu. The
+Homebrew cask is marked `auto_updates`, so `brew upgrade` leaves Hoply to its own updater unless you pass `--greedy`.
 
 **Uninstall.** First disconnect your agents in Settings → Agents, which removes Hoply's hooks from their config, then
 delete the app. `brew uninstall --zap --cask hoply` also deletes Hoply's data, usage history included, but it doesn't
@@ -106,8 +109,8 @@ Anything else that talks to your model server, such as a chat app, shows up in t
   - to the **model servers you add**;
   - to **Anthropic's usage endpoint**, with your own Claude Code login, for the Claude limits card. This only starts
     once you press Connect there, and macOS asks you before Hoply may read that Keychain item;
-  - an **update check** at `https://hoply.dev/appcast.xml`, at launch and twice a day (release builds only; Settings →
-    Updates turns it off).
+  - an **update check** at `https://hoply.dev/appcast.xml`, at launch and every hour (release builds only; Settings →
+    Updates turns it off), plus the download of a new version when you choose it or turn on automatic install.
 - Agent records (transcripts, Codex session files, Copilot's database and session files) are read, never changed.
   The two exceptions are things you ask for: Connect writes the hook config above, and Clean up moves what you tick
   to the Trash.

@@ -1,3 +1,4 @@
+import AgentKit
 import AppKit
 import Observation
 import SwiftUI
@@ -10,6 +11,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let palette: PaletteWindowController
     private let idleImage = HoplyMark.statusBarImage(hollowHub: true)
     private let activeImage = HoplyMark.statusBarImage(hollowHub: false)
+    private let idleBadgedImage = HoplyMark.statusBarImage(hollowHub: true, badged: true)
+    private let activeBadgedImage = HoplyMark.statusBarImage(hollowHub: false, badged: true)
 
     /// `.transient` closes the panel the moment Hoply resigns active, so Spotlight or the screen-capture
     /// toolbar makes it vanish mid-recording. `HOPLY_HOLD_OPEN=1` keeps it up until the status item is
@@ -103,9 +106,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         }
         menu.addItem(item("Settings…", #selector(openSettings)))
         if model.updates.isEnabled {
-            let title = model.updates.pendingVersion.map { "Update to Hoply \($0)…" } ?? "Check for Updates…"
-            let update = item(title, #selector(checkForUpdates))
-            update.isEnabled = model.updates.canCheck
+            let update = item(Self.updateMenuTitle(model.updates.pending), #selector(runUpdate))
+            update.isEnabled = model.updates.canUpdate
             menu.addItem(update)
         }
         menu.addItem(.separator())
@@ -139,8 +141,16 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         showPanel()
     }
 
-    @objc private func checkForUpdates() {
-        model.updates.checkForUpdates()
+    @objc private func runUpdate() {
+        model.updates.update()
+    }
+
+    static func updateMenuTitle(_ update: PendingUpdate?) -> String {
+        guard let update else { return "Check for Updates…" }
+        switch update.stage {
+        case .ready: return "Restart to Install Hoply \(update.version)"
+        case .available: return "Update to Hoply \(update.version)…"
+        }
     }
 
     @objc private func quit() {
@@ -149,15 +159,23 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func observeLabel() {
         withObservationTracking {
-            updateLabel(attention: model.attentionCount, working: model.workingCount)
+            updateLabel(attention: model.attentionCount, working: model.workingCount, update: model.updates.pending)
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeLabel() }
         }
     }
 
-    private func updateLabel(attention: Int, working: Int) {
+    private func updateLabel(attention: Int, working: Int, update: PendingUpdate?) {
         guard let button = statusItem.button else { return }
-        button.image = attention > 0 || working > 0 ? activeImage : idleImage
+        let active = attention > 0 || working > 0
+        if update == nil {
+            button.image = active ? activeImage : idleImage
+        } else {
+            button.image = active ? activeBadgedImage : idleBadgedImage
+        }
         button.title = attention > 0 ? "\(attention)" : ""
+        let note = update.map(UpdateReminder.headline)
+        button.toolTip = note
+        button.setAccessibilityLabel(note)
     }
 }

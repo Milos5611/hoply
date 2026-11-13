@@ -133,6 +133,24 @@ final class ModelServerClientTests: XCTestCase {
         XCTAssertTrue(stub.requests.allSatisfy { $0.hasPrefix("GET ") })
     }
 
+    func testLMStudiosErrorRepliesCountAsUnanswered() async throws {
+        let json = "application/json; charset=utf-8"
+        let v0 = #"{"data":[{"id":"smollm2-135m-instruct","object":"model","type":"llm","publisher":"hoply","arch":"llama","compatibility_type":"gguf","quantization":"F16","state":"loaded","max_context_length":8192,"loaded_context_length":4096}],"object":"list"}"#
+        let stub = try await RoutedServer(
+            ["/api/v0/models": R.response(type: json, v0),
+             "/v1/models": R.response(type: json, #"{"data":[{"id":"smollm2-135m-instruct","object":"model","owned_by":"organization_owner"}],"object":"list"}"#)],
+            fallback: R.response(type: json, #"{"error":"Unexpected endpoint or method. (GET /metrics)"}"#))
+        let probe = await ModelServerClient(secrets: InMemorySecretStore()).probe(server(stub))
+        XCTAssertEqual(probe.engine, .lmStudio)
+        XCTAssertEqual(probe.models, [ServedModel(id: "smollm2-135m-instruct", loaded: true, contextLength: 4_096,
+                                                  ownedBy: "hoply", detail: "llama · F16")])
+        XCTAssertTrue(probe.hints.isEmpty)
+        XCTAssertEqual(Set(probe.endpoints.filter(\.answered).map(\.route)), [.lmStudioModels, .openAIModels])
+        let metrics = try XCTUnwrap(probe.endpoints.first { $0.route == .metrics })
+        XCTAssertEqual(metrics.status, 200)
+        XCTAssertEqual(metrics.error?.kind, .errorReply(status: 200, message: "Unexpected endpoint or method. (GET /metrics)"))
+    }
+
     func testProbeDetectsVLLMFromMetricsAndAnExplicitEngineAsksLess() async throws {
         let stub = try await RoutedServer(["/metrics": vllmMetrics(generated: 500), "/v1/models": models])
         let client = ModelServerClient(secrets: InMemorySecretStore())
@@ -172,7 +190,7 @@ final class ModelServerClientTests: XCTestCase {
         let right = await client.probe(server(locked, auth: ModelServerAuth(kind: .bearer)),
                                        secrets: ModelServerSecrets(token: "sk-right"))
         XCTAssertEqual(right.engine, .vllm, "owned_by names the engine when /metrics doesn't")
-        XCTAssertEqual(right.hints, [.metricsDisabled(.vllm)])
+        XCTAssertEqual(right.hints, [.metricsMissing(.vllm)])
 
         let login = "https://team.cloudflareaccess.com/cdn-cgi/access/login/x"
         let access = try await RoutedServer([:], fallback: R.response(status: "302 Found", type: "text/html",

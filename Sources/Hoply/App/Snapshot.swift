@@ -26,7 +26,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_260),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_390),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 for (state, statuses, notices) in [("update", PreviewData.connectionsToUpdate, [:]),
@@ -38,17 +38,31 @@ enum Snapshot {
                                to: directory.appendingPathComponent("panel-settings-agents-\(state)-\(name).png"))
                 }
                 model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
-                model.updates.showPreview(enabled: true, pendingVersion: PreviewData.updateVersion)
-                try render(VStack(spacing: 10) { PanelFooter(); UpdateSettings().padding(.horizontal, 12) }
-                               .toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
-                               .padding(.bottom, 12).frame(width: 448),
-                           model: model, appearance: looks, surface: popover,
+                model.history.show(PreviewData.history(now: now))
+                model.showingSettings = false
+                model.updates.showPreview(enabled: true, pending: PreviewData.availableUpdate)
+                try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-update-\(name).png"))
-                model.updates.showPreview(enabled: false, pendingVersion: nil)
+                try render(UpdateSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                               .padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-updates-\(name).png"))
+                model.updates.showPreview(enabled: true, pending: PreviewData.readyUpdate, automaticallyDownloads: true)
+                try render(VStack(spacing: 10) {
+                    UpdateCard(update: PreviewData.readyUpdate)
+                    UpdateSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                }.padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-update-ready-\(name).png"))
+                try render(MenuBarMarks(), model: model, appearance: looks,
+                           surface: Color(white: name == "light" ? 0.97 : 0.13),
+                           to: directory.appendingPathComponent("menu-bar-update-\(name).png"))
+                model.updates.showPreview(enabled: false)
                 try render(UpdateSettings().controlSize(.small).font(.system(size: 12.5)).padding(12).frame(width: 448),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-updates-off-\(name).png"))
-                model.updates.showPreview(enabled: true, pendingVersion: nil)
+                model.updates.showPreview(enabled: true)
+                model.showingSettings = true
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
                 model.history.show(allPriced)
@@ -273,5 +287,35 @@ enum Snapshot {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         window.orderOut(nil)
         try bitmap.representation(using: .png, properties: [:])?.write(to: file)
+    }
+}
+
+private struct MenuBarMarks: View {
+    private static let states: [(hollowHub: Bool, badged: Bool, count: String)] = [
+        (true, false, ""), (true, true, ""), (false, true, ""), (false, true, "2"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            row(scale: 1, spacing: 18)
+            row(scale: 4, spacing: 36)
+        }
+        .padding(16)
+    }
+
+    private func row(scale: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            ForEach(Array(Self.states.enumerated()), id: \.offset) { _, state in
+                HStack(spacing: 4 * scale) {
+                    let size = HoplyMark.statusBarSize(badged: state.badged)
+                    StatusBarMark(hollowHub: state.hollowHub, badged: state.badged)
+                        .fill(.primary)
+                        .frame(width: size.width * scale, height: size.height * scale)
+                    if !state.count.isEmpty {
+                        Text(state.count).font(.system(size: 13 * scale))
+                    }
+                }
+            }
+        }
     }
 }

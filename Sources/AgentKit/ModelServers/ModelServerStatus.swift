@@ -33,12 +33,14 @@ public enum ModelServerCapability: String, Sendable, CaseIterable {
 
 public enum ModelServerHint: Sendable, Equatable, Hashable {
     case metricsDisabled(ModelEngine)
+    case metricsMissing(ModelEngine)
     case metricsUnreadable
 
     public var text: String {
         switch self {
         case .metricsDisabled(.llamaCpp): return "Start llama-server with --metrics to see throughput."
-        case .metricsDisabled(let engine): return "\(engine.displayName) isn't serving /metrics, so there is no throughput."
+        case .metricsDisabled(let engine): return "\(engine.displayName) has its metrics turned off, so there is no throughput."
+        case .metricsMissing(let engine): return "\(engine.displayName) isn't serving /metrics, so there is no throughput."
         case .metricsUnreadable: return "The metrics address answered with something that isn't Prometheus text."
         }
     }

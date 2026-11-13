@@ -1,0 +1,6 @@
+{"error":"Unexpected endpoint or method. (GET /metrics)"}
+{"error":"Unexpected endpoint or method. (GET /api/version)"}
+{"error":"Unexpected endpoint or method. (GET /api/tags)"}
+{"error":"Unexpected endpoint or method. (GET /api/ps)"}
+{"error":"Unexpected endpoint or method. (GET /props)"}
+{"error":"Unexpected endpoint or method. (GET /info)"}

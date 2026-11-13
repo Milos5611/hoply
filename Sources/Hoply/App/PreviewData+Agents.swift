@@ -3,6 +3,8 @@ import Foundation
 
 extension PreviewData {
     static let updateVersion = "0.2.0"
+    static let availableUpdate = PendingUpdate(version: updateVersion, stage: .available)
+    static let readyUpdate = PendingUpdate(version: updateVersion, stage: .ready)
 
     static let connectionStatuses: [ConnectableAgent: ConnectionStatus] = [
         .claudeCode: .connected, .copilotCLI: .notInstalled, .codexCLI: .notConnected,
