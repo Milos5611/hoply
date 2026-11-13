@@ -316,10 +316,11 @@ struct ProjectDetailView: View {
                     SpendChart(series: detail?.daily ?? DailySpendSeries(days: [], points: []), split: .model)
                         .frame(height: 220)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                BreakdownPair {
                     DashboardCard(title: "By source", subtitle: range.label) {
                         SourceBreakdown(bySource: summary.bySource)
                     }
+                } trailing: {
                     DashboardCard(title: "By model", subtitle: range.label) {
                         ModelBreakdown(models: summary.topModels)
                     }

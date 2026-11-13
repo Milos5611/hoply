@@ -86,6 +86,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         model.setPanelOnScreen(false)
+        model.showingSettings = false
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {

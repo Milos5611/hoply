@@ -3,6 +3,7 @@ import SwiftUI
 
 extension EnvironmentValues {
     @Entry var dashboardStandIn = false
+    @Entry var breakdownListCap: CGFloat? = nil
 }
 
 struct PageHeader<Controls: View>: View {
@@ -71,6 +72,8 @@ struct DashboardCard<Trailing: View, Content: View>: View {
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var content: Content
 
+    @Environment(\.breakdownListCap) private var listCap
+
     var body: some View {
         Card(prominent: true, padding: padding) {
             VStack(alignment: .leading, spacing: 14) {
@@ -85,9 +88,60 @@ struct DashboardCard<Trailing: View, Content: View>: View {
                     Spacer(minLength: 8)
                     trailing
                 }
-                content
+                if let listCap {
+                    CappedList(cap: listCap) { content }
+                } else {
+                    content
+                }
+            }
+            .frame(maxHeight: listCap == nil ? nil : .infinity, alignment: .top)
+        }
+    }
+}
+
+struct BreakdownPair<Leading: View, Trailing: View>: View {
+    var listCap: CGFloat = 360
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            leading
+            trailing
+        }
+        .environment(\.breakdownListCap, listCap)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct CappedList<Content: View>: View {
+    let cap: CGFloat
+    @ViewBuilder var content: Content
+
+    @State private var moreBelow = false
+
+    var body: some View {
+        // Inset inside, outset outside: RowButtonStyle's hover fill reaches 8 × 6 pt past each row and must not be clipped.
+        ScrollView {
+            content
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .onGeometryChange(for: Bool.self) { proxy in
+                    guard let visible = proxy.bounds(of: .scrollView) else { return false }
+                    return proxy.size.height - visible.maxY > 1
+                } action: { moreBelow = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxHeight: cap + 12)
+        .mask {
+            VStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: moreBelow ? 28 : 0)
             }
         }
+        .padding(.horizontal, -8)
+        .padding(.vertical, -6)
     }
 }
 

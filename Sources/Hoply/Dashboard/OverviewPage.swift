@@ -25,7 +25,7 @@ struct OverviewPage: View {
                     SpendChart(series: overview?.daily ?? DailySpendSeries(days: [], points: []), split: .source)
                         .frame(height: 230)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                BreakdownPair {
                     DashboardCard(title: "Top projects", subtitle: "30 days", trailing: {
                         Button("Projects") { model.history.select(.projects) }
                             .buttonStyle(.link)
@@ -35,6 +35,7 @@ struct OverviewPage: View {
                             model.history.openProject(slice.project, range: .month)
                         }
                     }
+                } trailing: {
                     DashboardCard(title: "Top models", subtitle: "30 days") {
                         BreakdownList(slices: overview?.models ?? [], kind: .model)
                     }
