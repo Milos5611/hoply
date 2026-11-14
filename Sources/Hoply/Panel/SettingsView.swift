@@ -167,6 +167,9 @@ struct UpdateSettings: View {
                         set: { updates.setAutomaticallyDownloads($0) }
                     ))
                     .disabled(!updates.allowsAutomaticDownloads)
+                    if let failure = updates.feedFailure {
+                        FeedFailureRow(failure: failure)
+                    }
                     Hint(hint(updates))
                 } else if let error = updates.startError {
                     Hint("Updates are off: \(error)")
@@ -195,6 +198,41 @@ struct UpdateSettings: View {
             return "Hoply checks at launch and every hour, downloads a new version in the background and installs it when Hoply quits. A dot on the menu bar icon and a card at the top of the panel say when one is ready."
         }
         return "Hoply checks at launch and every hour. A new version shows as a dot on the menu bar icon and a card at the top of the panel; nothing installs until you choose it."
+    }
+}
+
+private struct FeedFailureRow: View {
+    let failure: UpdateFeedFailure
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle()
+                .fill(.orange)
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Update checks failing since \(Format.shortWhen(failure.since)): \(reason).")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("New versions can't show until a check succeeds. [hoply.dev/download](https://hoply.dev/download) always has the latest.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .help(help)
+    }
+
+    private var reason: String {
+        switch failure.problem {
+        case .unavailable: "the server didn't return the update feed"
+        case .unreadable: "the update feed couldn't be read"
+        case .badSignature: "the update feed's signature didn't verify"
+        case .misconfigured: "this copy's update settings are invalid"
+        }
+    }
+
+    private var help: String {
+        let last = "Last failed check: \(Format.when(failure.last))"
+        return failure.detail.isEmpty ? last : "\(failure.detail)\n\(last)"
     }
 }
 

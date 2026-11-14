@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 env:
-  HOPLY_REPO: Milos5611/homebrew-hoply # package.sh and cask.sh read it too
+  HOPLY_REPO: Milos5611/hoply # package.sh and cask.sh read it too
+  HOPLY_TAP: Milos5611/homebrew-hoply
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,6 +20,8 @@ jobs:
   release:
     runs-on: xcode-27
     timeout-minutes: 60
+    permissions:
+      contents: write
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       HAS_SIGNING: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
@@ -104,17 +107,34 @@ jobs:
             build/appcast.xml
           if-no-files-found: error
 
-      - name: Publish the GitHub Release on the tap repo
+      - name: Publish the GitHub Release
         if: >-
           startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
           && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Hoply.dmg backs https://hoply.dev/download (releases/latest/download/Hoply.dmg).
           cp "$DMG" build/Hoply.dmg
           gh release create "$GITHUB_REF_NAME" "$DMG" build/Hoply.dmg build/appcast.xml --repo "$HOPLY_REPO" \
             --title "Hoply ${GITHUB_REF_NAME#v}" --notes-file "$HOPLY_RELEASE_NOTES"
+
+      - name: Verify the published appcast's signature
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+          && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          published="$RUNNER_TEMP/published"
+          mkdir -p "$published"
+          gh release download "$GITHUB_REF_NAME" --repo "$HOPLY_REPO" --pattern appcast.xml --dir "$published"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" |
+            .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - --verify "$published/appcast.xml" || {
+            echo "::error::The published appcast.xml fails its feed signature check; installed copies reject the feed (docs/RELEASING.md)."
+            exit 1
+          }
 
       - name: Check out the tap
         if: >-
@@ -122,7 +142,7 @@ jobs:
           && env.HAS_SPARKLE == 'true' && env.HAS_TAP == 'true'
         uses: actions/checkout@v7
         with:
-          repository: ${{ env.HOPLY_REPO }}
+          repository: ${{ env.HOPLY_TAP }}
           token: ${{ secrets.TAP_TOKEN }}
           path: tap
 

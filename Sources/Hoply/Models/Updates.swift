@@ -6,6 +6,7 @@ import Sparkle
 @Observable
 final class Updates: NSObject {
     static let notifiedVersionKey = "HoplyUpdateNotifiedVersion"
+    static let feedFailureKey = "HoplyUpdateFeedFailure"
     static let changelog = URL(string: "https://hoply.dev/changelog")!
     private static let minimumCheckInterval: TimeInterval = 3600
 
@@ -16,6 +17,7 @@ final class Updates: NSObject {
     private(set) var allowsAutomaticDownloads = false
     private(set) var reminder = UpdateReminder()
     private(set) var startError: String?
+    private(set) var feedHealth = UpdateFeedHealth()
 
     @ObservationIgnored var onWillShowUpdate: (() -> Void)?
     @ObservationIgnored private var updater: SPUUpdater?
@@ -25,6 +27,7 @@ final class Updates: NSObject {
     var pending: PendingUpdate? { reminder.pending }
     var cardUpdate: PendingUpdate? { reminder.showsCard ? reminder.pending : nil }
     var canUpdate: Bool { pending?.stage == .ready || canCheck }
+    var feedFailure: UpdateFeedFailure? { feedHealth.failure }
 
     let runningVersion: String?
 
@@ -45,6 +48,7 @@ final class Updates: NSObject {
               UpdateFeed(info: Bundle.main.infoDictionary ?? [:]) != nil else { return }
         reminder = UpdateReminder(notifiedVersion: UserDefaults.standard.string(forKey: Self.notifiedVersionKey),
                                   runningVersion: runningVersion)
+        feedHealth = UpdateFeedHealth(failure: .decoded(UserDefaults.standard.data(forKey: Self.feedFailureKey)))
         let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
                                  userDriver: SPUStandardUserDriver(hostBundle: .main, delegate: self), delegate: self)
         do {
@@ -105,6 +109,16 @@ final class Updates: NSObject {
         readSettings()
     }
 
+    private func recordFeed(_ change: (inout UpdateFeedHealth) -> Void) {
+        var next = feedHealth
+        change(&next)
+        guard next != feedHealth else { return }
+        if next.failure != feedHealth.failure {
+            UserDefaults.standard.set(next.failure?.encoded(), forKey: Self.feedFailureKey)
+        }
+        feedHealth = next
+    }
+
     private func readSettings() {
         guard let updater else { return }
         automaticallyChecks = updater.automaticallyChecksForUpdates
@@ -112,7 +126,8 @@ final class Updates: NSObject {
         automaticallyDownloads = updater.automaticallyDownloadsUpdates
     }
 
-    func showPreview(enabled: Bool, pending: PendingUpdate? = nil, automaticallyDownloads: Bool = false) {
+    func showPreview(enabled: Bool, pending: PendingUpdate? = nil, automaticallyDownloads: Bool = false,
+                     feedFailure: UpdateFeedFailure? = nil) {
         isEnabled = enabled
         canCheck = enabled
         automaticallyChecks = enabled
@@ -120,6 +135,7 @@ final class Updates: NSObject {
         self.automaticallyDownloads = enabled && automaticallyDownloads
         reminder = UpdateReminder()
         if let pending { reminder.found(pending) }
+        feedHealth = UpdateFeedHealth(failure: feedFailure)
     }
 }
 
@@ -149,6 +165,19 @@ extension Updates: SPUUpdaterDelegate {
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
         installNow = nil
         reminder.clear()
+    }
+
+    // In Sparkle's safe mode (a feed signature failing for 20 days) the appcast still loads, unverified.
+    func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        recordFeed { $0.appcastLoaded(verified: appcast.signingValidationStatus != .failed) }
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        recordFeed { $0.checkFailed(error as NSError, at: Date()) }
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        recordFeed { $0.cycleEnded() }
     }
 }
 

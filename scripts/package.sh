@@ -12,7 +12,7 @@
 #      HOPLY_BUILD    default: the commit count
 #      SPARKLE_PUBLIC_KEY   generate_keys' public key; unset = no updates
 #      SPARKLE_PRIVATE_KEY  generate_keys -x output; unset = the login Keychain item (account SPARKLE_ACCOUNT, default hoply)
-#      HOPLY_REPO           public owner/repo whose releases host the DMG and appcast; default Milos5611/homebrew-hoply
+#      HOPLY_REPO           public owner/repo whose releases host the DMG and appcast; default Milos5611/hoply
 #      HOPLY_FEED_URL       SUFeedURL; default https://hoply.dev/appcast.xml (redirects to the latest release's appcast)
 #      HOPLY_DOWNLOAD_URL   default: https://github.com/<repo>/releases/download/v<version>/Hoply-<version>.dmg
 #      HOPLY_RELEASE_NOTES  a Markdown file shown in the update window
@@ -34,7 +34,7 @@ hardened=0
 feed=""
 rm -f build/appcast.xml
 if [ -n "${SPARKLE_PUBLIC_KEY:-}" ]; then
-  repo="${HOPLY_REPO:-Milos5611/homebrew-hoply}"
+  repo="${HOPLY_REPO:-Milos5611/hoply}"
   feed="${HOPLY_FEED_URL:-https://hoply.dev/appcast.xml}"
   download="${HOPLY_DOWNLOAD_URL:-https://github.com/$repo/releases/download/v$version/Hoply-$version.dmg}"
   case "$feed $download" in
@@ -106,6 +106,13 @@ XML
 XML
   } > "$appcast"
   xmllint --noout "$appcast"
+  if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
+    printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sign_update" --ed-key-file - "$appcast" >&2
+    printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sign_update" --ed-key-file - --verify "$appcast" >&2
+  else
+    "$sign_update" --account "${SPARKLE_ACCOUNT:-hoply}" "$appcast" >&2
+    "$sign_update" --account "${SPARKLE_ACCOUNT:-hoply}" --verify "$appcast" >&2
+  fi
   echo "Appcast: $appcast (feed $feed)" >&2
 fi
 
