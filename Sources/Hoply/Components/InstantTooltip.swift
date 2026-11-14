@@ -82,11 +82,16 @@ private final class TooltipWindow {
         panel.hasShadow = true
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = true
+        // The popover can open without Hoply becoming active; an NSPanel's default would keep the tooltip hidden then.
+        panel.hidesOnDeactivate = false
         // Above the menu bar popover, which itself sits above normal windows.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.contentView = host
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
     }
 
     func show(_ text: String, for anchor: TooltipAnchor) {
