@@ -65,7 +65,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     func showPanel() {
         guard let button = statusItem.button else { return }
         // An accessory app has to be active for the popover to become key, otherwise text fields ignore typing.
-        NSApp.activate()
+        NSApp.activateOverOtherApps()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -183,5 +183,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         let note = update.map(UpdateReminder.headline)
         button.toolTip = note
         button.setAccessibilityLabel(note)
+    }
+}
+
+extension NSApplication {
+    // Plain activate() is refused after Return in the non-activating palette, leaving the window behind other apps.
+    func activateOverOtherApps() {
+        activate(ignoringOtherApps: true)
     }
 }

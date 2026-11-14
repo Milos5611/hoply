@@ -16,7 +16,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         self.window = window
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        NSApp.activateOverOtherApps()
         model.history.setDashboardVisible(true)
         model.setDashboardOnScreen(true)
     }
