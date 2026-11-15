@@ -8,11 +8,7 @@ own usage history, so you can see what each run cost and how much of your Claude
 run several agents at once and would rather not keep checking terminals. Everything stays on your Mac.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/panel-light.png">
-    <img src="docs/images/panel-light.png" width="448" alt="The Hoply panel: counts of live agents, sessions that need you and local model speed, then the Waiting on you card with a permission request, a question, a run stopped at a usage limit, a finished turn and a failed run.">
-  </picture>
+  <img src="docs/images/demo.gif" width="460" alt="The Hoply panel as agent sessions arrive: Claude Code, Copilot CLI and Codex CLI sessions grouped by project, and a Codex run asking for permission moving to the Waiting on you card.">
 </p>
 
 ## Install
