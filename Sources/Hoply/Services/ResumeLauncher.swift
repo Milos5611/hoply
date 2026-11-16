@@ -7,9 +7,23 @@ enum ResumeLauncher {
     }
 
     static func resume(source: AgentSource, sessionID: String, cwd: String) -> Bool {
-        guard let script = writeScript(source: source, sessionID: sessionID, cwd: cwd, in: folder) else { return false }
+        guard let name = ResumeScript.fileName(source: source, sessionID: sessionID),
+              let text = ResumeScript.script(source: source, sessionID: sessionID, cwd: cwd) else { return false }
+        return open(text, named: name, cwd: cwd)
+    }
+
+    static func launch(_ order: RemoteLaunchOrder) -> Bool {
+        open(order.script, named: order.fileName, cwd: order.directory)
+    }
+
+    private static func open(_ text: String, named name: String, cwd: String) -> Bool {
+        guard let script = writeScript(text, named: name, cwd: cwd, in: folder) else { return false }
         prune()
-        return NSWorkspace.shared.open(script)
+        guard NSWorkspace.shared.open(script) else {
+            try? FileManager.default.removeItem(at: script)
+            return false
+        }
+        return true
     }
 
     @discardableResult
@@ -29,11 +43,11 @@ enum ResumeLauncher {
         }
     }
 
-    static func writeScript(source: AgentSource, sessionID: String, cwd: String, in folder: URL) -> URL? {
+    static func writeScript(_ text: String, named name: String, cwd: String, in folder: URL) -> URL? {
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory), isDirectory.boolValue,
-              let name = ResumeScript.fileName(source: source, sessionID: sessionID),
-              let text = ResumeScript.script(source: source, sessionID: sessionID, cwd: cwd) else { return nil }
+        guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
+        }
         let file = folder.appendingPathComponent(name, isDirectory: false)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

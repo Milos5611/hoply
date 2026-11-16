@@ -77,6 +77,7 @@ enum Snapshot {
                 for (state, available, status) in PreviewData.iCloudLinkStates(now: now) {
                     var linked = PreviewData.settings
                     linked.iCloudLink = available
+                    linked.iPhoneLaunch = status == .running
                     model.showPreview(settings: linked)
                     model.iCloudLink.show(available: available, status: status,
                                           lastSync: status == .running ? now - 12 : nil)

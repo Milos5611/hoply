@@ -9,15 +9,21 @@ public enum ResumeScript {
 
     public static func script(source: AgentSource, sessionID: String, cwd: String?) -> String? {
         guard isPlausibleSessionID(sessionID), let arguments = arguments(for: source, sessionID: sessionID),
-              let cwd, cwd.hasPrefix("/"), !cwd.utf8.contains(0), !cwd.contains(where: \.isNewline) else { return nil }
+              let cwd else { return nil }
+        return script(arguments: arguments, cwd: cwd)
+    }
+
+    static func script(arguments: [String], cwd: String, preamble: String = "") -> String? {
+        guard let binary = arguments.first, cwd.hasPrefix("/"), !cwd.utf8.contains(0),
+              !cwd.contains(where: \.isNewline), !arguments.contains(where: { $0.utf8.contains(0) }) else { return nil }
         let command = arguments.map(shellQuoted).joined(separator: " ")
         let folder = shellQuoted(cwd)
         // The second branch covers a launcher that starts the script without the user's interactive
         // PATH: "$0" and "$@" carry the command through the nested shell with no second quoting.
         return """
             #!/bin/zsh
-            cd -- \(folder) || { print -r -- "Hoply: cannot open" \(folder); exit 1; }
-            if command -v \(shellQuoted(arguments[0])) >/dev/null 2>&1; then
+            \(preamble)cd -- \(folder) || { print -r -- "Hoply: cannot open" \(folder); exit 1; }
+            if command -v \(shellQuoted(binary)) >/dev/null 2>&1; then
               exec \(command)
             fi
             exec /bin/zsh -ilc 'exec "$0" "$@"' \(command)
@@ -41,7 +47,7 @@ public enum ResumeScript {
         guard name.hasSuffix("." + fileExtension) else { return false }
         return AgentSource.allCases.contains { source in
             let prefix = "hoply-resume-\(source.rawValue)-"
-            guard name.hasPrefix(prefix) else { return false }
+            guard name.hasPrefix(prefix) else { return LaunchScript.isScriptName(name, source: source) }
             let id = String(name.dropFirst(prefix.count).dropLast(fileExtension.count + 1))
             return fileName(source: source, sessionID: id) == name
         }

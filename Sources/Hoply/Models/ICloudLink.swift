@@ -25,6 +25,9 @@ final class ICloudLink {
     private static let accountRetry: TimeInterval = 600
     private static let storageRetry: TimeInterval = 900
     private static let coalesce: Duration = .milliseconds(250)
+    private static let launchRefresh: TimeInterval = 60
+    private static let launchProjectLimit = 40
+    private static let launchSessionLimit = 40
 
     private(set) var status: Status = .off
     private(set) var lastSync: Date?
@@ -51,8 +54,17 @@ final class ICloudLink {
     @ObservationIgnored private var applyingAnswer = false
     @ObservationIgnored private var deviceName: String?
     @ObservationIgnored private var accountObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var launchRecents: LaunchRecents?
+    @ObservationIgnored private var lastLaunch: RemoteLaunch.Result?
 
     private struct AccountRestricted: Error {}
+
+    private struct LaunchRecents {
+        var store: ObjectIdentifier
+        var projects: [ProjectRef]
+        var sessions: [RecentSession]
+        var fetchedAt: Date
+    }
 
     init(live: Bool) {
         isLive = live
@@ -211,8 +223,11 @@ final class ICloudLink {
             opened.remove(id)
             talked = true
         }
+        await refreshLaunchRecents(of: model)
+        try Task.checkCancellation()
         let now = Date()
-        let snapshot = snapshot(of: model, device: device, now: now)
+        let launch = launchCatalog(of: model)?.remote(last: lastLaunch)
+        let snapshot = snapshot(of: model, device: device, launch: launch, now: now)
         if RemoteLinkPolicy.shouldPublish(snapshot, last: published, at: publishedAt, now: now) {
             try Task.checkCancellation()
             try await cloud.publish(snapshot)
@@ -236,7 +251,7 @@ final class ICloudLink {
         Set(model.approvals.map(\.id) + model.replies.map(\.id))
     }
 
-    private func snapshot(of model: AppModel, device: String, now: Date) -> RemoteSnapshot {
+    private func snapshot(of model: AppModel, device: String, launch: RemoteLaunch?, now: Date) -> RemoteSnapshot {
         let history = model.history
         let week = history.isReady ? history.week : nil
         // `today` is empty, not unknown, until the ledger's first refresh, which is also the one that sets `week`.
@@ -245,7 +260,44 @@ final class ICloudLink {
                                     sessions: model.sessions, projects: model.projectsByCwd,
                                     sessionTotals: history.sessionTotals, limitedUntil: model.grouping.limitedUntil,
                                     approvals: model.approvals, replies: model.replies, today: today, week: week,
-                                    now: now)
+                                    launch: launch, now: now)
+    }
+
+    private func launchCatalog(of model: AppModel) -> LaunchCatalog? {
+        guard model.settings.iPhoneLaunch else { return nil }
+        return LaunchCatalog.build(projects: launchRecents?.projects ?? [], sessions: launchRecents?.sessions ?? [],
+                                   board: model.sessions,
+                                   available: LaunchCatalog.available(model.connections.statuses))
+    }
+
+    private func refreshLaunchRecents(of model: AppModel) async {
+        guard model.settings.iPhoneLaunch, let ledger = model.history.ledger else {
+            launchRecents = nil
+            return
+        }
+        let store = ObjectIdentifier(ledger.store)
+        if let recents = launchRecents, recents.store == store,
+           Date().timeIntervalSince(recents.fetchedAt) < Self.launchRefresh { return }
+        let sources = Set(AgentSource.allCases.filter(LaunchScript.canContinue))
+        guard let projects = try? await ledger.recentProjects(limit: Self.launchProjectLimit),
+              let sessions = try? await ledger.recentSessions(limit: Self.launchSessionLimit, sources: sources),
+              model.settings.iPhoneLaunch, model.history.ledger.map({ ObjectIdentifier($0.store) }) == store
+        else { return }
+        launchRecents = LaunchRecents(store: store, projects: projects.map(\.project), sessions: sessions,
+                                      fetchedAt: Date())
+    }
+
+    private func perform(_ decision: RemoteLaunchDecision) {
+        switch decision {
+        case .start(let order):
+            let started = ResumeLauncher.launch(order)
+            lastLaunch = started ? order.started(at: Date()) : order.failed(at: Date())
+            if started, let id = order.sessionID {
+                launchRecents?.sessions.removeAll { $0.key == SessionKey(source: order.source, id: id) }
+            }
+        case .refuse(let result):
+            lastLaunch = result
+        }
     }
 
     private func answer(_ cloud: CloudLink) async throws {
@@ -253,11 +305,15 @@ final class ICloudLink {
         guard !Task.isCancelled, let model else { return }
         let resolution = RemoteAnswers.resolve(answers, approvals: model.approvals, replies: model.replies,
                                                device: cloud.device, handled: handled, awaySetAt: awaySetAt,
-                                               now: Date())
+                                               launch: launchCatalog(of: model), now: Date())
         handled.formUnion(resolution.acknowledged)
         for action in resolution.actions {
             apply(action, to: model)
         }
+        for decision in resolution.launches {
+            perform(decision)
+        }
+        if !resolution.launches.isEmpty { pending = true }
         // Always, even with nothing to delete: it is what keeps the fetch's change token.
         try await cloud.acknowledge(resolution.acknowledged)
         handled.subtract(resolution.acknowledged)

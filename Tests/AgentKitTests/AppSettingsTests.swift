@@ -160,6 +160,21 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
 
+    func testIPhoneLaunchIsOffByDefaultAndDecodesLeniently() {
+        XCTAssertFalse(AppSettings().iPhoneLaunch)
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertFalse(older.iPhoneLaunch, "settings saved before launching from the iPhone")
+        XCTAssertEqual(older.port, 4400)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "iPhoneLaunch": "yes", "iCloudLink": true}"#.utf8))
+        XCTAssertFalse(wrong.iPhoneLaunch)
+        XCTAssertTrue(wrong.iCloudLink)
+        XCTAssertEqual(wrong.port, 5000)
+        XCTAssertTrue(AppSettings.decode(Data(#"{"iPhoneLaunch": true}"#.utf8)).iPhoneLaunch)
+        var settings = AppSettings()
+        settings.iPhoneLaunch = true
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    }
+
     func testCleanupKeyDecodesLeniently() {
         XCTAssertFalse(AppSettings.decode(Data(v1JSON.utf8)).cleanupIncludesNodeModules)
         let wrong = AppSettings.decode(Data(#"{"port": 5000, "cleanupIncludesNodeModules": "yes"}"#.utf8))

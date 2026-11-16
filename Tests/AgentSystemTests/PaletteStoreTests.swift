@@ -92,4 +92,47 @@ final class PaletteStoreTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gonePath)
         XCTAssertEqual(try run(gonePath), 1, "a folder that is gone stops the script before the agent starts")
     }
+
+    func testLaunchScriptPassesAHostilePromptIntactAndDeletesItself() throws {
+        let directory = try TempDirectory()
+        try directory.mkdir("project")
+        try directory.mkdir("home")
+        try directory.write("bin/claude", """
+            #!/bin/sh
+            { pwd -P; printf '[%s]\\n' "$@"; } > "$HOPLY_TEST_OUT"
+
+            """)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path("bin/claude"))
+        try directory.write("home/.zshrc", "path=(\(ResumeScript.shellQuoted(directory.path("bin"))) $path)\n")
+        let cwd = try XCTUnwrap(realpath(directory.path("project"), nil).map { pointer -> String in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+        let prompt = "it's \"x\" $(touch pwned1) `touch pwned2` ${HOME}\nnext; touch pwned3 && exit 7\n'\n--help"
+        let script = try XCTUnwrap(LaunchScript.script(source: .claudeCode, sessionID: nil, prompt: prompt, cwd: cwd))
+        let name = LaunchScript.fileName(source: .claudeCode, answerID: "C0FFEE00-0000-4000-8000-000000000007")
+
+        for path in ["\(directory.path("bin")):/usr/bin:/bin", "/usr/bin:/bin"] {
+            let scriptPath = try directory.write(name, script)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: scriptPath)
+            process.environment = ["PATH": path, "HOME": directory.path("home"),
+                                   "HOPLY_TEST_OUT": directory.path("out.txt")]
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+
+            XCTAssertEqual(process.terminationStatus, 0, path)
+            let output = try String(contentsOfFile: directory.path("out.txt"), encoding: .utf8)
+            XCTAssertEqual(output, "\(cwd)\n[--]\n[\(prompt)]\n", path)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: scriptPath), "the prompt doesn't stay on disk")
+            for file in ["pwned1", "pwned2", "pwned3"] {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: cwd + "/" + file), file)
+            }
+            try FileManager.default.removeItem(atPath: directory.path("out.txt"))
+        }
+    }
 }

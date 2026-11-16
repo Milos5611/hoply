@@ -60,15 +60,17 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
     public var updatedAt: Date
     public var sessions: [Session]
     public var spend: Spend
+    public var launch: RemoteLaunch?
 
     public init(device: String, deviceName: String? = nil, away: Bool, updatedAt: Date, sessions: [Session] = [],
-                spend: Spend = Spend()) {
+                spend: Spend = Spend(), launch: RemoteLaunch? = nil) {
         self.device = device
         self.deviceName = deviceName
         self.away = away
         self.updatedAt = updatedAt
         self.sessions = sessions
         self.spend = spend
+        self.launch = launch
     }
 
     public static let maxSessions = 50
@@ -77,7 +79,7 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
                              projects: [String: ProjectRef] = [:], sessionTotals: [SessionKey: LedgerTotals] = [:],
                              limitedUntil: [SessionKey: Date] = [:], approvals: [ApprovalRequest] = [],
                              replies: [TurnReplyRequest] = [], today: [AgentSource: LedgerTotals]?,
-                             week: LedgerTotals? = nil, now: Date) -> RemoteSnapshot {
+                             week: LedgerTotals? = nil, launch: RemoteLaunch? = nil, now: Date) -> RemoteSnapshot {
         let approving = Set(approvals.map(\.key))
         let replying = Set(replies.map(\.key))
         let rows = sessions.map { session -> Session in
@@ -100,7 +102,7 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
         let spend = Spend(today: today.map { RemoteCost($0.values.reduce(.zero, +)) }, week: week.map(RemoteCost.init),
                           byAgent: byAgent)
         return RemoteSnapshot(device: device, deviceName: deviceName, away: away, updatedAt: now, sessions: ordered,
-                              spend: spend)
+                              spend: spend, launch: launch)
     }
 
     public static func projectName(_ session: AgentSession?, projects: [String: ProjectRef]) -> String? {
@@ -182,6 +184,7 @@ public enum RemoteLinkPolicy {
         let elapsed = now.timeIntervalSince(lastAt)
         if snapshot.sameContent(as: last) { return elapsed >= heartbeat }
         if snapshot.away != last.away || snapshot.attention != last.attention { return true }
+        if (snapshot.launch == nil) != (last.launch == nil) || snapshot.launch?.last != last.launch?.last { return true }
         return elapsed >= publishInterval
     }
 

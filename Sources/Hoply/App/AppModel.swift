@@ -679,6 +679,9 @@ final class AppModel {
         if updated.iCloudLink != old.iCloudLink {
             iCloudLink.follow(updated.iCloudLink)
         }
+        if updated.iPhoneLaunch != old.iPhoneLaunch {
+            iCloudLink.changed()
+        }
         if updated.modelServers != old.modelServers {
             perform(policy.modelServersChanged(updated.modelServers))
             modelServers.settingsChanged(from: old, to: updated)
