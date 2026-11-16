@@ -30,6 +30,11 @@ if [ -n "${NOTARY_KEY_PATH:-}" ]; then
 fi
 hardened=0
 [ "$identity" != "-" ] && hardened=1
+profile="${HOPLY_PROVISION_PROFILE:-}"
+if [ -n "$profile" ]; then
+  [ "$identity" != "-" ] || { echo "HOPLY_PROVISION_PROFILE needs a Developer ID identity (HOPLY_SIGN_IDENTITY)" >&2; exit 1; }
+  [ -f "$profile" ] || { echo "HOPLY_PROVISION_PROFILE: no such file: $profile" >&2; exit 1; }
+fi
 
 feed=""
 rm -f build/appcast.xml
@@ -47,8 +52,10 @@ fi
 
 app="$(HOPLY_SIGN_IDENTITY="$identity" HOPLY_HARDENED=$hardened HOPLY_UNIVERSAL=1 \
        HOPLY_VERSION="$version" HOPLY_BUILD="$build" \
+       HOPLY_PROVISION_PROFILE="$profile" \
        HOPLY_FEED_URL="$feed" HOPLY_ED_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}" scripts/build-app.sh)"
 codesign --verify --strict --deep --verbose=1 "$app" >&2
+[ -z "$profile" ] || codesign --display --entitlements - "$app" >&2
 
 stage="$(mktemp -d -t hoply-dmg)"
 ditto "$app" "$stage/Hoply.app"
@@ -117,5 +124,5 @@ XML
 fi
 
 echo "Hoply $version ($build): $dmg, $([ "$notarize" = 1 ] && echo "notarized" || \
-  ([ "$identity" = "-" ] && echo "ad-hoc signed, not notarized" || echo "signed, not notarized"))" >&2
+  ([ "$identity" = "-" ] && echo "ad-hoc signed, not notarized" || echo "signed, not notarized")), $([ -n "$profile" ] && echo "with" || echo "without") the iCloud link" >&2
 echo "$dmg"

@@ -7,6 +7,7 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
     case limits
     case localModel
     case update
+    case panel
 
     static let kindKey = "kind"
     static let sourceKey = "source"
@@ -36,12 +37,26 @@ nonisolated enum NotificationTarget: Sendable, Equatable {
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onOpen: ((NotificationTarget) -> Void)?
     var onDecision: ((String, ApprovalDecision) -> Void)?
+    var onReply: ((String, String) -> Void)?
+    var onFinishReply: ((String) -> Void)?
     private var queue: Task<Void, Never>?
 
     private nonisolated static let approvalCategory = "hoply.approval"
     private nonisolated static let allowAction = "hoply.allow"
     private nonisolated static let denyAction = "hoply.deny"
     private nonisolated static let approvalKey = "approval"
+    private nonisolated static let replyCategory = "hoply.reply"
+    private nonisolated static let replyAction = "hoply.reply.send"
+    private nonisolated static let doneAction = "hoply.reply.done"
+    private nonisolated static let replyKey = "reply"
+
+    static func replyNotificationID(_ id: String) -> String {
+        "reply:\(id)"
+    }
+
+    private nonisolated static func replyCategory(for source: AgentSource) -> String {
+        "\(replyCategory).\(source.rawValue)"
+    }
 
     private var isAvailable: Bool {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
@@ -54,8 +69,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
         let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [.authenticationRequired])
         let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny", options: [.destructive])
-        center.setNotificationCategories([UNNotificationCategory(identifier: Self.approvalCategory,
-                                                                 actions: [allow, deny], intentIdentifiers: [])])
+        let done = UNNotificationAction(identifier: Self.doneAction, title: "Done", options: [])
+        // The text field's placeholder belongs to the category, so each agent needs its own.
+        let replies = TurnReply.sources.map { source in
+            let reply = UNTextInputNotificationAction(identifier: Self.replyAction, title: "Reply",
+                                                      options: [.authenticationRequired], textInputButtonTitle: "Send",
+                                                      textInputPlaceholder: AwayText.placeholder(source))
+            return UNNotificationCategory(identifier: Self.replyCategory(for: source), actions: [reply, done],
+                                          intentIdentifiers: [])
+        }
+        center.setNotificationCategories(Set(replies + [
+            UNNotificationCategory(identifier: Self.approvalCategory, actions: [allow, deny], intentIdentifiers: []),
+        ]))
     }
 
     func requestAuthorization() {
@@ -65,7 +90,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func post(_ request: NotificationRequest, approval: ApprovalRequest? = nil) {
+    func post(_ request: NotificationRequest, approval: ApprovalRequest? = nil, reply: TurnReplyRequest? = nil,
+              subtitle: String? = nil) {
         guard isAvailable else { return }
         let content = UNMutableNotificationContent()
         content.title = request.title
@@ -84,6 +110,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.body = [approval.summary, request.body].filter { !$0.isEmpty }.joined(separator: "\n")
             userInfo[Self.approvalKey] = approval.id
         }
+        if let reply {
+            content.categoryIdentifier = Self.replyCategory(for: reply.key.source)
+            userInfo[Self.replyKey] = reply.id
+        }
+        if let subtitle { content.subtitle = subtitle }
         content.userInfo = userInfo
         let notification = UNNotificationRequest(identifier: request.id, content: content, trigger: nil)
         enqueue { try? await UNUserNotificationCenter.current().add(notification) }
@@ -124,8 +155,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             guard let id = userInfo[Self.approvalKey] as? String else { return }
             let decision: ApprovalDecision = response.actionIdentifier == Self.allowAction ? .allow : .deny
             await MainActor.run { onDecision?(id, decision) }
+        case Self.replyAction:
+            guard let id = userInfo[Self.replyKey] as? String,
+                  let text = (response as? UNTextInputNotificationResponse)?.userText else { return }
+            await MainActor.run { onReply?(id, text) }
+        case Self.doneAction:
+            guard let id = userInfo[Self.replyKey] as? String else { return }
+            await MainActor.run { onFinishReply?(id) }
         case UNNotificationDefaultActionIdentifier:
-            guard let target = NotificationTarget(userInfo: userInfo) else { return }
+            let target = userInfo[Self.replyKey] == nil ? NotificationTarget(userInfo: userInfo) : .panel
+            guard let target else { return }
             await MainActor.run { onOpen?(target) }
         default:
             break

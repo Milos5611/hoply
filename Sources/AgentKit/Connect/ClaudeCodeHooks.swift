@@ -3,6 +3,8 @@ import Foundation
 public struct ClaudeCodeHooks: Equatable, Sendable {
     public static let marker = "# hoply"
     public static let approvalEvent = "PermissionRequest"
+    public static let replyEvent = "Stop"
+    public static let replyStatusMessage = "Waiting for your reply in Hoply"
     public static let events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
                                 "Notification", "Elicitation", "ElicitationResult", "SubagentStart", "SubagentStop",
                                 "Stop", "StopFailure", "SessionEnd"]
@@ -28,6 +30,11 @@ public struct ClaudeCodeHooks: Equatable, Sendable {
             + "-H \"X-Hoply-Pid: $PPID\" --data-binary @- \(endpoint)/hooks/claude-code || true \(Self.marker)"
     }
 
+    public var replyCommand: String {
+        "curl -sf -m \(TurnReply.curlTimeout) -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' "
+            + "-H \"X-Hoply-Pid: $PPID\" --data-binary @- \(endpoint)/hooks/claude-code || true \(Self.marker)"
+    }
+
     public var environment: [String: String] { Self.environment(port: port) }
 
     public static func environment(port: Int) -> [String: String] {
@@ -39,9 +46,15 @@ public struct ClaudeCodeHooks: Equatable, Sendable {
     }
 
     public func hook(for event: String) -> [String: Any] {
-        event == Self.approvalEvent
-            ? ["type": "command", "command": approveCommand, "timeout": Self.approvalTimeout]
-            : ["type": "command", "command": hookCommand, "timeout": Self.hookTimeout]
+        switch event {
+        case Self.approvalEvent:
+            ["type": "command", "command": approveCommand, "timeout": Self.approvalTimeout]
+        case Self.replyEvent:
+            ["type": "command", "command": replyCommand, "timeout": TurnReply.hookTimeout,
+             "statusMessage": Self.replyStatusMessage]
+        default:
+            ["type": "command", "command": hookCommand, "timeout": Self.hookTimeout]
+        }
     }
 
     public func status(of settings: [String: Any]) -> ConnectionStatus {

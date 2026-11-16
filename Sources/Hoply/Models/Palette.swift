@@ -254,6 +254,15 @@ final class Palette {
                    notifying ? "Stay silent until you resume them" : "Notify again when an agent needs you",
                    symbol: notifying ? "bell.slash" : "bell", keywords: ["mute", "bell"]) { $0.toggleNotifications() },
         ]
+        let away = model.settings.awayMode
+        actions.append(action("away", away ? "Turn Off Away Mode" : "Turn On Away Mode",
+                              away ? "Let turns end without waiting for you"
+                                   : "Hold turn ends for your reply and keep this Mac awake",
+                              symbol: AwayText.symbol, label: away ? "Turn Off" : "Turn On",
+                              keywords: ["away", "reply", "keep awake"]) { model in
+            model.setAwayMode(!away)
+            if model.awayProblem != nil { model.openSettings() }
+        })
         if model.settings.claudeLimitsEnabled {
             actions.append(action("limits", "Refresh Claude Limits", "Fetch the plan usage now",
                                   symbol: "arrow.clockwise") { model in

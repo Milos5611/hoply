@@ -154,6 +154,22 @@ public enum CopilotEventsParser {
         state.model = model
     }
 
+    public static func lastAssistantMessage<Lines: BidirectionalCollection>(in lines: Lines) -> String?
+    where Lines.Element == Data {
+        for line in lines.reversed() {
+            if let type = leadingType(line), type != "assistant.message", type != "user.message" { continue }
+            guard let decoded = try? decoder.decode(MessageLine.self, from: line), nonEmpty(decoded.agentId) == nil
+            else { continue }
+            switch decoded.type {
+            // The user's prompt opened this turn; an older message answered an older prompt.
+            case "user.message": return nil
+            case "assistant.message": if let text = TurnReply.message(decoded.data?.content) { return text }
+            default: continue
+            }
+        }
+        return nil
+    }
+
     static let readTypes: Set<String> = ["session.start", "session.model_change", "user.message",
                                          "session.usage_record", "session.shutdown"]
 
@@ -190,6 +206,35 @@ public enum CopilotEventsParser {
             timestamp = try? container.decodeIfPresent(String.self, forKey: .timestamp)
             agentId = try? container.decodeIfPresent(String.self, forKey: .agentId)
             data = try? container.decodeIfPresent(Payload.self, forKey: .data)
+        }
+    }
+
+    struct MessageLine: Decodable {
+        var type: String
+        var agentId: String?
+        var data: Message?
+
+        enum CodingKeys: String, CodingKey {
+            case type, agentId, data
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            type = try container.decode(String.self, forKey: .type)
+            agentId = try? container.decodeIfPresent(String.self, forKey: .agentId)
+            data = try? container.decodeIfPresent(Message.self, forKey: .data)
+        }
+    }
+
+    struct Message: Decodable {
+        var content: String?
+
+        enum CodingKeys: String, CodingKey {
+            case content
+        }
+
+        init(from decoder: any Decoder) throws {
+            content = try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .content)
         }
     }
 

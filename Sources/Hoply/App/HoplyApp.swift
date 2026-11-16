@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        model?.iCloudLink.receivedPush(userInfo)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model, model.history.isReady else { return .terminateNow }
         Task {

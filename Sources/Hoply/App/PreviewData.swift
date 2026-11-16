@@ -26,6 +26,56 @@ enum PreviewData {
                          received: now - 20)]
     }
 
+    static let replySession = SessionKey(source: .claudeCode, id: "reply")
+    static let copilotReplySession = SessionKey(source: .copilotCLI, id: "reply")
+
+    static var awaySettings: AppSettings {
+        var settings = settings
+        settings.awayMode = true
+        return settings
+    }
+
+    static func iCloudLinkStates(now: Date) -> [(name: String, available: Bool, status: ICloudLink.Status)] {
+        [("unavailable", false, .off),
+         ("on", true, .running),
+         ("no-account", true, .noAccount),
+         ("offline", true, .offline(retryAt: now + 160)),
+         ("storage-full", true, .storageFull(retryAt: now + 900))]
+    }
+
+    static let replyMessage = """
+        The checkout flow now uses the new payment intents API. I updated `CheckoutService`, the webhook handler \
+        and the three integration tests; all 48 tests pass locally.
+
+        Two things are left:
+        - The old `/charge` endpoint is still routed, but nothing calls it any more.
+        - Refunds still go through the legacy client.
+
+        Should I remove the `/charge` endpoint now, or keep it until the mobile app ships its next release?
+        """
+
+    static let copilotReplyMessage = """
+        Rate limiting is on for the public API: 120 requests a minute per key, answered with 429 and a Retry-After \
+        header. The admin routes share the same limiter for now.
+
+        Should admin keys get their own, higher limit?
+        """
+
+    static func replyEvents(now: Date) -> [AgentEvent] {
+        [AgentEvent(key: replySession, kind: .promptSubmitted("Move checkout to payment intents"), time: now - 1_260,
+                    cwd: "\(NSHomeDirectory())/Project/CoreStory", model: "claude-opus-5", fromHook: true),
+         AgentEvent(key: replySession, kind: .toolStarted("Bash"), time: now - 140, fromHook: true),
+         AgentEvent(key: replySession, kind: .turnFinished(replyMessage), time: now - 95, fromHook: true),
+         AgentEvent(key: copilotReplySession, kind: .promptSubmitted("Add rate limiting to the public API"),
+                    time: now - 840, cwd: "\(NSHomeDirectory())/Project/yasm-backend", fromHook: true),
+         AgentEvent(key: copilotReplySession, kind: .turnFinished(nil), time: now - 170, fromHook: true)]
+    }
+
+    static func replies(now: Date) -> [TurnReplyRequest] {
+        [TurnReplyRequest(key: replySession, message: replyMessage, received: now - 95),
+         TurnReplyRequest(key: copilotReplySession, message: copilotReplyMessage, received: now - 170)]
+    }
+
     static func events(now: Date) -> [AgentEvent] {
         func at(_ minutesAgo: Double) -> Date { now.addingTimeInterval(-minutesAgo * 60) }
         func key(_ source: AgentSource, _ id: String) -> SessionKey { SessionKey(source: source, id: id) }

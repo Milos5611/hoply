@@ -32,6 +32,10 @@ struct PanelHeader: View {
                 .accessibilityHidden(true)
             Text("Hoply")
                 .font(.system(size: 15, weight: .semibold))
+            if model.settings.awayMode {
+                AwayChip()
+                    .padding(.leading, 2)
+            }
             Spacer()
             if model.settings.paletteEnabled {
                 HeaderIconButton(symbol: "magnifyingglass", help: paletteHelp) {

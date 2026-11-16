@@ -28,6 +28,8 @@ final class ConnectHooksTests: XCTestCase {
                        #"curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H "X-Hoply-Pid: $PPID" --data-binary @- http://127.0.0.1:4318/hooks/claude-code || true # hoply"#)
         XCTAssertEqual(hooks.approveCommand,
                        #"curl -sf -m 590 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Approve: 1' -H "X-Hoply-Pid: $PPID" --data-binary @- http://127.0.0.1:4318/hooks/claude-code || true # hoply"#)
+        XCTAssertEqual(hooks.replyCommand,
+                       #"curl -sf -m 1790 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' -H "X-Hoply-Pid: $PPID" --data-binary @- http://127.0.0.1:4318/hooks/claude-code || true # hoply"#)
         XCTAssertEqual(hooks.environment, [
             "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
             "OTEL_LOGS_EXPORTER": "otlp",
@@ -38,14 +40,27 @@ final class ConnectHooksTests: XCTestCase {
         XCTAssertEqual(ClaudeCodeHooks.events, ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
                                                 "PermissionRequest", "Notification", "Elicitation", "ElicitationResult",
                                                 "SubagentStart", "SubagentStop", "Stop", "StopFailure", "SessionEnd"])
-        assertSame(hooks.hook(for: "Stop"), ["type": "command", "command": hooks.hookCommand, "timeout": 5])
+        assertSame(hooks.hook(for: "Stop"), ["type": "command", "command": hooks.replyCommand, "timeout": 1800,
+                                             "statusMessage": "Waiting for your reply in Hoply"])
+        assertSame(hooks.hook(for: "SubagentStop"), ["type": "command", "command": hooks.hookCommand, "timeout": 5])
+        assertSame(hooks.hook(for: "StopFailure"), ["type": "command", "command": hooks.hookCommand, "timeout": 5])
         assertSame(hooks.hook(for: "PermissionRequest"),
                    ["type": "command", "command": hooks.approveCommand, "timeout": 600])
         XCTAssertEqual(CopilotCLIHooks(port: 4318).command(for: "sessionStart"),
                        #"curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H "X-Hoply-Pid: $PPID" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/sessionStart || true"#)
+        XCTAssertEqual(CopilotCLIHooks(port: 4318).command(for: "agentStop"),
+                       #"curl -sf -m 1790 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' -H "X-Hoply-Pid: $PPID" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/agentStop || true"#)
         XCTAssertEqual(CopilotCLIHooks.events, ["sessionStart", "userPromptSubmitted", "preToolUse", "postToolUse",
                                                 "permissionRequest", "notification", "agentStop", "sessionEnd",
                                                 "errorOccurred"])
+        let copilot = CopilotCLIHooks(port: 4318)
+        assertSame(copilot.hook(for: "agentStop"),
+                   ["type": "command", "bash": copilot.replyCommand, "timeoutSec": 1800])
+        XCTAssertEqual(copilot.command(for: "agentStop"), copilot.replyCommand)
+        for event in CopilotCLIHooks.events where event != "agentStop" {
+            assertSame(copilot.hook(for: event), ["type": "command", "bash": copilot.command(for: event)])
+            XCTAssertTrue(copilot.command(for: event).contains("curl -s -m 2 -o /dev/null "), event)
+        }
         XCTAssertTrue(ClaudeCodeHooks(port: 5000).hookCommand.contains(" http://127.0.0.1:5000/hooks/claude-code "))
     }
 
@@ -154,14 +169,22 @@ final class ConnectHooksTests: XCTestCase {
             return settings
         }
         let generic: [String: Any] = ["type": "command", "command": hooks.hookCommand, "timeout": 5]
+        let reply = hooks.hook(for: "Stop")
         let cases: [(String, [String: Any])] = [
             ("no approve command", edited { h, _ in h["PermissionRequest"] = [["hooks": [generic]]] }),
+            ("no reply command", edited { h, _ in h["Stop"] = [["hooks": [generic]]] }),
+            ("reply without status", edited { h, _ in
+                h["Stop"] = [["hooks": [reply.filter { $0.key != "statusMessage" }]]]
+            }),
+            ("reply timeout", edited { h, _ in h["Stop"] = [["hooks": [reply.merging(["timeout": 600]) { $1 }]]] }),
             ("missing event", edited { h, _ in h["Elicitation"] = nil }),
             ("extra event", edited { h, _ in h["PreCompact"] = [["hooks": [generic]]] }),
-            ("duplicate", edited { h, _ in h["Stop"] = [["hooks": [generic]], ["hooks": [generic]]] }),
-            ("timeout", edited { h, _ in h["Stop"] = [["hooks": [generic.merging(["timeout": 10]) { $1 }]]] }),
-            ("bool timeout", edited { h, _ in h["Stop"] = [["hooks": [generic.merging(["timeout": true]) { $1 }]]] }),
-            ("extra key", edited { h, _ in h["Stop"] = [["hooks": [generic.merging(["async": true]) { $1 }]]] }),
+            ("duplicate", edited { h, _ in h["PreToolUse"] = [["hooks": [generic]], ["hooks": [generic]]] }),
+            ("timeout", edited { h, _ in h["PreToolUse"] = [["hooks": [generic.merging(["timeout": 10]) { $1 }]]] }),
+            ("bool timeout", edited { h, _ in
+                h["PreToolUse"] = [["hooks": [generic.merging(["timeout": true]) { $1 }]]]
+            }),
+            ("extra key", edited { h, _ in h["PreToolUse"] = [["hooks": [generic.merging(["async": true]) { $1 }]]] }),
             ("env value", edited { _, e in e["OTEL_LOGS_EXPORT_INTERVAL"] = "5000" }),
             ("env missing", edited { _, e in e["OTEL_LOGS_EXPORTER"] = nil }),
         ]
@@ -184,7 +207,28 @@ final class ConnectHooksTests: XCTestCase {
         let upgraded = try XCTUnwrap(try hooks.connect(old))
         XCTAssertEqual(hooks.status(of: upgraded), .connected)
         XCTAssertEqual(ourCommands(upgraded, event: "PermissionRequest"), [hooks.approveCommand])
+        XCTAssertEqual(ourCommands(upgraded, event: "Stop"), [hooks.replyCommand])
         XCTAssertEqual((upgraded["env"] as? [String: Any])?["DOTNET_ROOT"] as? String, "/x")
+    }
+
+    func testInstallWithoutTheReplyCommandReadsOutdatedAndUpgradesOnlyStop() throws {
+        let original = try object(#"{"env": {"KEEP": "1"}, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done", "timeout": 3}]}]}}"#)
+        var previous = try XCTUnwrap(try hooks.connect(original))
+        var hooksObject = try XCTUnwrap(previous["hooks"] as? [String: Any])
+        hooksObject["Stop"] = [["hooks": [["type": "command", "command": "say done", "timeout": 3]]],
+                               ["hooks": [["type": "command", "command": hooks.hookCommand, "timeout": 5]]]]
+        previous["hooks"] = hooksObject
+        XCTAssertEqual(hooks.status(of: previous), .outdated)
+
+        let upgraded = try XCTUnwrap(try hooks.connect(previous))
+        XCTAssertEqual(hooks.status(of: upgraded), .connected)
+        let upgradedHooks = try XCTUnwrap(upgraded["hooks"] as? [String: Any])
+        assertSame(upgradedHooks["Stop"], [["hooks": [["type": "command", "command": "say done", "timeout": 3]]],
+                                           ["hooks": [hooks.hook(for: "Stop")]]])
+        for event in ClaudeCodeHooks.events where event != "Stop" {
+            assertSame(upgradedHooks[event], hooksObject[event])
+        }
+        assertSame(hooks.disconnect(upgraded), original)
     }
 
     func testDisconnectAfterAPortChangeRemovesTheOldEndpoint() throws {
@@ -287,6 +331,49 @@ final class CopilotHooksFileTests: XCTestCase {
         events["errorOccurred"] = nil
         fewer["hooks"] = events
         XCTAssertEqual(hooks.status(ofFile: try JSONSerialization.data(withJSONObject: fewer)), .outdated)
+
+        func agentStop(_ hook: [String: Any]) throws -> Data {
+            var file = hooks.file
+            var events = try XCTUnwrap(file["hooks"] as? [String: Any])
+            events["agentStop"] = [hook]
+            file["hooks"] = events
+            return try JSONSerialization.data(withJSONObject: file)
+        }
+        let generic = hooks.command(for: "sessionStart").replacingOccurrences(of: "/sessionStart", with: "/agentStop")
+        let reply = hooks.hook(for: "agentStop")
+        let cases: [(String, [String: Any])] = [
+            ("before Away mode", ["type": "command", "bash": generic]),
+            ("no timeout", ["type": "command", "bash": hooks.replyCommand]),
+            ("generic with timeout", ["type": "command", "bash": generic, "timeoutSec": 1800]),
+            ("timeout", reply.merging(["timeoutSec": 30]) { $1 }),
+            ("bool timeout", reply.merging(["timeoutSec": true]) { $1 }),
+        ]
+        for (name, hook) in cases {
+            XCTAssertEqual(hooks.status(ofFile: try agentStop(hook)), .outdated, name)
+        }
+        XCTAssertEqual(hooks.status(ofFile: try agentStop(reply)), .connected)
+    }
+
+    func testFileContentsParseBackToTheFile() throws {
+        for port in [4318, 5000] {
+            let hooks = CopilotCLIHooks(port: port)
+            let parsed = try XCTUnwrap(try JSONSerialization.jsonObject(with: hooks.fileContents) as? [String: Any])
+            XCTAssertTrue(SettingsJSON.same(parsed, hooks.file))
+            let agentStop = try XCTUnwrap(((parsed["hooks"] as? [String: Any])?["agentStop"] as? [Any])?.first
+                                          as? [String: Any])
+            XCTAssertEqual(agentStop["timeoutSec"] as? Int, TurnReply.hookTimeout)
+            XCTAssertEqual(agentStop["bash"] as? String, hooks.replyCommand)
+            XCTAssertTrue(hooks.replyCommand.contains("http://127.0.0.1:\(port)/hooks/copilot-cli/agentStop "))
+        }
+        let before = try Fixture.text("install_sh_copilot_hooks.json")
+            .replacingOccurrences(of: #"curl -sf -m 1790 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' "#,
+                                  with: #"curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' "#)
+            .replacingOccurrences(of: "agentStop || true\",\n        \"timeoutSec\": 1800", with: "agentStop || true\"")
+        XCTAssertFalse(before.contains("timeoutSec"))
+        XCTAssertFalse(before.contains("X-Hoply-Reply"))
+        XCTAssertEqual(CopilotCLIHooks(port: 4318).status(ofFile: Data(before.utf8)), .outdated,
+                       "the file Hoply wrote before Away mode")
+        XCTAssertFalse(CopilotCLIHooks.events.contains("subagentStop"))
     }
 
     func testConnectableAgents() {

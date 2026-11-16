@@ -34,6 +34,10 @@ struct SettingsView: View {
 
                 NotificationSettings(settings: live)
 
+                if model.iCloudLink.isAvailable {
+                    PhoneSettings()
+                }
+
                 ModelServerSettings()
 
                 HistorySettings()
@@ -472,8 +476,18 @@ struct NotificationSettings: View {
                 }
                 .disabled(!settings.notificationsEnabled)
                 Divider()
-                SwitchRow("Approve Claude Code prompts from Hoply", isOn: $settings.approveFromHoply)
+                SwitchRow("Approve Claude Code prompts from Hoply", isOn: Binding(
+                    get: { settings.approveFromHoply || settings.awayMode },
+                    set: { settings.approveFromHoply = $0 }
+                ))
+                .disabled(settings.awayMode)
                 Hint("Adds Allow and Deny for Claude Code's permission prompts to the panel and its notifications, for that one request. The terminal prompt stays up; whichever answers first wins. Needs Claude Code connected under Agents; press Update there if it asks.")
+                Divider()
+                SwitchRow("Away mode", isOn: $settings.awayMode)
+                Hint(AwayText.settingsHint)
+                if let problem = model.awayProblem {
+                    AwaySetupRow(problem: problem)
+                }
                 Divider()
                 Text("Muted projects")
                 if settings.mutedProjectRoots.isEmpty {

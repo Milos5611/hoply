@@ -15,6 +15,17 @@ SIGN_IDENTITY="${HOPLY_SIGN_IDENTITY:--}"
 ARCHS=()
 [ "${HOPLY_UNIVERSAL:-0}" = 1 ] && ARCHS=(--arch arm64 --arch x86_64)
 
+PROFILE="${HOPLY_PROVISION_PROFILE:-}"
+ENTITLEMENTS=""
+if [ -n "$PROFILE" ]; then
+  [ -f "$PROFILE" ] || { echo "HOPLY_PROVISION_PROFILE: no such file: $PROFILE" >&2; exit 1; }
+  [ "$SIGN_IDENTITY" != "-" ] ||
+    { echo "HOPLY_PROVISION_PROFILE needs a signing identity (HOPLY_SIGN_IDENTITY); ad-hoc builds can't carry iCloud entitlements" >&2; exit 1; }
+  ENTITLEMENTS="$(mktemp -t hoply-entitlements)"
+  scripts/profile-entitlements.sh "$PROFILE" iCloud.com.coolcraftcoders.hoply \
+    "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Sources/Hoply/Info.plist)" > "$ENTITLEMENTS"
+fi
+
 swift build -c release --product Hoply ${ARCHS[@]+"${ARCHS[@]}"} >&2
 bin="$(swift build -c release --show-bin-path ${ARCHS[@]+"${ARCHS[@]}"})/Hoply"
 
@@ -23,6 +34,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$bin" "$app/Contents/MacOS/Hoply"
 cp Sources/Hoply/Info.plist "$app/Contents/Info.plist"
+[ -z "$PROFILE" ] || cp "$PROFILE" "$app/Contents/embedded.provisionprofile"
 
 # otool lists a universal binary's rpaths once per architecture; /usr/lib/swift is the OS's Swift runtime.
 otool -l "$app/Contents/MacOS/Hoply" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH") } rpath && $1 == "path" { print $2 }' |
@@ -58,14 +70,19 @@ fi
 
 sign() {
   if [ "${HOPLY_HARDENED:-0}" = 1 ]; then
-    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$1" >&2
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$@" >&2
   else
-    codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$1" >&2
+    codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$@" >&2
   fi
 }
 
 sign "$sparkle/Versions/B/Autoupdate"
 sign "$sparkle/Versions/B/Updater.app"
 sign "$sparkle"
-sign "$app"
+if [ -n "$ENTITLEMENTS" ]; then
+  sign --entitlements "$ENTITLEMENTS" "$app"
+  echo "Hoply: signed with the iCloud entitlements of $PROFILE" >&2
+else
+  sign "$app"
+fi
 echo "$app"

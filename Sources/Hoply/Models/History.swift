@@ -82,6 +82,7 @@ final class History {
     private(set) var progress = IngestProgress()
     private(set) var sessionTotals: [SessionKey: LedgerTotals] = [:]
     private(set) var today: [AgentSource: LedgerTotals] = [:]
+    private(set) var week: LedgerTotals?
     private(set) var contextWindows: [SessionKey: ContextWindow] = [:]
     private(set) var subagentCounts: [SessionKey: Int] = [:]
     private(set) var insights: [SessionKey: SessionInsight] = [:]
@@ -175,6 +176,7 @@ final class History {
             } catch {
                 guard let self, generation == self.openGeneration else { return }
                 status = .unavailable("History is off: \(Self.describe(error))")
+                week = nil
                 pendingUsage = []
                 pendingPrompts = []
                 showCodexLimits([:])
@@ -200,6 +202,7 @@ final class History {
         }
         ledger = nil
         progress = IngestProgress()
+        week = nil
         codexLimitsGeneration += 1
         showCodexLimits([:])
         open(configuration)
@@ -623,11 +626,13 @@ final class History {
             let totals = try await reader.sessionTotals(for: keys)
             let titles = try await reader.sessionTitles(for: keys)
             let today = try await reader.todayBySource(now: now)
+            let week = try await reader.totalsBySource(in: StoreReader.days(7, endingAt: now)).values.reduce(.zero, +)
             let windows = try await ledger.contextWindows(for: sessions)
             let subagents = try await ledger.subagentCounts(for: keys)
             guard generation == refreshGeneration else { return }
             if totals != sessionTotals { sessionTotals = totals }
             if today != self.today { self.today = today }
+            if week != self.week { self.week = week }
             if windows != contextWindows { contextWindows = windows }
             if subagents != subagentCounts { subagentCounts = subagents }
             refreshedDay = Calendar.current.startOfDay(for: now)
@@ -821,6 +826,7 @@ extension History {
         progress = preview.progress
         sessionTotals = preview.sessionTotals
         today = preview.today
+        week = preview.overview.totals.last7Days
         overview = preview.overview
         spending = preview.spending
         spendingRange = preview.spending.range

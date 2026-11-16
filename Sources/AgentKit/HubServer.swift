@@ -16,16 +16,26 @@ public final class HubServer: @unchecked Sendable {
     public var onNote: (@Sendable (String) -> Void)?
     public var onApproval: (@Sendable (ApprovalRequest, [AgentEvent]) -> Void)?
     public var onApprovalClosed: (@Sendable (String) -> Void)?
+    public var onReply: (@Sendable (TurnReplyRequest, [AgentEvent]) -> Void)?
+    public var onReplyClosed: (@Sendable (String) -> Void)?
 
     private let queue = DispatchQueue(label: "hoply.hub")
     private let router = HubRouter()
     private var listener: NWListener?
     private var holdsApprovals = false
-    private var held: [String: HeldApproval] = [:]
+    private var holdsReplies = false
+    private var held: [String: Held] = [:]
 
-    private struct HeldApproval {
+    private enum Hold {
+        case approval
+        case reply
+    }
+
+    private struct Held {
+        let hold: Hold
         let connection: NWConnection
         let expiry: DispatchWorkItem
+        let release: HTTPResponse
     }
 
     public init() {}
@@ -47,18 +57,32 @@ public final class HubServer: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             holdsApprovals = enabled
-            if !enabled { releaseAll() }
+            if !enabled { releaseAll(.approval) }
+        }
+    }
+
+    public func setHoldsReplies(_ enabled: Bool) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            holdsReplies = enabled
+            if !enabled { releaseAll(.reply) }
         }
     }
 
     public func resolve(_ id: String, _ decision: ApprovalDecision) {
-        queue.async { [weak self] in self?.finish(id, with: PermissionApproval.response(decision), notify: false) }
+        queue.async { [weak self] in
+            self?.finish(id, with: PermissionApproval.response(decision), only: .approval, notify: false)
+        }
+    }
+
+    public func answer(_ id: String, text: String?) {
+        queue.async { [weak self] in self?.finish(id, with: TurnReply.response(text), only: .reply, notify: false) }
     }
 
     public func release(_ ids: [String]) {
         guard !ids.isEmpty else { return }
         queue.async { [weak self] in
-            for id in ids { self?.finish(id, with: PermissionApproval.response(nil), notify: false) }
+            for id in ids { self?.finish(id, notify: false) }
         }
     }
 
@@ -137,8 +161,15 @@ public final class HubServer: @unchecked Sendable {
             case .complete(let request):
                 let outcome = self.router.handle(request)
                 if let approval = outcome.approval, self.holdsApprovals, let onApproval = self.onApproval {
-                    self.hold(approval, on: connection)
+                    self.hold(approval.id, .approval, on: connection, limit: PermissionApproval.holdLimit,
+                              release: PermissionApproval.response(nil))
                     onApproval(approval, outcome.events)
+                    return
+                }
+                if let reply = outcome.reply, self.holdsReplies, let onReply = self.onReply {
+                    self.hold(reply.id, .reply, on: connection, limit: TurnReply.holdLimit,
+                              release: TurnReply.response(nil))
+                    onReply(reply, outcome.events)
                     return
                 }
                 if !outcome.events.isEmpty { self.onEvents?(outcome.events) }
@@ -164,13 +195,12 @@ public final class HubServer: @unchecked Sendable {
         }
     }
 
-    private func hold(_ approval: ApprovalRequest, on connection: NWConnection) {
-        let expiry = DispatchWorkItem { [weak self] in
-            self?.finish(approval.id, with: PermissionApproval.response(nil), notify: true)
-        }
-        held[approval.id] = HeldApproval(connection: connection, expiry: expiry)
-        queue.asyncAfter(deadline: .now() + PermissionApproval.holdLimit, execute: expiry)
-        watchForClose(connection, id: approval.id)
+    private func hold(_ id: String, _ hold: Hold, on connection: NWConnection, limit: TimeInterval,
+                      release: HTTPResponse) {
+        let expiry = DispatchWorkItem { [weak self] in self?.finish(id, notify: true) }
+        held[id] = Held(hold: hold, connection: connection, expiry: expiry, release: release)
+        queue.asyncAfter(deadline: .now() + limit, execute: expiry)
+        watchForClose(connection, id: id)
     }
 
     // The hook's curl closes the socket when Claude Code cancels the hook; nothing is left to answer then.
@@ -181,23 +211,31 @@ public final class HubServer: @unchecked Sendable {
                 if let entry = self.held.removeValue(forKey: id) {
                     entry.expiry.cancel()
                     entry.connection.cancel()
+                    self.closed(id, entry.hold)
                 }
-                self.onApprovalClosed?(id)
             } else {
                 self.watchForClose(connection, id: id)
             }
         }
     }
 
-    private func finish(_ id: String, with response: HTTPResponse, notify: Bool) {
-        guard let entry = held.removeValue(forKey: id) else { return }
+    private func finish(_ id: String, with response: HTTPResponse? = nil, only hold: Hold? = nil, notify: Bool) {
+        guard let entry = held[id], hold == nil || entry.hold == hold else { return }
+        held[id] = nil
         entry.expiry.cancel()
-        send(response, on: entry.connection)
-        if notify { onApprovalClosed?(id) }
+        send(response ?? entry.release, on: entry.connection)
+        if notify { closed(id, entry.hold) }
     }
 
-    private func releaseAll() {
-        for id in Array(held.keys) { finish(id, with: PermissionApproval.response(nil), notify: true) }
+    private func closed(_ id: String, _ hold: Hold) {
+        switch hold {
+        case .approval: onApprovalClosed?(id)
+        case .reply: onReplyClosed?(id)
+        }
+    }
+
+    private func releaseAll(_ hold: Hold? = nil) {
+        for (id, entry) in held where hold == nil || entry.hold == hold { finish(id, notify: true) }
     }
 
     private func send(_ response: HTTPResponse, on connection: NWConnection) {

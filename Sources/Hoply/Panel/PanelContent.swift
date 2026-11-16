@@ -29,7 +29,9 @@ struct PanelSections: View {
                 if !grouping.waiting.isEmpty {
                     WaitingCard(grouping: grouping)
                 }
-                if let nudge = model.connections.nudge {
+                if let problem = model.awayProblem {
+                    AwayNoticeCard(problem: problem)
+                } else if let nudge = model.connections.nudge {
                     AgentNudgeCard(nudge: nudge)
                 }
                 ForEach(grouping.projects) { group in

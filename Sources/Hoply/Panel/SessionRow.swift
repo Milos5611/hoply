@@ -30,6 +30,16 @@ struct SessionRow: View {
     var place: SessionPlace?
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            row
+            ForEach(model.replies(for: session.key)) { reply in
+                ReplyStrip(reply: reply)
+                    .padding(.leading, 40)
+            }
+        }
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: 10) {
             SourceBadge(source: session.key.source)
             VStack(alignment: .leading, spacing: 2) {
@@ -148,6 +158,7 @@ struct SessionRow: View {
     }
 
     private var detail: String? {
+        if status != .permission, !model.replies(for: session.key).isEmpty { return nil }
         switch status {
         case .permission: return session.lastMessage ?? "Waiting for your approval"
         case .input: return session.lastMessage ?? "Asked you a question"

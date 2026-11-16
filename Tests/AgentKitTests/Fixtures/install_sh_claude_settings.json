@@ -23,8 +23,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/claude-code || true # hoply",
-            "timeout": 5
+            "command": "curl -sf -m 1790 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/claude-code || true # hoply",
+            "statusMessage": "Waiting for your reply in Hoply",
+            "timeout": 1800
           }
         ]
       }

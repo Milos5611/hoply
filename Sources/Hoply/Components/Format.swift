@@ -106,6 +106,33 @@ enum Format {
         ModelName.display(id)
     }
 
+    static let tailMark = "… "
+
+    static func tail(_ text: String, characters limit: Int, lines maxLines: Int) -> String {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var kept: [String] = []
+        var used = 0
+        var cut = false
+        for line in lines.reversed() where kept.count < maxLines {
+            let room = limit - used
+            if line.count <= room {
+                kept.insert(line, at: 0)
+                used += line.count
+                continue
+            }
+            if kept.isEmpty || room >= 40 {
+                let window = line.suffix(room)
+                let start = window.firstIndex(where: \.isWhitespace).map { window.index(after: $0) } ?? window.startIndex
+                kept.insert(String(window[start...]), at: 0)
+                cut = true
+            }
+            break
+        }
+        let truncated = cut || kept.count < lines.count
+        return (truncated ? tailMark : "") + kept.joined(separator: "\n")
+    }
+
     static func bytes(_ count: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }

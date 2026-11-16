@@ -52,6 +52,39 @@ on set `SURequireSignedFeed`, so they reject a feed without a valid signature; o
 - A bad feed signature stops every copy from 0.1.6 on from updating, which is why the workflow checks the published
   file.
 
+## iCloud link (CloudKit)
+
+The iCloud link needs entitlements that only a provisioning profile grants. With `HOPLY_PROVISION_PROFILE` set to a
+`.provisionprofile`, `scripts/build-app.sh` embeds it as `Contents/embedded.provisionprofile` and signs the app with
+entitlements taken from the profile itself by `scripts/profile-entitlements.sh`: the application and team identifiers,
+the container `iCloud.com.coolcraftcoders.hoply`, CloudKit, the push environment, and the container environment
+(`Production` from a Developer ID profile, `Development` from a development profile). It refuses a profile without
+that container, CloudKit or the environment, one made for another App ID, and an ad-hoc identity. `package.sh` passes
+the variable on and prints the signed entitlements.
+
+`release.yml` writes the `DEVELOPER_ID_PROFILE_BASE64` secret to a temp file and sets the variable only when the
+secret exists. Without it the release still builds, signs and ships, without the iCloud link, and the run shows a
+"no iCloud link" warning. Builds without a profile (ad hoc, `install.sh`, `swift run`, contributors) have no iCloud
+entitlement, so Hoply never calls CloudKit there.
+
+**Deploy the CloudKit schema to Production before a release uses it.** The Development environment creates record
+types and fields the first time a development build saves them; Production never does, so a release build's first
+write fails until the schema is deployed. In CloudKit Console (https://icloud.developer.apple.com) → the container →
+Schema, Development: check the record types `Snapshot`, `Request` and `Answer`, each with `payload` (encrypted
+bytes), `kind` (string; not on `Snapshot`), `createdAt` (date) and `version` (int64), adding any a development build
+hasn't created yet (`Answer` is written by the phone). Then Deploy Schema Changes to Production. A field never moves
+between plain and encrypted; a change of meaning gets a new field name.
+
+To try the link on this Mac, create an Apple Development certificate and a macOS App Development profile for the same
+App ID that includes this Mac (Devices), then:
+
+```bash
+HOPLY_SIGN_IDENTITY="Apple Development: <name> (<id>)" HOPLY_PROVISION_PROFILE=/path/to/Hoply_Dev.provisionprofile \
+  scripts/install.sh
+```
+
+That build talks to the container's Development environment.
+
 ## One-time setup
 
 1. Join the Apple Developer Program (https://developer.apple.com/programs/enroll/, 99 USD a year; an individual
@@ -99,6 +132,7 @@ on set `SURequireSignedFeed`, so they reject a feed without a valid signature; o
    | `SPARKLE_PUBLIC_KEY` | the public key from step 5 |
    | `SPARKLE_PRIVATE_KEY` | the contents of the exported private key file from step 5 |
    | `TAP_TOKEN` | the fine-grained token from step 6 |
+   | `DEVELOPER_ID_PROFILE_BASE64` | optional, the iCloud link (step 7): `base64 -i Hoply_Developer_ID.provisionprofile \| pbcopy` |
 
 5. Create the update signing key (Sparkle, EdDSA) once, after a `swift build` has fetched Sparkle:
    `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account hoply`. It stores the private key in your login
@@ -111,6 +145,14 @@ on set `SURequireSignedFeed`, so they reject a feed without a valid signature; o
    access → Only select repositories → `Milos5611/homebrew-hoply`; Permissions → Repository → Contents: Read and write
    (Metadata: Read-only comes with it). Save it as the `TAP_TOKEN` secret here, and renew it before its expiry date or
    the cask push fails after the release is published.
+7. Optional, for the iCloud link (the phone app's connection through the user's own iCloud): at
+   https://developer.apple.com/account/resources → Identifiers, give the explicit App ID `com.coolcraftcoders.hoply`
+   the iCloud capability (CloudKit, container `iCloud.com.coolcraftcoders.hoply`, created under iCloud Containers)
+   and Push Notifications. Then Profiles → + → Developer ID → that App ID → the Developer ID Application certificate
+   from step 2 → Generate, download the `.provisionprofile` and save it as `DEVELOPER_ID_PROFILE_BASE64`. A profile
+   names its certificate and App ID: after renewing the certificate or changing the App ID's capabilities, make a new
+   profile and replace the secret. Before the first release with it, deploy the CloudKit schema (see iCloud link
+   above).
 
 ## Release
 
@@ -148,7 +190,8 @@ NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… SPARKLE_PUBLIC_KEY=�
 ```
 
 It signs the DMG and the appcast with the Keychain key unless `SPARKLE_PRIVATE_KEY` is set; `HOPLY_REPO`,
-`HOPLY_FEED_URL` and `HOPLY_DOWNLOAD_URL` override the URLs above. Without `SPARKLE_PUBLIC_KEY` it writes no appcast
+`HOPLY_FEED_URL` and `HOPLY_DOWNLOAD_URL` override the URLs above. Add `HOPLY_PROVISION_PROFILE=<Developer ID
+profile>` for a build with the iCloud link. Without `SPARKLE_PUBLIC_KEY` it writes no appcast
 and the app never checks for updates.
 
 ## After a release

@@ -3,6 +3,6 @@
   "userPromptSubmitted": {"sessionId": "cp-9", "timestamp": 1794228412042, "cwd": "/Users/dev/Project/yasm-backend", "prompt": "Also add tests"},
   "preToolUse": {"sessionId": "cp-9", "timestamp": 1794228413042, "cwd": "/Users/dev/Project/yasm-backend", "toolName": "bash", "toolArgs": "{\"command\":\"dotnet test\"}"},
   "postToolUse": {"sessionId": "cp-9", "timestamp": 1794228414042, "cwd": "/Users/dev/Project/yasm-backend", "toolName": "bash", "toolArgs": "{}", "toolResult": {"resultType": "success"}},
-  "agentStop": {"sessionId": "cp-9", "timestamp": 1794228415042, "cwd": "/Users/dev/Project/yasm-backend", "transcriptPath": "/tmp/t.jsonl", "stopReason": "end_turn"},
+  "agentStop": {"sessionId":"cp-9","timestamp":1794830804913,"cwd":"/Users/x/proj","transcriptPath":"/Users/x/.copilot/session-state/cp-9/events.jsonl","stopReason":"end_turn","stop_hook_active":false},
   "sessionEnd": {"sessionId": "cp-9", "timestamp": 1794228416042, "cwd": "/Users/dev/Project/yasm-backend", "reason": "user_exit"}
 }

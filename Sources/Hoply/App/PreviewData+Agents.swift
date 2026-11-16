@@ -29,6 +29,14 @@ extension PreviewData {
         [.copilotCLI: AgentConnections.Notice(text: "~/.copilot/hooks/hoply.json can't be written: Permission denied", isError: true)]
     }
 
+    static let awayOneOutdated: [ConnectableAgent: ConnectionStatus] = [
+        .claudeCode: .connected, .copilotCLI: .outdated, .codexCLI: .connected,
+    ]
+
+    static let awayTwoOutdated: [ConnectableAgent: ConnectionStatus] = [
+        .claudeCode: .outdated, .copilotCLI: .outdated, .codexCLI: .connected,
+    ]
+
     static let connectionsNone: [ConnectableAgent: ConnectionStatus] = [
         .claudeCode: .notConnected, .copilotCLI: .notConnected, .codexCLI: .notConnected,
     ]

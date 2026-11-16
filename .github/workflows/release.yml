@@ -26,6 +26,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       HAS_SIGNING: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8_BASE64 != '' }}
+      HAS_PROFILE: ${{ secrets.DEVELOPER_ID_PROFILE_BASE64 != '' }}
       HAS_SPARKLE: ${{ secrets.SPARKLE_PUBLIC_KEY != '' && secrets.SPARKLE_PRIVATE_KEY != '' }}
       HAS_TAP: ${{ secrets.TAP_TOKEN != '' }}
     steps:
@@ -73,6 +74,18 @@ jobs:
             echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
             echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
           } >> "$GITHUB_ENV"
+
+      - name: Write the Developer ID provisioning profile
+        if: env.HAS_SIGNING == 'true' && env.HAS_PROFILE == 'true'
+        env:
+          PROFILE_BASE64: ${{ secrets.DEVELOPER_ID_PROFILE_BASE64 }}
+        run: |
+          echo "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.provisionprofile"
+          echo "HOPLY_PROVISION_PROFILE=$RUNNER_TEMP/developer-id.provisionprofile" >> "$GITHUB_ENV"
+
+      - name: Explain a build without the iCloud link
+        if: env.HAS_SIGNING == 'true' && env.HAS_PROFILE != 'true'
+        run: echo "::warning::No DEVELOPER_ID_PROFILE_BASE64 secret, so this build has no iCloud link (docs/RELEASING.md)."
 
       - name: Release notes
         if: startsWith(github.ref, 'refs/tags/v')
@@ -172,4 +185,4 @@ jobs:
         if: always() && env.HAS_SIGNING == 'true'
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
-          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-key.p8"
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/developer-id.provisionprofile"

@@ -26,7 +26,7 @@ enum Snapshot {
                 model.showingSettings = true
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-\(name).png"))
-                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_390),
+                try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.frame(width: 448, height: 2_700),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-full-\(name).png"))
                 for (state, statuses, notices) in [("update", PreviewData.connectionsToUpdate, [:]),
@@ -74,6 +74,19 @@ enum Snapshot {
                                .padding(12).frame(width: 448),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-palette-\(name).png"))
+                for (state, available, status) in PreviewData.iCloudLinkStates(now: now) {
+                    var linked = PreviewData.settings
+                    linked.iCloudLink = available
+                    model.showPreview(settings: linked)
+                    model.iCloudLink.show(available: available, status: status,
+                                          lastSync: status == .running ? now - 12 : nil)
+                    try render(PhoneSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                                   .padding(12).frame(width: 448),
+                               model: model, appearance: looks, surface: popover,
+                               to: directory.appendingPathComponent("panel-settings-iphone-\(state)-\(name).png"))
+                }
+                model.showPreview(settings: PreviewData.settings)
+                model.iCloudLink.show(available: false)
                 for (state, query) in [("empty", ""), ("query", "core"), ("actions", ">"), ("no-results", "zzqx")] {
                     model.palette.show(query: query, sessions: PreviewData.paletteSessions(now: now),
                                        projects: PreviewData.paletteProjects(now: now))
@@ -237,6 +250,31 @@ enum Snapshot {
                 approving.showPreview(approvals: PreviewData.approvals(now: now), events: PreviewData.approvalEvents(now: now))
                 try render(PanelView(), model: approving, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-approval-\(name).png"))
+                let away = AppModel.preview(now: now)
+                away.showPreview(settings: PreviewData.awaySettings)
+                away.showPreview(replies: PreviewData.replies(now: now), events: PreviewData.replyEvents(now: now))
+                try render(VStack(spacing: 0) { PanelHeader(); PanelSections().padding(.horizontal, 12); PanelFooter() }
+                               .frame(width: 448),
+                           model: away, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-reply-full-\(name).png"))
+                for id in ["schema", "notes"] { away.dismiss(SessionKey(source: .claudeCode, id: id)) }
+                away.dismiss(PreviewData.copilotReplySession)
+                try render(PanelView(), model: away, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-reply-\(name).png"))
+                for (state, statuses) in [("", PreviewData.connectionStatuses), ("-update", PreviewData.awayTwoOutdated)] {
+                    away.connections.show(statuses: statuses)
+                    try render(NotificationSettings(settings: .constant(PreviewData.awaySettings))
+                                   .toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                                   .padding(12).frame(width: 448),
+                               model: away, appearance: looks, surface: popover,
+                               to: directory.appendingPathComponent("panel-settings-away\(state)-\(name).png"))
+                }
+                let awayBlocked = AppModel.preview(now: now)
+                awayBlocked.showPreview(settings: PreviewData.awaySettings)
+                awayBlocked.connections.show(statuses: PreviewData.awayOneOutdated)
+                try render(VStack(spacing: 0) { PanelHeader(); PanelSections().padding(.horizontal, 12) }.frame(width: 448),
+                           model: awayBlocked, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-away-update-\(name).png"))
                 try render(PanelView(), model: AppModel.firstRunPreview(), appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-agents-connect-\(name).png"))
                 let outdated = AppModel.preview(now: now)

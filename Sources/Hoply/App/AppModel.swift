@@ -3,6 +3,7 @@ import AgentSystem
 import AppKit
 import Foundation
 import Observation
+import os
 import ServiceManagement
 
 @MainActor
@@ -22,6 +23,7 @@ final class AppModel {
     private(set) var editors: [Editor] = []
     private(set) var defaultEditorID = ""
     private(set) var approvals: [ApprovalRequest] = []
+    private(set) var replies: [TurnReplyRequest] = []
     var showingSettings = false
     let history = History()
     let modelServers: ModelServers
@@ -32,6 +34,7 @@ final class AppModel {
     let projectEdits: ProjectEdits
     let connections: AgentConnections
     let updates: Updates
+    let iCloudLink: ICloudLink
     @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
     @ObservationIgnored var panelOpener: (() -> Void)?
@@ -42,6 +45,8 @@ final class AppModel {
     @ObservationIgnored private let notifier = Notifier()
     @ObservationIgnored private var policy = NotificationPolicy()
     @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
+    @ObservationIgnored private let keepAwake = KeepAwake()
+    @ObservationIgnored private let replyReader = OSAllocatedUnfairLock(initialState: CopilotLastMessageReader())
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var resolvingCwds: Set<String> = []
     @ObservationIgnored private var unresolvedCwds: Set<String> = []
@@ -78,6 +83,10 @@ final class AppModel {
         editors.first { $0.id == defaultEditorID } ?? editors.first
     }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+    var awayProblem: AwayProblem? {
+        guard settings.awayMode else { return nil }
+        return AwayProblem(statuses: connections.statuses)
+    }
 
     init(live: Bool = true) {
         isLive = live
@@ -89,21 +98,26 @@ final class AppModel {
         projectEdits = ProjectEdits(history: history)
         connections = AgentConnections(live: live)
         updates = Updates(live: live)
+        iCloudLink = ICloudLink(live: live)
         guard live else {
             settings = AppSettings()
             palette.model = self
+            iCloudLink.model = self
             modelServers.settings = { [weak self] in self?.settings ?? AppSettings() }
             connections.settings = { [weak self] in self?.settings ?? AppSettings() }
             return
         }
         settings = AppSettings.load()
         palette.model = self
+        iCloudLink.model = self
         hotKey.onPress = { [weak self] in self?.togglePalette() }
         hotKey.update(enabled: settings.paletteEnabled, combo: settings.paletteHotKey)
         policy.preferences = NotificationPreferences(settings: settings)
         history.setPlan(settings)
         notifier.onOpen = { [weak self] target in self?.open(target) }
         notifier.onDecision = { [weak self] id, decision in self?.decide(id, decision) }
+        notifier.onReply = { [weak self] id, text in self?.reply(id, text: text) }
+        notifier.onFinishReply = { [weak self] id in self?.finishReply(id) }
         notifier.activate()
 
         server.onEvents = { [weak self] events in
@@ -129,9 +143,28 @@ final class AppModel {
             }
         }
         server.onApprovalClosed = { [weak self] id in
-            Task { @MainActor in self?.approvals.removeAll { $0.id == id } }
+            Task { @MainActor in
+                self?.approvals.removeAll { $0.id == id }
+                self?.iCloudLink.changed()
+            }
         }
-        server.setHoldsApprovals(settings.approveFromHoply)
+        setReplyReader(for: settings)
+        let replyReader = replyReader
+        // Same order as approvals: the turn-end banner its events would post must see the reply and stay quiet.
+        server.onReply = { [weak self] reply, events in
+            let reply = replyReader.withLock { $0 }.completing(reply)
+            Task { @MainActor in
+                self?.replies.append(reply)
+                self?.ingest(events)
+                self?.notifyReply(reply)
+            }
+        }
+        server.onReplyClosed = { [weak self] id in
+            Task { @MainActor in self?.dropReplies([id]) }
+        }
+        server.setHoldsApprovals(Self.holdsApprovals(settings))
+        server.setHoldsReplies(settings.awayMode)
+        followAwayMode()
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
         history.onLiveModels = { [weak self] in self?.applyLiveModels() }
@@ -167,6 +200,7 @@ final class AppModel {
         devServers.start()
         cleanup.context = { [weak self] in self?.cleanupContext }
         cleanup.start()
+        iCloudLink.follow(settings.iCloudLink)
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshClaudeLimits()
@@ -188,6 +222,7 @@ final class AppModel {
         }
         history.recordStateChanges(changes)
         releaseApprovals(PermissionApproval.answered(approvals, by: events))
+        releaseReplies(TurnReply.answered(replies, by: events))
         history.tail(Set(events.compactMap(\.transcriptPath)))
         let copilotSessions = Set(events.filter { $0.key.source == .copilotCLI && $0.fromHook }.map(\.key.id))
         if !copilotSessions.isEmpty {
@@ -215,6 +250,7 @@ final class AppModel {
         history.track(sessions)
         resolveProjects()
         watchGit()
+        iCloudLink.changed()
     }
 
     private func watchGit() {
@@ -339,6 +375,7 @@ final class AppModel {
         }
         let dropped = Set(sweep.dropped.map(\.key))
         releaseApprovals(approvals.filter { dropped.contains($0.key) }.map(\.id))
+        releaseReplies(replies.filter { dropped.contains($0.key) }.map(\.id))
         history.closeStateSpans(for: sweep.dropped.map(\.key))
         activity.advance(to: now)
         modelServers.advance(to: now)
@@ -354,6 +391,7 @@ final class AppModel {
 
     func dismiss(_ key: SessionKey) {
         releaseApprovals(approvals.filter { $0.key == key }.map(\.id))
+        releaseReplies(replies.filter { $0.key == key }.map(\.id))
         board.dismiss(key)
         perform(policy.sessionDismissed(key))
         history.closeStateSpans(for: [key])
@@ -370,6 +408,8 @@ final class AppModel {
         guard !actions.isEmpty else { return }
         notifier.withdraw(actions.withdraw)
         for request in actions.post {
+            if let key = request.session, request.kind == .yourTurn || request.cause == .input,
+               replies.contains(where: { $0.key == key }) { continue }
             let approval = request.kind == .permission ? request.session.flatMap { approvals(for: $0).last } : nil
             notifier.post(request, approval: approval)
         }
@@ -385,12 +425,86 @@ final class AppModel {
         guard approvals.contains(where: { $0.id == id }) else { return }
         approvals.removeAll { $0.id == id }
         server.resolve(id, decision)
+        iCloudLink.changed()
     }
 
     private func releaseApprovals(_ ids: [String]) {
         guard !ids.isEmpty else { return }
         approvals.removeAll { ids.contains($0.id) }
         server.release(ids)
+    }
+
+    // MARK: - Away mode
+
+    func replies(for key: SessionKey) -> [TurnReplyRequest] {
+        replies.filter { $0.key == key }
+    }
+
+    func reply(_ id: String, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, replies.contains(where: { $0.id == id }) else { return }
+        dropReplies([id])
+        server.answer(id, text: text)
+    }
+
+    func finishReply(_ id: String) {
+        guard replies.contains(where: { $0.id == id }) else { return }
+        dropReplies([id])
+        server.answer(id, text: nil)
+    }
+
+    func setAwayMode(_ enabled: Bool) {
+        update { $0.awayMode = enabled }
+    }
+
+    private func releaseReplies(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        dropReplies(ids)
+        server.release(ids)
+    }
+
+    private func dropReplies(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        replies.removeAll { ids.contains($0.id) }
+        notifier.withdraw(ids.map(Notifier.replyNotificationID))
+        iCloudLink.changed()
+    }
+
+    private func notifyReply(_ reply: TurnReplyRequest) {
+        guard replies.contains(where: { $0.id == reply.id }) else { return }
+        let now = Date()
+        let session = session(reply.key)
+        let project = session.flatMap(project(of:))
+        guard policy.preferences.enabled, !policy.isQuiet(at: now),
+              !(session.map { policy.isMuted($0, project: project) } ?? false) else { return }
+        let place = project?.title ?? session?.project
+        let title = ["\(reply.key.source.displayName) finished", place].compactMap { $0 }.joined(separator: " · ")
+        let body = reply.message.map { Format.tail($0, characters: 180, lines: 3) }
+            ?? "Its turn is over. Reply to tell it what to do next."
+        let threadID = project?.root ?? session?.cwd.flatMap { $0.isEmpty ? nil : $0 } ?? reply.key.source.rawValue
+        notifier.withdraw([NotificationPolicy.notificationID(for: reply.key)])
+        notifier.post(NotificationRequest(id: Notifier.replyNotificationID(reply.id), kind: .yourTurn,
+                                          interruption: .active, title: title, body: body, threadID: threadID,
+                                          session: reply.key),
+                      reply: reply, subtitle: session?.title.flatMap { $0 == place ? nil : $0 })
+    }
+
+    private func setReplyReader(for settings: AppSettings) {
+        let reader = CopilotLastMessageReader(settings: settings)
+        replyReader.withLock { $0 = reader }
+    }
+
+    private static func holdsApprovals(_ settings: AppSettings) -> Bool {
+        settings.approveFromHoply || settings.awayMode
+    }
+
+    private func followAwayMode() {
+        guard isLive else { return }
+        if !settings.awayMode {
+            keepAwake.end()
+        } else if !keepAwake.begin() {
+            lastNote = "Away mode couldn't keep this Mac awake"
+        }
     }
 
     func open(_ target: NotificationTarget) {
@@ -404,6 +518,8 @@ final class AppModel {
             openDashboard(.localModel)
         case .update:
             if updates.pending == nil { openPanel() } else { updates.update() }
+        case .panel:
+            openPanel()
         }
     }
 
@@ -548,9 +664,20 @@ final class AppModel {
         if updated.port != old.port {
             server.start(port: UInt16(clamping: updated.port))
         }
-        if updated.approveFromHoply != old.approveFromHoply {
-            server.setHoldsApprovals(updated.approveFromHoply)
-            if !updated.approveFromHoply { approvals = [] }
+        if Self.holdsApprovals(updated) != Self.holdsApprovals(old) {
+            server.setHoldsApprovals(Self.holdsApprovals(updated))
+            if !Self.holdsApprovals(updated) { approvals = [] }
+            iCloudLink.changed()
+        }
+        if updated.awayMode != old.awayMode {
+            server.setHoldsReplies(updated.awayMode)
+            if !updated.awayMode { dropReplies(replies.map(\.id)) }
+            followAwayMode()
+            connections.refresh()
+            iCloudLink.awayModeChanged()
+        }
+        if updated.iCloudLink != old.iCloudLink {
+            iCloudLink.follow(updated.iCloudLink)
         }
         if updated.modelServers != old.modelServers {
             perform(policy.modelServersChanged(updated.modelServers))
@@ -571,6 +698,9 @@ final class AppModel {
         if updated.port != old.port || updated.claudeConfigDir != old.claudeConfigDir
             || updated.copilotHome != old.copilotHome || updated.codexHome != old.codexHome {
             connections.settingsChanged()
+        }
+        if updated.copilotHome != old.copilotHome {
+            setReplyReader(for: updated)
         }
         if updated.claudeConfigDir != old.claudeConfigDir || updated.copilotHome != old.copilotHome
             || updated.codexHome != old.codexHome {
@@ -665,5 +795,10 @@ extension AppModel {
     func showPreview(approvals: [ApprovalRequest], events: [AgentEvent]) {
         ingest(events)
         self.approvals = approvals
+    }
+
+    func showPreview(replies: [TurnReplyRequest], events: [AgentEvent]) {
+        ingest(events)
+        self.replies = replies
     }
 }

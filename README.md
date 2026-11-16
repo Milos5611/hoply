@@ -66,6 +66,9 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
   without one (Settings → Notifications sets the delay, or Always), and quiet hours and per-project mute keep it calm.
 - **Approve from Hoply** (off by default). Allow and Deny buttons for Claude Code permission prompts, in the panel and
   on the notification. Your terminal keeps its own prompt.
+- **Away mode** (off by default). Hoply holds Claude Code and Copilot CLI sessions at the end of each turn, so you can
+  tell the agent what to do next from the panel or the notification's Reply field. Claude Code's permission prompts
+  come to Hoply too, and the Mac stays awake.
 - **Usage history and cost.** API-equivalent cost per project, model, day and agent, from a local database that
   outlives the agents' own records. Copilot's premium requests and AI units come straight from Copilot.
 - **Local model servers.** vLLM, tensorfold, llama.cpp, SGLang, TGI, Ollama, LM Studio and other OpenAI-compatible
@@ -218,6 +221,29 @@ hook: if Settings → Agents shows Claude Code as needing an update, press Updat
 - Copilot CLI and Codex CLI aren't supported: their permission hooks run before their own rules and prompt, so holding
   one would stall every tool call.
 - The Allow button on a notification asks macOS to unlock first.
+
+</details>
+
+<details>
+<summary><b>Away mode</b></summary>
+
+Settings → Notifications → "Away mode" (off by default), or "Turn On Away Mode" in the palette. It needs Hoply's
+current hooks: if Settings → Agents shows Claude Code or Copilot CLI as needing an update, press Update once and
+restart running sessions.
+
+- When a Claude Code or Copilot CLI turn ends, Hoply holds the session's turn-end hook (`Stop` or `agentStop`) and
+  shows the agent's last message in the panel and on a notification with a Reply field. What you send reaches the
+  agent as your next instruction and the session carries on; Done lets the turn end as usual. Claude Code shows
+  "Waiting for your reply in Hoply" meanwhile; Copilot CLI's terminal shows nothing.
+- Copilot's last message comes from its own session file under `~/.copilot/session-state/`; Hoply reads nothing else
+  from a path a hook sends.
+- Hoply waits up to 29½ minutes for each reply (the hook's timeout is 30 minutes); then the turn ends as usual.
+- Claude Code's permission prompts get Allow and Deny, as with Approve from Hoply. Copilot's and Codex's aren't held.
+- The Mac doesn't sleep while idle. Closing the lid on battery still puts it to sleep.
+- Only at the moment a turn ends: a session that is already idle can't be woken. Codex CLI isn't held. Copilot in
+  JetBrains runs the same hooks, but whether it waits for the reply is unverified.
+- Leaving Away mode, quitting Hoply or Hoply not running lets every held turn end as it would have.
+- Reply on a notification asks macOS to unlock first, like Allow.
 
 </details>
 

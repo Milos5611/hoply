@@ -73,6 +73,10 @@ Access → Certificate Assistant → Create a Certificate…, name it `Hoply Dev
 Certificate Type "Code Signing" (macOS 27 no longer ships Keychain Access, so this works only where it still exists).
 Then install with `HOPLY_SIGN_IDENTITY="Hoply Dev" scripts/install.sh`.
 
+The iCloud link needs Apple's iCloud entitlement, which comes only with a provisioning profile for Hoply's App ID
+(`HOPLY_PROVISION_PROFILE`, see `docs/RELEASING.md`). Builds without one, so every build above, leave the link off
+and never call CloudKit; `CloudLink.isAvailable` is false there.
+
 ## Snapshots
 
 The app target has no tests, so UI changes are checked with snapshots:
@@ -168,20 +172,22 @@ Sources/AgentKit/          platform-neutral core
   AgentSourceInfo.swift    one descriptor per agent
   PrometheusParser.swift   Prometheus text parser (snapshots and rates live in ModelServers/)
   ClaudeLimits.swift       plan limits decoding + Keychain/HTTP client
-  Approvals/               Approve from Hoply (held permission requests)
+  Approvals/               Approve from Hoply and Away mode (held permission requests and turn ends)
   Connect/                 agent hook config: event lists, commands, transforms
   Settings/                AppSettings with lenient per-key decoding
   Usage/                   usage records, Claude transcript, Codex rollout and Copilot events parsers, Copilot and OTel usage mappers
   Pricing/                 price table (bundled as a string literal), cost-state calibration
   Projects/                cwd → project resolver (repo, worktree, folder, home, scratch), session grouping
   ModelServers/            servers, engines, per-engine metric names, detection
-  Cleanup/ Git/ Metrics/ Notifications/ Palette/ Processes/ Remote/ Support/ Updates/
+  Remote/                  model server endpoints; the iCloud link's records, schema and answer rules (no CloudKit)
+  Cleanup/ Git/ Metrics/ Notifications/ Palette/ Processes/ Support/ Updates/
 Sources/AgentSystem/       macOS I/O adapters
   SQLite/ Store/           SQLite wrapper, schema + migrations, Store (the only writer), StoreReader (queries)
   Ingest/                  file tailer, FSEvents watcher, transcript / Codex / Copilot store and events ingesters, coordinator
   Connect/                 AgentConnector (writes agent config) and the --connect CLI
   Processes/               process scans through libproc, process cwd (the OTel `process.pid` fallback), dev servers
-  Remote/                  Keychain, model server client
+  Remote/                  Keychain, model server client, CloudLink (the iCloud link through CloudKit)
+  Power/                   keeps the Mac awake while Away
   Cleanup/ Git/ Pricing/ Projects/
   Ledger.swift             store, reader and coordinator bundled for the app
 Sources/Hoply/             SwiftUI menu bar app
@@ -190,7 +196,7 @@ Sources/Hoply/             SwiftUI menu bar app
   Panel/ Dashboard/ Palette/ Components/ Services/
 Tests/AgentKitTests/       pure tests against fixtures
 Tests/AgentSystemTests/    adapter tests (in-memory SQLite, temp directories)
-scripts/                   install.sh, build-app.sh, package.sh, cask.sh, simulate.sh
+scripts/                   install.sh, build-app.sh, profile-entitlements.sh, package.sh, cask.sh, simulate.sh
 ```
 
 ### Adding an agent
@@ -213,7 +219,9 @@ README in the same pull request.
   the others, is welcome.
 - `AgentSystemTests` use temp directories (`TempDirectory`) and in-memory SQLite. Apart from the opt-in
   `HOPLY_REAL_*` tests, which only read, they never touch your real `~/.claude`, `~/.codex` or `~/.copilot`; they
-  use a folder as the Trash and only signal child processes they start themselves.
+  use a folder as the Trash and only signal child processes they start themselves. The test runner has no iCloud
+  entitlement, so the iCloud link's tests check that every `CloudLink` call fails as unavailable; its decisions live
+  in AgentKit `Remote/`, tested without CloudKit.
 - **Fixtures come from real payloads, stripped to the keys the test needs.** No prompt or response text (use `"x"`),
   no tokens or credentials, and no paths or names from your machine. A fixture written by hand rather than captured
   gets a `synthetic_` name prefix, like the ones already there, so nobody mistakes it for a real capture.

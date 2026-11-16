@@ -79,11 +79,15 @@ final class AgentConnections {
     }
 
     func connect(_ agent: ConnectableAgent) {
-        run(agent, connecting: true)
+        run([agent], connecting: true)
+    }
+
+    func connect(_ agents: [ConnectableAgent]) {
+        run(agents, connecting: true)
     }
 
     func disconnect(_ agent: ConnectableAgent) {
-        run(agent, connecting: false)
+        run([agent], connecting: false)
     }
 
     // A read that started before a write (or before a folder or port change) must not overwrite a newer one.
@@ -97,20 +101,23 @@ final class AgentConnections {
         statuses = found
     }
 
-    private func run(_ agent: ConnectableAgent, connecting: Bool) {
-        guard isLive, running == nil else { return }
-        running = agent
-        notices[agent] = nil
+    private func run(_ agents: [ConnectableAgent], connecting: Bool) {
+        guard isLive, running == nil, let first = agents.first else { return }
+        running = first
+        for agent in agents { notices[agent] = nil }
         let connector = connector
         Task {
-            let result = await Task.detached { () -> Result<ConnectOutcome, AgentConnectorError> in
-                do throws(AgentConnectorError) {
-                    return .success(connecting ? try connector.connect(agent) : try connector.disconnect(agent))
-                } catch {
-                    return .failure(error)
-                }
-            }.value
-            notices[agent] = Self.notice(for: result, agent: agent, connecting: connecting)
+            for agent in agents {
+                running = agent
+                let result = await Task.detached { () -> Result<ConnectOutcome, AgentConnectorError> in
+                    do throws(AgentConnectorError) {
+                        return .success(connecting ? try connector.connect(agent) : try connector.disconnect(agent))
+                    } catch {
+                        return .failure(error)
+                    }
+                }.value
+                notices[agent] = Self.notice(for: result, agent: agent, connecting: connecting)
+            }
             await reload()
             running = nil
         }

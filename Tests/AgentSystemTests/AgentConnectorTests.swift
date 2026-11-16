@@ -208,6 +208,28 @@ final class AgentConnectorTests: XCTestCase {
         XCTAssertEqual(files(in: temp.path("copilot/hooks"), prefix: "").count, 2)
     }
 
+    func testCopilotFileFromBeforeAwayModeIsOutdatedAndReconnects() throws {
+        let temp = try TempDirectory()
+        let hooks = CopilotCLIHooks(port: 4318)
+        let generic = hooks.command(for: "sessionStart").replacingOccurrences(of: "/sessionStart", with: "/agentStop")
+        let before = String(decoding: hooks.fileContents, as: UTF8.self)
+            .replacingOccurrences(of: SettingsJSON.quoted(hooks.replyCommand) + ",\n        \"timeoutSec\": 1800",
+                                  with: SettingsJSON.quoted(generic))
+        XCTAssertFalse(before.contains("timeoutSec"))
+        let path = try temp.write("copilot/hooks/hoply.json", before)
+        let connector = connector(temp)
+        XCTAssertEqual(connector.status(of: .copilotCLI), .outdated)
+
+        XCTAssertTrue(try connector.connect(.copilotCLI).changed)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), hooks.fileContents)
+        XCTAssertEqual(connector.status(of: .copilotCLI), .connected)
+        XCTAssertFalse(try connector.connect(.copilotCLI).changed)
+
+        let removed = try connector.disconnect(.copilotCLI)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(removed.renamedPath))), hooks.fileContents)
+        XCTAssertEqual(connector.status(of: .copilotCLI), .notConnected)
+    }
+
     func testCodexConnectKeepsTheUsersHooksFile() throws {
         let temp = try TempDirectory()
         let path = try temp.write("codex/hooks.json", """

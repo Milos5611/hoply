@@ -84,7 +84,7 @@ public enum FileTailer {
                          bytesConsumed: Int64(split.consumed))
     }
 
-    private static func readBytes(_ fd: Int32, at offset: Int64, count: Int) throws -> Data {
+    static func readBytes(_ fd: Int32, at offset: Int64, count: Int) throws -> Data {
         guard count > 0 else { return Data() }
         var data = Data(count: count)
         var filled = 0

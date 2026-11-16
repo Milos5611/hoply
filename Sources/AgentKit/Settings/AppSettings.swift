@@ -23,6 +23,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var paletteEnabled = true
     public var paletteHotKey = HotKeyCombo.optionSpace
     public var approveFromHoply = false
+    public var awayMode = false
+    public var iCloudLink = false
     public var turnNotificationDelay: Double = 10
 
     public static let turnNotificationDelays: [Double] = [0, 10, 30, 60, 120]
@@ -69,6 +71,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         paletteHotKey = container.lenient(HotKeyCombo.self, .paletteHotKey).flatMap { $0.isValid ? $0 : nil }
             ?? defaults.paletteHotKey
         approveFromHoply = container.lenient(Bool.self, .approveFromHoply) ?? defaults.approveFromHoply
+        awayMode = container.lenient(Bool.self, .awayMode) ?? defaults.awayMode
+        iCloudLink = container.lenient(Bool.self, .iCloudLink) ?? defaults.iCloudLink
         turnNotificationDelay = container.lenient(Double.self, .turnNotificationDelay)
             .flatMap { Self.turnNotificationDelays.contains($0) ? $0 : nil } ?? defaults.turnNotificationDelay
     }

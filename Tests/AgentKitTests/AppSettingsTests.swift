@@ -130,6 +130,36 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(wrong.port, 5000)
     }
 
+    func testAwayModeIsOffByDefaultAndDecodesLeniently() {
+        XCTAssertFalse(AppSettings().awayMode)
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertFalse(older.awayMode, "settings saved before Away mode")
+        XCTAssertEqual(older.port, 4400)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "awayMode": "on", "approveFromHoply": true}"#.utf8))
+        XCTAssertFalse(wrong.awayMode)
+        XCTAssertTrue(wrong.approveFromHoply)
+        XCTAssertEqual(wrong.port, 5000)
+        XCTAssertTrue(AppSettings.decode(Data(#"{"awayMode": true}"#.utf8)).awayMode)
+        var settings = AppSettings()
+        settings.awayMode = true
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    }
+
+    func testICloudLinkIsOffByDefaultAndDecodesLeniently() {
+        XCTAssertFalse(AppSettings().iCloudLink)
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertFalse(older.iCloudLink, "settings saved before the iCloud link")
+        XCTAssertEqual(older.port, 4400)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "iCloudLink": 1, "awayMode": true}"#.utf8))
+        XCTAssertFalse(wrong.iCloudLink)
+        XCTAssertTrue(wrong.awayMode)
+        XCTAssertEqual(wrong.port, 5000)
+        XCTAssertTrue(AppSettings.decode(Data(#"{"iCloudLink": true}"#.utf8)).iCloudLink)
+        var settings = AppSettings()
+        settings.iCloudLink = true
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    }
+
     func testCleanupKeyDecodesLeniently() {
         XCTAssertFalse(AppSettings.decode(Data(v1JSON.utf8)).cleanupIncludesNodeModules)
         let wrong = AppSettings.decode(Data(#"{"port": 5000, "cleanupIncludesNodeModules": "yes"}"#.utf8))

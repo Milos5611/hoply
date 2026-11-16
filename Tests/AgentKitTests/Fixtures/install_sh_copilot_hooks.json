@@ -40,7 +40,8 @@
     "agentStop": [
       {
         "type": "command",
-        "bash": "curl -s -m 2 -o /dev/null -H 'Expect:' -H 'Content-Type: application/json' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/agentStop || true"
+        "bash": "curl -sf -m 1790 -H 'Expect:' -H 'Content-Type: application/json' -H 'X-Hoply-Reply: 1' -H \"X-Hoply-Pid: $PPID\" --data-binary @- http://127.0.0.1:4318/hooks/copilot-cli/agentStop || true",
+        "timeoutSec": 1800
       }
     ],
     "sessionEnd": [
