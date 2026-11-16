@@ -91,11 +91,13 @@ final class TurnReplyTests: XCTestCase {
         XCTAssertNil(try message(""))
         XCTAssertNil(try message(" \n\t"))
         XCTAssertNil(try message(42))
-        let long = try XCTUnwrap(try message(String(repeating: "x", count: 1500)))
-        XCTAssertEqual(long.count, TurnReply.messageLimit + 1)
-        XCTAssertTrue(long.hasSuffix("…"))
         let limit = TurnReply.messageLimit
+        let long = try XCTUnwrap(try message(String(repeating: "x", count: limit + 500)))
+        XCTAssertEqual(long.count, limit + 1)
+        XCTAssertTrue(long.hasSuffix("…"))
         XCTAssertEqual(try message(String(repeating: "y", count: limit))?.count, limit)
+        XCTAssertEqual(try message(String(repeating: "z", count: 10_000))?.count, 10_000,
+                       "a long end-of-turn message stays whole")
     }
 
     func testResponseBodiesFollowClaudeCodesStopHookOutput() throws {

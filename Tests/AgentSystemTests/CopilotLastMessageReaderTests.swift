@@ -72,7 +72,10 @@ final class CopilotLastMessageReaderTests: XCTestCase {
 
     func testMessageIsCappedLikeClaudes() throws {
         let temp = try TempDirectory()
-        let path = try write([try prompt(), try assistant(String(repeating: "y", count: 5000))], in: temp)
+        let whole = try write([try prompt(), try assistant(String(repeating: "x", count: 5000))], in: temp)
+        XCTAssertEqual(reader(temp).message(transcriptPath: whole)?.count, 5000)
+        let path = try write([try prompt(), try assistant(String(repeating: "y", count: TurnReply.messageLimit + 4000))],
+                             in: temp)
         let message = try XCTUnwrap(reader(temp).message(transcriptPath: path))
         XCTAssertEqual(message.count, TurnReply.messageLimit + 1)
         XCTAssertTrue(message.hasSuffix("…"))

@@ -24,7 +24,7 @@ public enum TurnReply {
     public static let curlTimeout = hookTimeout - 10
     public static let holdLimit = TimeInterval(hookTimeout - 30)
     public static let reasonPrefix = "Message from the user, sent from Hoply: "
-    public static let messageLimit = 1000
+    public static let messageLimit = 25_000
     public static let sources = AgentSource.allCases.filter { event(for: $0) != nil }
 
     static func event(for source: AgentSource) -> String? {

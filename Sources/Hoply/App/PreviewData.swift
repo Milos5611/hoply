@@ -61,6 +61,47 @@ enum PreviewData {
         Should admin keys get their own, higher limit?
         """
 
+    static let longReplyMessage = """
+        The checkout migration is done. Here is what changed and what I checked.
+
+        Payment intents
+        - `CheckoutService` now creates a payment intent when the cart is confirmed and stores its id on the order.
+        - The client confirms the intent with the card element; 3-D Secure is handled by the confirm call, so the \
+        old redirect page is gone.
+        - Amounts are sent in minor units everywhere. The legacy client sent decimals for JPY, which was off by a \
+        factor of 100; the new path fixes that.
+
+        Webhooks
+        - `payment_intent.succeeded` marks the order paid and sends the receipt.
+        - `payment_intent.payment_failed` puts the order back to pending and keeps the cart.
+        - Events are deduplicated by event id in a new `webhook_events` table, so retries are safe.
+        - The signing secret is read from the environment; the old hard-coded test secret is removed.
+
+        Database
+        - Migration `0042_payment_intents` adds `orders.payment_intent_id` and the `webhook_events` table.
+        - It is additive only, so rolling back the app does not need a down migration.
+
+        Tests
+        - Three integration tests moved to the new flow, plus five new ones for failed payments, retried webhooks \
+        and 3-D Secure.
+        - All 48 tests pass locally; the end-to-end suite against the sandbox passed twice in a row.
+
+        Things I did not touch
+        - Refunds still go through the legacy client. They work, but they use the old charge ids, so orders paid \
+        through payment intents cannot be refunded from the admin page yet.
+        - The `/charge` endpoint is still routed. Nothing in the web app calls it any more, but the mobile app \
+        release from last month still does.
+        - Saved cards are untouched; they keep working because the customer ids did not change.
+
+        Risks
+        - Orders created during the deploy window could have a charge id and no payment intent id. The webhook \
+        handler ignores those, so they stay paid, but they will not show the new receipt.
+        - The sandbox does not simulate every 3-D Secure flow; a small live test with a real card is worth doing \
+        before the release.
+
+        Should I remove the `/charge` endpoint now, or keep it until the mobile app ships its next release?
+        """
+
     static func replyEvents(now: Date) -> [AgentEvent] {
         [AgentEvent(key: replySession, kind: .promptSubmitted("Move checkout to payment intents"), time: now - 1_260,
                     cwd: "\(NSHomeDirectory())/Project/CoreStory", model: "claude-opus-5", fromHook: true),

@@ -59,7 +59,7 @@ public struct RemoteRequest: Codable, Sendable, Equatable, Identifiable {
                       agent: reply.key.source.rawValue,
                       project: RemoteSnapshot.projectName(session, projects: projects),
                       title: RemoteSchema.title(session?.title),
-                      message: reply.message, createdAt: reply.received,
+                      message: TurnReply.message(reply.message), createdAt: reply.received,
                       expiresAt: reply.received.addingTimeInterval(TurnReply.holdLimit))
     }
 }

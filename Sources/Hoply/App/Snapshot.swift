@@ -262,6 +262,15 @@ enum Snapshot {
                 away.dismiss(PreviewData.copilotReplySession)
                 try render(PanelView(), model: away, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-reply-\(name).png"))
+                try render(VStack(spacing: 16) {
+                    ForEach([PreviewData.longReplyMessage, PreviewData.replyMessage], id: \.self) { message in
+                        ReplyStrip(reply: TurnReplyRequest(key: PreviewData.replySession, message: message,
+                                                           received: now - 95),
+                                   expanded: true)
+                    }
+                }.frame(width: 358).padding(12),
+                           model: away, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-reply-expanded-\(name).png"))
                 for (state, statuses) in [("", PreviewData.connectionStatuses), ("-update", PreviewData.awayTwoOutdated)] {
                     away.connections.show(statuses: statuses)
                     try render(NotificationSettings(settings: .constant(PreviewData.awaySettings))

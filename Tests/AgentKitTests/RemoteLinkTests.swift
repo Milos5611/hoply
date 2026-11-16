@@ -212,6 +212,39 @@ final class RemoteRequestTests: XCTestCase {
                                               expiresAt: t0.addingTimeInterval(TurnReply.holdLimit)))
         XCTAssertGreaterThan(TurnReply.holdLimit, PermissionApproval.holdLimit)
     }
+
+    func testReplyCarriesTheWholeMessageUpToTheCap() throws {
+        var stop = try XCTUnwrap(try Fixture.hookPayloads("claude_hooks.json")["Stop"])
+        func remote(_ text: String) throws -> RemoteRequest {
+            stop["last_assistant_message"] = text
+            let reply = try XCTUnwrap(TurnReply.request(source: .claudeCode, eventName: nil, json: stop,
+                                                        headers: [TurnReply.header: "1"], now: t0))
+            return RemoteRequest.reply(reply, session: nil, device: "mac-1")
+        }
+        let limit = TurnReply.messageLimit
+        let paragraph = "The refresh path now awaits the token; 214 tests pass.\n\n"
+        let whole = String(String(repeating: paragraph, count: limit / paragraph.count + 1).prefix(limit - 1)) + "."
+        XCTAssertEqual(whole.count, limit)
+        XCTAssertEqual(try remote(whole).message, whole, "the phone gets the whole message")
+        XCTAssertEqual(try remote(String(whole.prefix(1500))).message?.count, 1500)
+
+        let longer = whole + String(repeating: "y", count: 5000)
+        XCTAssertEqual(try remote(longer).message, whole + "…")
+        let direct = TurnReplyRequest(id: "re-2", key: SessionKey(source: .claudeCode, id: "s1"), message: longer,
+                                      received: t0)
+        XCTAssertEqual(RemoteRequest.reply(direct, session: nil, device: "mac-1").message, whole + "…",
+                       "the record caps whatever it is given")
+
+        let kiss = "🧑🏼‍❤️‍💋‍🧑🏾"
+        XCTAssertEqual(kiss.count, 1)
+        XCTAssertEqual(kiss.utf8.count, 35)
+        let widest = TurnReplyRequest(id: "re-3", key: SessionKey(source: .claudeCode, id: "s1"),
+                                      message: String(repeating: kiss, count: limit + 10), received: t0)
+        let request = RemoteRequest.reply(widest, session: nil, device: "mac-1")
+        XCTAssertEqual(request.message?.count, limit + 1)
+        XCTAssertLessThan(try RemoteSchema.record(request).payload.count, 1_000_000,
+                          "CloudKit refuses a record over 1 MB")
+    }
 }
 
 final class RemoteAnswerTests: XCTestCase {
