@@ -61,14 +61,16 @@ struct CloudLinkState: Codable, Equatable {
     var subscriptionReady: Bool
     var changeToken: Data?
     var openRequests: [String]
+    var launches: [String: Date]
 
     init(device: String = UUID().uuidString, zoneReady: Bool = false, subscriptionReady: Bool = false,
-         changeToken: Data? = nil, openRequests: [String] = []) {
+         changeToken: Data? = nil, openRequests: [String] = [], launches: [String: Date] = [:]) {
         self.device = device
         self.zoneReady = zoneReady
         self.subscriptionReady = subscriptionReady
         self.changeToken = changeToken
         self.openRequests = openRequests
+        self.launches = launches
     }
 
     init(from decoder: any Decoder) throws {
@@ -79,6 +81,14 @@ struct CloudLinkState: Codable, Equatable {
         subscriptionReady = (try? container.decode(Bool.self, forKey: .subscriptionReady)) ?? false
         changeToken = try? container.decode(Data.self, forKey: .changeToken)
         openRequests = (try? container.decode([String].self, forKey: .openRequests)) ?? []
+        launches = (try? container.decode([String: Date].self, forKey: .launches)) ?? [:]
+    }
+
+    mutating func claimLaunch(_ answerID: String, createdAt: Date, now: Date) -> Bool {
+        launches = launches.filter { now.timeIntervalSince($0.value) <= RemoteAnswers.launchLifetime }
+        guard launches[answerID] == nil else { return false }
+        launches[answerID] = max(now, createdAt)
+        return true
     }
 
     static func load(from url: URL) -> CloudLinkState {
@@ -141,6 +151,13 @@ public actor CloudLink {
     }
 
     public var openRequestIDs: [String] { state.openRequests }
+
+    public func claimLaunch(_ answerID: String, createdAt: Date, now: Date = Date()) -> Bool {
+        let before = state
+        let claimed = state.claimLaunch(answerID, createdAt: createdAt, now: now)
+        if state != before { saveState() }
+        return claimed
+    }
 
     public func accountStatus() async throws -> RemoteAccountStatus {
         let container = try cloudContainer()

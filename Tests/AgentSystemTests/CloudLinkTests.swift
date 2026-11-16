@@ -144,6 +144,33 @@ final class CloudLinkTests: XCTestCase {
                           "nothing saved yet: no device id to keep")
     }
 
+    func testALaunchAnswerStartsOnceAcrossRestarts() async throws {
+        let directory = try TempDirectory()
+        let url = directory.url.appendingPathComponent("Hoply/icloud-link.json")
+        let link = CloudLink(stateURL: url)
+        var claimed = await link.claimLaunch("a-1", createdAt: t0, now: t0 + 5)
+        XCTAssertTrue(claimed)
+        claimed = await link.claimLaunch("a-1", createdAt: t0, now: t0 + 6)
+        XCTAssertFalse(claimed, "a refetched answer doesn't open a second Terminal")
+        let restarted = CloudLink(stateURL: url)
+        claimed = await restarted.claimLaunch("a-1", createdAt: t0, now: t0 + 30)
+        XCTAssertFalse(claimed, "nor after a crash before the answer was deleted")
+
+        claimed = await restarted.claimLaunch("a-2", createdAt: t0 + 1_500, now: t0 + 700)
+        XCTAssertTrue(claimed, "a phone clock running ahead")
+        XCTAssertEqual(Set(CloudLinkState.load(from: url).launches.keys), ["a-2"], "past the launch window: dropped")
+        claimed = await restarted.claimLaunch("a-3", createdAt: t0 + 1_400, now: t0 + 1_400)
+        XCTAssertEqual(Set(CloudLinkState.load(from: url).launches.keys), ["a-2", "a-3"],
+                       "kept while the phone's own time still counts it fresh")
+        claimed = await restarted.claimLaunch("a-2", createdAt: t0 + 1_500, now: t0 + 2_000)
+        XCTAssertFalse(claimed)
+
+        try directory.write("Hoply/icloud-link.json", #"{"device": "mac-1", "launches": ["a-1"]}"#)
+        let lenient = CloudLinkState.load(from: url)
+        XCTAssertEqual(lenient.device, "mac-1")
+        XCTAssertEqual(lenient.launches, [:])
+    }
+
     func testOnlyTheAnswerSubscriptionsPushesCount() {
         XCTAssertFalse(CloudLink.isAnswerNotification([:]))
         XCTAssertFalse(CloudLink.isAnswerNotification(["aps": ["content-available": 1]]))

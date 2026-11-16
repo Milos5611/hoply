@@ -303,14 +303,21 @@ final class ICloudLink {
     private func answer(_ cloud: CloudLink) async throws {
         let answers = try await cloud.fetchAnswers()
         guard !Task.isCancelled, let model else { return }
+        let now = Date()
         let resolution = RemoteAnswers.resolve(answers, approvals: model.approvals, replies: model.replies,
                                                device: cloud.device, handled: handled, awaySetAt: awaySetAt,
-                                               launch: launchCatalog(of: model), now: Date())
+                                               launch: launchCatalog(of: model), now: now)
         handled.formUnion(resolution.acknowledged)
         for action in resolution.actions {
             apply(action, to: model)
         }
+        let createdAt = Dictionary(answers.map { ($0.id, $0.createdAt) }, uniquingKeysWith: { first, _ in first })
         for decision in resolution.launches {
+            if case .start(let order) = decision {
+                let claimed = await cloud.claimLaunch(order.answerID, createdAt: createdAt[order.answerID] ?? now,
+                                                      now: now)
+                guard claimed else { continue }
+            }
             perform(decision)
         }
         if !resolution.launches.isEmpty { pending = true }
