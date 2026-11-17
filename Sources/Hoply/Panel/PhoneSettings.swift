@@ -1,7 +1,9 @@
+import AgentKit
 import SwiftUI
 
 struct PhoneSettings: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.edition) private var edition
 
     var body: some View {
         let link = model.iCloudLink
@@ -24,13 +26,15 @@ struct PhoneSettings: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Divider()
-                SwitchRow("Let iPhone start sessions", isOn: Binding(
-                    get: { link.isAvailable && model.settings.iCloudLink && model.settings.iPhoneLaunch },
-                    set: { on in model.update { $0.iPhoneLaunch = on } }
-                ))
-                .disabled(!link.isAvailable || !model.settings.iCloudLink)
-                Hint("New and continued sessions open in Terminal on this Mac, only in projects Hoply already knows, and still ask for approvals.")
+                if edition.offersPhoneLaunch {
+                    Divider()
+                    SwitchRow("Let iPhone start sessions", isOn: Binding(
+                        get: { link.isAvailable && model.settings.iCloudLink && model.settings.iPhoneLaunch },
+                        set: { on in model.update { $0.iPhoneLaunch = on } }
+                    ))
+                    .disabled(!link.isAvailable || !model.settings.iCloudLink)
+                    Hint("New and continued sessions open in Terminal on this Mac, only in projects Hoply already knows, and still ask for approvals.")
+                }
             }
         }
     }

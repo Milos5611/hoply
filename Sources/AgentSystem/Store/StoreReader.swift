@@ -92,7 +92,7 @@ public actor StoreReader {
     public func recentSessions(limit: Int, sources: Set<AgentSource>? = nil) throws -> [RecentSession] {
         let wanted = (sources ?? Set(AgentSource.allCases)).map(\.rawValue).sorted()
         return try db.query("""
-            SELECT s.source, s.id, s.title, s.cwd, s.branch, s.last_at, p.id, p.root, p.name, p.display_name, p.kind
+            SELECT s.source, s.id, s.title, s.cwd, s.last_at, p.id, p.root, p.name, p.display_name, p.kind
             FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
             WHERE s.last_at IS NOT NULL AND s.cwd IS NOT NULL AND s.cwd != ''
                   AND s.source IN (SELECT value FROM json_each(?))
@@ -100,9 +100,9 @@ public actor StoreReader {
             LIMIT ?
             """, [Self.jsonArray(wanted), max(limit, 0)]) { row -> RecentSession? in
             guard let source = AgentSource(rawValue: row.text(0)) else { return nil }
-            return RecentSession(key: SessionKey(source: source, id: row.text(1)), project: Self.project(row, from: 6),
-                                 title: row.optionalText(2), cwd: row.text(3), branch: row.optionalText(4),
-                                 lastAt: Date(timeIntervalSince1970: row.double(5)))
+            return RecentSession(key: SessionKey(source: source, id: row.text(1)), project: Self.project(row, from: 5),
+                                 title: row.optionalText(2), cwd: row.text(3),
+                                 lastAt: Date(timeIntervalSince1970: row.double(4)))
         }.compactMap { $0 }
     }
 
@@ -195,22 +195,10 @@ public actor StoreReader {
             """, bounds, { row in (row.optionalInt64(0), ModelShare(model: row.text(1), totals: Self.totals(row, from: 2))) }) {
             models[projectID, default: []].append(share)
         }
-        var branches: [Int64?: Set<String>] = [:]
-        var worktrees: [Int64?: Set<String>] = [:]
-        for (projectID, branch, worktree) in try db.query("""
-            SELECT DISTINCT u.project_id, s.branch, s.worktree
-            FROM usage u JOIN sessions s ON s.source = u.source AND s.id = u.session_id
-            WHERE u.ts >= ? AND u.ts < ?
-            """, bounds, { row in (row.optionalInt64(0), row.optionalText(1), row.optionalText(2)) }) {
-            if let branch, !branch.isEmpty { branches[projectID, default: []].insert(branch) }
-            if let worktree, !worktree.isEmpty { worktrees[projectID, default: []].insert(worktree) }
-        }
         for index in summaries.indices {
             let id = summaries[index].project?.id
             summaries[index].bySource = bySource[id] ?? [:]
             summaries[index].topModels = Array(Self.largestFirst(models[id] ?? []).prefix(max(topModels, 0)))
-            summaries[index].branches = (branches[id] ?? []).sorted()
-            summaries[index].worktrees = (worktrees[id] ?? []).sorted()
         }
         return summaries
     }
@@ -496,19 +484,19 @@ public actor StoreReader {
     }
 
     private static let sessionColumns = """
-        s.source, s.id, s.title, s.cwd, s.branch, s.worktree, s.first_at, s.last_at, s.turns, s.native_cost,
+        s.source, s.id, s.title, s.cwd, s.first_at, s.last_at, s.turns, s.native_cost,
         s.lines_added, s.lines_removed, s.pr_url, s.transcript_path, p.id, p.root, p.name, p.display_name, p.kind
         """
 
     private static func session(_ row: SQLiteRow) -> SessionSummary? {
         guard let source = AgentSource(rawValue: row.text(0)) else { return nil }
         return SessionSummary(
-            key: SessionKey(source: source, id: row.text(1)), project: project(row, from: 14),
-            title: row.optionalText(2), cwd: row.optionalText(3), branch: row.optionalText(4),
-            worktree: row.optionalText(5), firstAt: row.optionalDouble(6).map(Date.init(timeIntervalSince1970:)),
-            lastAt: row.optionalDouble(7).map(Date.init(timeIntervalSince1970:)), turns: row.int(8),
-            totals: totals(row, from: 19), nativeCostUSD: row.optionalDouble(9), linesAdded: row.optionalInt(10),
-            linesRemoved: row.optionalInt(11), prURL: row.optionalText(12), transcriptPath: row.optionalText(13))
+            key: SessionKey(source: source, id: row.text(1)), project: project(row, from: 12),
+            title: row.optionalText(2), cwd: row.optionalText(3),
+            firstAt: row.optionalDouble(4).map(Date.init(timeIntervalSince1970:)),
+            lastAt: row.optionalDouble(5).map(Date.init(timeIntervalSince1970:)), turns: row.int(6),
+            totals: totals(row, from: 17), nativeCostUSD: row.optionalDouble(7), linesAdded: row.optionalInt(8),
+            linesRemoved: row.optionalInt(9), prURL: row.optionalText(10), transcriptPath: row.optionalText(11))
     }
 
     static func project(_ row: SQLiteRow, from start: Int32) -> ProjectRef? {

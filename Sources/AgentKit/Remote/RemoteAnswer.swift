@@ -116,7 +116,9 @@ public enum RemoteAnswers {
 
     public static func resolve(_ answers: [RemoteAnswer], approvals: [ApprovalRequest], replies: [TurnReplyRequest],
                                device: String, handled: Set<String> = [], awaySetAt: Date? = nil,
-                               launch catalog: LaunchCatalog? = nil, now: Date) -> RemoteResolution {
+                               launch catalog: LaunchCatalog? = nil, edition: Edition = .current,
+                               now: Date) -> RemoteResolution {
+        let catalog = edition.offersPhoneLaunch ? catalog : nil
         var openApprovals = Dictionary(approvals.map { ($0.id, $0.received) }, uniquingKeysWith: { first, _ in first })
         var openReplies = Dictionary(replies.map { ($0.id, $0.received) }, uniquingKeysWith: { first, _ in first })
         var seen: Set<String> = []

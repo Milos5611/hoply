@@ -30,21 +30,23 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         model.paletteToggler = { [weak self] in self?.togglePalette() }
         model.dashboardOpener = { [weak self] page in self?.openDashboard(page) }
         model.panelOpener = { [weak self] in
-            self?.model.showingSettings = false
+            self?.model.shown.showingSettings = false
             self?.showPanel()
         }
         model.settingsOpener = { [weak self] in
-            self?.model.showingSettings = true
+            self?.model.shown.showingSettings = true
             self?.showPanel()
         }
+        #if Sparkle
         model.updates.onWillShowUpdate = { [weak self] in
             if self?.popover.isShown == true { self?.popover.performClose(nil) }
         }
+        #endif
         popover.behavior = Self.holdOpen ? .applicationDefined : .transient
         popover.animates = true
         popover.delegate = self
         popover.contentSize = NSSize(width: 448, height: 600)
-        popover.contentViewController = NSHostingController(rootView: PanelView().environment(model))
+        popover.contentViewController = NSHostingController(rootView: ModelScope(model: model) { PanelView() })
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(statusItemClicked(_:))
@@ -86,7 +88,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         model.setPanelOnScreen(false)
-        model.showingSettings = false
+        model.shown.showingSettings = false
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
@@ -106,13 +108,15 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             menu.addItem(item("Command Palette", #selector(openPalette)))
         }
         menu.addItem(item("Settings…", #selector(openSettings)))
+        #if Sparkle
         if model.updates.isEnabled {
             let update = item(Self.updateMenuTitle(model.updates.pending), #selector(runUpdate))
             update.isEnabled = model.updates.canUpdate
             menu.addItem(update)
         }
+        #endif
         menu.addItem(.separator())
-        if let version = model.updates.runningVersion {
+        if let version = model.runningVersion {
             let about = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
             about.isEnabled = false
             menu.addItem(about)
@@ -130,7 +134,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func openPanel() {
-        model.showingSettings = false
+        model.shown.showingSettings = false
         showPanel()
     }
 
@@ -143,10 +147,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func openSettings() {
-        model.showingSettings = true
+        model.shown.showingSettings = true
         showPanel()
     }
 
+    #if Sparkle
     @objc private func runUpdate() {
         model.updates.update()
     }
@@ -158,6 +163,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         case .available: return "Update to Hoply \(update.version)…"
         }
     }
+    #endif
 
     @objc private func quit() {
         model.quit()
@@ -165,7 +171,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func observeLabel() {
         withObservationTracking {
-            updateLabel(attention: model.attentionCount, working: model.workingCount, update: model.updates.pending)
+            #if Sparkle
+            let update = model.updates.pending
+            #else
+            let update: PendingUpdate? = nil
+            #endif
+            updateLabel(attention: model.attentionCount, working: model.workingCount, update: update)
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeLabel() }
         }

@@ -34,10 +34,7 @@ public struct CopilotStoreIngester: Sendable {
     public let home: String
 
     public static var defaultHome: String {
-        if let configured = ProcessInfo.processInfo.environment["COPILOT_HOME"], !configured.isEmpty {
-            return (configured as NSString).expandingTildeInPath
-        }
-        return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".copilot").path
+        AgentFolder.copilot.defaultPath(environment: ProcessInfo.processInfo.environment, home: UserHome.path)
     }
 
     public init(home: String = CopilotStoreIngester.defaultHome) {

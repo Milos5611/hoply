@@ -11,13 +11,19 @@ public enum ConnectCommand {
     public static func run(arguments: [String],
                            environment: [String: String] = ProcessInfo.processInfo.environment,
                            settings: AppSettings,
-                           home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+                           home: String = UserHome.path,
+                           edition: Edition = .current,
                            now: @escaping @Sendable () -> Date = { Date() },
                            output: (String) -> Void = { print($0) },
                            errors: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }) -> Int32 {
         guard let flag = arguments.first, flag == "--connect" || flag == "--disconnect" else {
             errors(usage)
             return 2
+        }
+        guard edition.agentConfigWrites == .always else {
+            errors("This edition of Hoply connects agents only from its window, where macOS asks you to allow each "
+                   + "agent's folder. Open Hoply → Settings → Agents and click Connect.")
+            return 1
         }
         let connecting = flag == "--connect"
         var named: [ConnectableAgent] = []
@@ -47,16 +53,10 @@ public enum ConnectCommand {
 
         // An explicit environment variable wins over the app's saved folder, so a scratch run never edits the real one.
         let connector = AgentConnector(
-            claudeConfigDirectory: AgentConnector.directory(
-                environment["CLAUDE_CONFIG_DIR"] ?? "",
-                default: AgentConnector.directory(settings.claudeConfigDir, default: home + "/.claude")),
-            copilotHome: AgentConnector.directory(
-                environment["COPILOT_HOME"] ?? "",
-                default: AgentConnector.directory(settings.copilotHome, default: home + "/.copilot")),
-            codexHome: AgentConnector.directory(
-                environment["CODEX_HOME"] ?? "",
-                default: AgentConnector.directory(settings.codexHome, default: home + "/.codex")),
-            port: port, now: now)
+            claudeConfigDirectory: directory(.claude, settings: settings, environment: environment, home: home),
+            copilotHome: directory(.copilot, settings: settings, environment: environment, home: home),
+            codexHome: directory(.codex, settings: settings, environment: environment, home: home),
+            port: port, edition: edition, now: now)
 
         var failed = false
         for agent in named.isEmpty ? ConnectableAgent.allCases : named {
@@ -73,6 +73,13 @@ public enum ConnectCommand {
             }
         }
         return failed ? 1 : 0
+    }
+
+    static func directory(_ folder: AgentFolder, settings: AppSettings, environment: [String: String],
+                          home: String) -> String {
+        let saved = AgentFolder.directory(folder.setting(in: settings), home: home,
+                                          default: home + "/" + folder.defaultName)
+        return AgentFolder.directory(environment[folder.environmentKey] ?? "", home: home, default: saved)
     }
 
     static func line(for outcome: ConnectOutcome, connecting: Bool, endpoint: String) -> String {

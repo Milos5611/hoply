@@ -30,8 +30,7 @@ final class PaletteRankerTests: XCTestCase {
          item("session:claude-code:a", .session, "Fix the login flow", subtitle: "hoply · main", daysAgo: 2),
          item("session:claude-code:b", .session, "Palette ranking", subtitle: "hoply · m8", daysAgo: 0.1, attention: .live),
          item("session:claude-code:c", .session, "Review migrations", subtitle: "api · main", daysAgo: 0.5,
-              attention: .needsUser),
-         item("devserver:1", .devServer, "vite :5173", subtitle: "hoply", daysAgo: 0.01, attention: .live)]
+              attention: .needsUser)]
     }
 
     func testQueryParsing() {
@@ -59,8 +58,9 @@ final class PaletteRankerTests: XCTestCase {
         XCTAssertEqual(results.first?.id, "project:1")
         XCTAssertEqual(results.first?.titleRanges, [0..<5])
         XCTAssertEqual(Set(results.map(\.id)),
-                       ["project:1", "session:claude-code:a", "session:claude-code:b", "devserver:1"])
-        XCTAssertEqual(results.first { $0.id == "devserver:1" }?.titleRanges, [], "a subtitle hit highlights nothing in the title")
+                       ["project:1", "session:claude-code:a", "session:claude-code:b"])
+        XCTAssertEqual(results.first { $0.id == "session:claude-code:a" }?.titleRanges, [],
+                       "a subtitle hit highlights nothing in the title")
 
         let keyword = ranker.rank(catalogue, query: "preferences", now: now)
         XCTAssertEqual(keyword.map(\.id), ["action:settings"])
@@ -103,7 +103,7 @@ final class PaletteRankerTests: XCTestCase {
         XCTAssertEqual(ranker.rank(catalogue, query: "", now: now).map(\.id), [
             "session:claude-code:c",
             "page:spending", "project:2",
-            "devserver:1", "session:claude-code:b",
+            "session:claude-code:b",
             "project:1", "session:claude-code:a",
             "page:sessions", "action:settings", "action:reindex",
         ])
@@ -134,7 +134,6 @@ final class PaletteRankerTests: XCTestCase {
         XCTAssertEqual(PaletteItem.projectID(fromID: PaletteItem.projectID(42)), 42)
         XCTAssertNil(PaletteItem.projectID(fromID: "project:x"))
         XCTAssertEqual(PaletteItem.payload(of: PaletteItem.pageID("limits"), prefix: "page:"), "limits")
-        XCTAssertEqual(PaletteItem.devServerID("501:1"), "devserver:501:1")
         XCTAssertEqual(PaletteItem.actionID("reindex"), "action:reindex")
     }
 }

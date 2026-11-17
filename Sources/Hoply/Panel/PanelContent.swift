@@ -17,32 +17,42 @@ struct PanelContent: View {
 
 struct PanelSections: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.edition) private var edition
 
     var body: some View {
         let grouping = model.grouping
+        let folderCard = edition.needsFolderGrants && model.connections.showsFolderCard && !model.isSampleData
         VStack(spacing: 10) {
+                #if Sparkle
                 if let update = model.updates.cardUpdate {
                     UpdateCard(update: update)
+                }
+                #endif
+                if case .portInUse(let port) = model.serverStatus {
+                    PortTakenCard(port: port)
                 }
                 StatStrip(oldestWait: grouping.waiting.filter { grouping.status(of: $0).needsAction }
                     .map(\.stateSince).min())
                 if !grouping.waiting.isEmpty {
                     WaitingCard(grouping: grouping)
                 }
+                if folderCard {
+                    FolderAccessCard()
+                }
                 if let problem = model.awayProblem {
                     AwayNoticeCard(problem: problem)
-                } else if let nudge = model.connections.nudge {
+                } else if !folderCard, let nudge = model.connections.nudge {
                     AgentNudgeCard(nudge: nudge)
                 }
                 ForEach(grouping.projects) { group in
                     ProjectCard(group: group, grouping: grouping)
                 }
                 if model.sessions.isEmpty {
-                    EmptySessionsCard()
-                }
-                let unplaced = model.devServers.unplacedServers(groups: grouping.projects, sessions: model.sessions)
-                if !unplaced.isEmpty {
-                    DevServersCard(servers: unplaced)
+                    if edition.needsFolderGrants && model.sampleDataOffered {
+                        SampleDataOfferCard()
+                    } else {
+                        EmptySessionsCard()
+                    }
                 }
                 WidgetStrip()
         }
@@ -145,7 +155,6 @@ struct ProjectCard: View {
 
     var body: some View {
         let muted = group.path.map(model.isMuted) ?? false
-        let servers = model.devServers.headerServers(inGroup: group.id, sessions: model.sessions)
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
@@ -173,9 +182,6 @@ struct ProjectCard: View {
                             .frame(width: 7, height: 7)
                             .help("An agent is working here")
                     }
-                }
-                if !servers.isEmpty {
-                    DevServerStrip(servers: servers)
                 }
                 ForEach(group.sessions) { session in
                     SessionRow(session: session, status: grouping.status(of: session),
@@ -290,45 +296,6 @@ struct AgentNudgeCard: View {
 
     private static func names(_ agents: [ConnectableAgent]) -> String {
         agents.map(\.displayName).joined(separator: " and ")
-    }
-}
-
-struct DevServersCard: View {
-    @Environment(AppModel.self) private var model
-    let servers: [DevServer]
-
-    var body: some View {
-        let groups = DevServerGroup.groups(of: servers)
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Image(systemName: "server.rack")
-                        .foregroundStyle(.secondary)
-                    Text("Dev servers")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    Button { model.openDashboard(.devServers) } label: {
-                        Image(systemName: "arrow.up.forward")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .tooltip("Show all dev servers in the Dashboard")
-                }
-                ForEach(groups) { group in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(group.name)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(width: 104, alignment: .leading)
-                            .help(Format.path(group.path))
-                        DevServerStrip(servers: group.servers)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        }
     }
 }
 

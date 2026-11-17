@@ -31,6 +31,22 @@ public enum ResumeScript {
             """
     }
 
+    public static func commandLine(source: AgentSource, sessionID: String, cwd: String?) -> String? {
+        guard isPlausibleSessionID(sessionID), let arguments = arguments(for: source, sessionID: sessionID),
+              !arguments.contains(where: { $0.utf8.contains(0) }) else { return nil }
+        let command = arguments.map(shellWord).joined(separator: " ")
+        guard let cwd else { return command }
+        guard cwd.hasPrefix("/"), !cwd.utf8.contains(0), !cwd.contains(where: \.isNewline) else { return nil }
+        return "cd \(shellWord(cwd)) && \(command)"
+    }
+
+    public static func shellWord(_ value: String) -> String {
+        let plain = !value.isEmpty && value.unicodeScalars.allSatisfy { scalar in
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "@%+=:,./_-".unicodeScalars.contains(scalar))
+        }
+        return plain ? value : shellQuoted(value)
+    }
+
     public static func fileName(source: AgentSource, sessionID: String) -> String? {
         guard isPlausibleSessionID(sessionID), isSupported(source) else { return nil }
         return "hoply-resume-\(source.rawValue)-\(sessionID).\(fileExtension)"

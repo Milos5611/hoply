@@ -1,4 +1,5 @@
 import AgentKit
+import AgentSystem
 import Foundation
 
 enum Format {
@@ -78,18 +79,6 @@ enum Format {
         value >= 10 ? count(Int(value.rounded())) : String(format: "%.1f", value)
     }
 
-    static func diffSummary(_ diff: GitDiffStat, path: String? = nil) -> String {
-        var parts: [String] = []
-        if diff.filesChanged > 0 {
-            parts.append("\(diff.filesChanged) \(diff.filesChanged == 1 ? "file" : "files") changed, +\(diff.added) −\(diff.removed)")
-        }
-        if diff.untracked > 0 {
-            parts.append("\(diff.untracked) untracked \(diff.untracked == 1 ? "file" : "files")")
-        }
-        let place = path.map { " in \(Self.path($0))" } ?? ""
-        return "Uncommitted\(place): " + parts.joined(separator: ", ")
-    }
-
     static func contextSummary(_ context: ContextWindow) -> String {
         "Context window: \(tokens(context.used)) of \(tokens(context.limit)) tokens used, \(tokens(context.remaining)) left"
     }
@@ -99,7 +88,7 @@ enum Format {
     }
 
     static func path(_ path: String) -> String {
-        (path as NSString).abbreviatingWithTildeInPath
+        HomePath.abbreviating(UserHome.abbreviating(path), home: PreviewData.home)
     }
 
     static func model(_ id: String) -> String {

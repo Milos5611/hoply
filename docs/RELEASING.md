@@ -58,7 +58,8 @@ The iCloud link needs entitlements that only a provisioning profile grants. With
 `.provisionprofile`, `scripts/build-app.sh` embeds it as `Contents/embedded.provisionprofile` and signs the app with
 entitlements taken from the profile itself by `scripts/profile-entitlements.sh`: the application and team identifiers,
 the container `iCloud.com.coolcraftcoders.hoply`, CloudKit, the push environment, and the container environment
-(`Production` from a Developer ID profile, `Development` from a development profile). It refuses a profile without
+(`Production` from a Developer ID profile, `Development` from a development profile; an optional fourth argument,
+`Production` or `Development`, sets it instead, which the Mac App Store build needs). It refuses a profile without
 that container, CloudKit or the environment, one made for another App ID, and an ad-hoc identity. `package.sh` passes
 the variable on and prints the signed entitlements.
 
@@ -84,6 +85,60 @@ HOPLY_SIGN_IDENTITY="Apple Development: <name> (<id>)" HOPLY_PROVISION_PROFILE=/
 ```
 
 That build talks to the container's Development environment.
+
+## Mac App Store edition
+
+The store edition is built from the same package with the `AppStore` trait (see CONTRIBUTING, Two editions):
+bundle id `com.coolcraftcoders.hoply.appstore`, sandboxed, no Sparkle, `Sources/Hoply/Info-AppStore.plist`
+(`LSApplicationCategoryType` developer tools, `ITSAppUsesNonExemptEncryption` NO). It is a separate App ID and
+listing, so it never shares a bundle id, TCC grants or a container with the hoply.dev download. It needs, all for team
+`24M9Y6KW2S`: an **Apple Distribution** certificate, a **3rd Party Mac Developer Installer** certificate, a **Mac App
+Store** provisioning profile for the App ID (iCloud container `iCloud.com.coolcraftcoders.hoply` and Push enabled),
+and for running signed builds locally an Apple Development certificate with a **macOS App Development** profile that
+lists the Mac.
+
+`scripts/build-store.sh` builds a universal app into `build/store/` (in its own build folder, `.build/appstore`) and
+fails if the binary links Sparkle. Signing material comes only from environment variables:
+
+```bash
+scripts/build-store.sh --adhoc   # Hoply.app, ad-hoc signed, sandbox entitlements only: local GUI checks
+HOPLY_STORE_DEV_PROFILE=… scripts/build-store.sh --dev   # Hoply.app, Apple Development, iCloud Development
+HOPLY_STORE_PROFILE=… HOPLY_STORE_P12=… HOPLY_INSTALLER_P12=… HOPLY_STORE_P12_PASSWORD=… \
+  scripts/build-store.sh         # Hoply.app + Hoply.pkg for App Store Connect
+```
+
+- Entitlements: `scripts/store.entitlements` (`app-sandbox`, `network.server`, `network.client`,
+  `files.user-selected.read-write`, `files.bookmarks.app-scope`). `--dev` and the store build add the profile's
+  application and team identifiers, iCloud (CloudKit) and push from `profile-entitlements.sh`, with the iCloud
+  environment and `aps-environment` `Development` for `--dev` and `Production` for the store. The profile is embedded
+  as `Contents/embedded.provisionprofile`; no hardened runtime or timestamp (the store doesn't need them).
+- Identities are picked by the profile: the signing identity must be one of the profile's certificates, and the
+  profile must belong to team `24M9Y6KW2S`, so another team's identity on the same Mac is never used. The store build
+  imports `HOPLY_STORE_P12` (Apple Distribution) and `HOPLY_INSTALLER_P12` (installer; its password is
+  `HOPLY_INSTALLER_P12_PASSWORD`, else `HOPLY_STORE_P12_PASSWORD`) into a temporary keychain that is deleted at the
+  end; the login keychain and its search list stay untouched. A `.p12` in OpenSSL's newer AES format, which `security
+  import` refuses, is re-encoded in the temp folder first. `--dev` takes the identity from the login keychain, or from
+  `HOPLY_STORE_DEV_P12` (+ `HOPLY_STORE_DEV_P12_PASSWORD`) the same temporary way.
+- Version: `CFBundleShortVersionString` from `HOPLY_VERSION`, else the newest `v*` tag; `CFBundleVersion` is the
+  commit count (`HOPLY_BUILD` overrides), like the hoply.dev build. App Store Connect refuses a build number it has
+  already seen for a version.
+- The store build runs `xattr -cr` before signing (the store refuses quarantined files), then `productbuild --sign
+  "3rd Party Mac Developer Installer: …" --component Hoply.app /Applications build/store/Hoply.pkg`, and checks the app
+  with `codesign --verify --strict` and the package with `pkgutil --check-signature`.
+- The store edition uses CloudKit's Production environment, so the schema rule above applies to it too.
+
+Upload with an App Store Connect API key whose role may upload builds (Admin or App Manager). `--validate-app` runs App Store Connect's checks without creating a build;
+`--upload-package` sends it, and the build shows in TestFlight after processing (a few minutes to an hour):
+
+```bash
+xcrun altool --validate-app build/store/Hoply.pkg --api-key <KEYID> --api-issuer <ISSUER> --p8-file-path AuthKey_<KEYID>.p8
+xcrun altool --upload-package build/store/Hoply.pkg --api-key <KEYID> --api-issuer <ISSUER> --p8-file-path AuthKey_<KEYID>.p8
+```
+
+`release.yml`'s `app-store` job does the same after the `release` job: it builds the signed `.pkg` with the version
+from the tag (artifact `Hoply-AppStore`) and uploads it on `v*` tags. Without the store secrets (table below) it skips
+the build or the upload with a warning; a manual run builds the package without uploading. Submitting a build for
+review stays a manual step in App Store Connect.
 
 ## One-time setup
 
@@ -133,6 +188,12 @@ That build talks to the container's Development environment.
    | `SPARKLE_PRIVATE_KEY` | the contents of the exported private key file from step 5 |
    | `TAP_TOKEN` | the fine-grained token from step 6 |
    | `DEVELOPER_ID_PROFILE_BASE64` | optional, the iCloud link (step 7): `base64 -i Hoply_Developer_ID.provisionprofile \| pbcopy` |
+   | `STORE_P12_BASE64` | Mac App Store edition: the Apple Distribution `.p12`, base64 |
+   | `INSTALLER_P12_BASE64` | Mac App Store edition: the 3rd Party Mac Developer Installer `.p12`, base64 |
+   | `STORE_P12_PASSWORD` | the password of both store `.p12` files |
+   | `STORE_PROFILE_BASE64` | the Mac App Store provisioning profile, base64 |
+   | `ASC_KEY_ID`, `ASC_ISSUER_ID` | an App Store Connect API key that may upload builds (App Manager or Admin) |
+   | `ASC_KEY_P8_BASE64` | that key's `AuthKey_<KEYID>.p8`, base64 |
 
 5. Create the update signing key (Sparkle, EdDSA) once, after a `swift build` has fetched Sparkle:
    `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account hoply`. It stores the private key in your login

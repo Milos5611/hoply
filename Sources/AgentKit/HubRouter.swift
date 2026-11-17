@@ -90,19 +90,11 @@ public struct HubRouter: Sendable {
         if source == .claudeCode, json["cursor_version"] != nil {
             return Outcome(response: .json(), events: [], note: nil)
         }
-        let events = HookMapper.events(source: source, eventName: eventName, json: json,
-                                       agentPID: Self.agentPID(request), now: now)
+        let events = HookMapper.events(source: source, eventName: eventName, json: json, now: now)
         let approval = PermissionApproval.request(source: source, eventName: eventName, json: json,
                                                   headers: request.headers, now: now)
         let reply = TurnReply.request(source: source, eventName: eventName, json: json, headers: request.headers,
                                       now: now)
         return Outcome(response: .json(), events: events, note: nil, approval: approval, reply: reply)
-    }
-
-    public static let agentPIDHeader = "x-hoply-pid"
-
-    static func agentPID(_ request: HTTPRequest) -> Int32? {
-        guard let text = request.headers[agentPIDHeader], let pid = Int32(text), pid > 1 else { return nil }
-        return pid
     }
 }

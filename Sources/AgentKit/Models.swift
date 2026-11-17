@@ -61,8 +61,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var failure: String?
     public var turnEnded: Bool
     public var subagents: [LiveSubagent]
-    public var reportedPID: Int32?
-    public var pidReportedAt: Date?
 
     public static let maxSubagents = 50
 
@@ -98,8 +96,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.failure = nil
         self.turnEnded = false
         self.subagents = []
-        self.reportedPID = nil
-        self.pidReportedAt = nil
     }
 }
 
@@ -181,11 +177,9 @@ public struct AgentEvent: Sendable, Equatable {
     public var transcriptPath: String?
     public var agentID: String?
     public var agentType: String?
-    public var agentPID: Int32?
 
     public init(key: SessionKey, kind: Kind, time: Date, cwd: String? = nil, model: String? = nil, fromHook: Bool,
-                transcriptPath: String? = nil, agentID: String? = nil, agentType: String? = nil,
-                agentPID: Int32? = nil) {
+                transcriptPath: String? = nil, agentID: String? = nil, agentType: String? = nil) {
         self.key = key
         self.kind = kind
         self.time = time
@@ -195,6 +189,5 @@ public struct AgentEvent: Sendable, Equatable {
         self.transcriptPath = transcriptPath
         self.agentID = agentID
         self.agentType = agentType
-        self.agentPID = agentPID
     }
 }

@@ -17,12 +17,26 @@ final class AgentConnections {
         var isError = false
     }
 
+    private struct Reading: Sendable {
+        var statuses: [ConnectableAgent: ConnectionStatus] = [:]
+        var access: [AgentFolder: FolderAccess] = [:]
+        var problems: [ConnectableAgent: AgentConnectorError.Kind] = [:]
+        var claudeHooksTwice = false
+    }
+
     static let dismissedKey = "HoplyAgentsNudgeDismissed"
+    static let folderCardDismissedKey = "HoplyFolderAccessDismissed"
 
     private(set) var statuses: [ConnectableAgent: ConnectionStatus] = [:]
+    private(set) var access: [AgentFolder: FolderAccess] = [:]
+    private(set) var problems: [ConnectableAgent: AgentConnectorError.Kind] = [:]
+    private(set) var claudeHooksTwice = false
     private(set) var running: ConnectableAgent?
+    private(set) var isBusy = false
     private(set) var notices: [ConnectableAgent: Notice] = [:]
+    private(set) var folderNotices: [AgentFolder: Notice] = [:]
     private(set) var dismissed: String?
+    private(set) var folderCardDismissed: String?
 
     @ObservationIgnored var settings: () -> AppSettings = { AppSettings() }
     @ObservationIgnored private let isLive: Bool
@@ -30,12 +44,69 @@ final class AgentConnections {
 
     init(live: Bool = true) {
         isLive = live
-        if live { dismissed = UserDefaults.standard.string(forKey: Self.dismissedKey) }
+        guard live else { return }
+        dismissed = UserDefaults.standard.string(forKey: Self.dismissedKey)
+        folderCardDismissed = UserDefaults.standard.string(forKey: Self.folderCardDismissedKey)
     }
 
-    var connector: AgentConnector { AgentConnector(settings: settings()) }
+    var connector: AgentConnector {
+        guard isLive else { return AgentConnector(settings: settings(), environment: [:], home: PreviewData.home) }
+        return AgentConnector(settings: settings())
+    }
 
     func status(of agent: ConnectableAgent) -> ConnectionStatus? { statuses[agent] }
+
+    func access(of agent: ConnectableAgent) -> FolderAccess? { access[agent.folder] }
+
+    var connectable: [ConnectableAgent] {
+        ConnectableAgent.allCases.filter { agent in
+            switch statuses[agent] {
+            case .notConnected?, .outdated?: true
+            case .unreadable?: problems[agent] != nil
+            case nil: access[agent.folder]?.asksForGrant == true
+            case .connected?, .notInstalled?: false
+            }
+        }
+    }
+
+    var needingAccess: [ConnectableAgent] {
+        ConnectableAgent.allCases.filter { statuses[$0] != .notInstalled && access[$0.folder]?.asksForGrant == true }
+    }
+
+    var showsFolderCard: Bool {
+        guard !access.isEmpty, folderSignature != folderCardDismissed else { return false }
+        if !needingAccess.isEmpty { return true }
+        return access.values.allSatisfy { $0 == .notFound }
+    }
+
+    private var folderSignature: String {
+        AgentFolder.allCases.map { folder in
+            let kind = switch access[folder] {
+            case nil: "unknown"
+            case .notNeeded: "not-needed"
+            case .granted: "granted"
+            case .missing: "missing"
+            case .notFound: "not-found"
+            case .elsewhere: "elsewhere"
+            case .readOnly: "read-only"
+            case .broken: "broken"
+            }
+            return "\(folder.rawValue)=\(kind)"
+        }.joined(separator: ",")
+    }
+
+    func dismissFolderCard() {
+        folderCardDismissed = folderSignature
+        if isLive { UserDefaults.standard.set(folderCardDismissed, forKey: Self.folderCardDismissedKey) }
+    }
+
+    func note(_ notice: Notice?, for agent: ConnectableAgent) {
+        notices[agent] = notice
+    }
+
+    func note(_ notice: Notice?, for folder: AgentFolder) {
+        folderNotices[folder] = notice
+    }
 
     var nudge: Nudge? {
         guard let problem = problem, signature != dismissed else { return nil }
@@ -78,49 +149,77 @@ final class AgentConnections {
         refresh()
     }
 
-    func connect(_ agent: ConnectableAgent) {
-        run([agent], connecting: true)
+    func begin(_ agents: [ConnectableAgent]) -> Bool {
+        guard isLive, !isBusy, running == nil else { return false }
+        isBusy = true
+        for agent in agents { notices[agent] = nil }
+        return true
     }
 
-    func connect(_ agents: [ConnectableAgent]) {
-        run(agents, connecting: true)
+    func end() {
+        isBusy = false
     }
 
-    func disconnect(_ agent: ConnectableAgent) {
-        run([agent], connecting: false)
+    func accessProblems(for agents: [ConnectableAgent]) async -> [ConnectableAgent: AgentConnectorError] {
+        let connector = connector
+        return await Task.detached {
+            var problems: [ConnectableAgent: AgentConnectorError] = [:]
+            for agent in agents { problems[agent] = connector.accessProblem(for: agent) }
+            return problems
+        }.value
+    }
+
+    func attempt(_ agent: ConnectableAgent, connecting: Bool) async -> Result<ConnectOutcome, AgentConnectorError> {
+        running = agent
+        defer { running = nil }
+        let connector = connector
+        return await Task.detached { () -> Result<ConnectOutcome, AgentConnectorError> in
+            do throws(AgentConnectorError) {
+                return .success(connecting ? try connector.connect(agent) : try connector.disconnect(agent))
+            } catch {
+                return .failure(error)
+            }
+        }.value
+    }
+
+    func finish(_ agent: ConnectableAgent, _ result: Result<ConnectOutcome, AgentConnectorError>, connecting: Bool) {
+        notices[agent] = Self.notice(for: result, agent: agent, connecting: connecting)
     }
 
     // A read that started before a write (or before a folder or port change) must not overwrite a newer one.
-    private func reload() async {
+    func reload() async {
         guard isLive else { return }
         epoch += 1
         let started = epoch
         let connector = connector
-        let found = await Task.detached { connector.statuses() }.value
-        guard started == epoch, found != statuses else { return }
-        statuses = found
+        let settings = settings()
+        let found = await Task.detached { Self.read(connector, settings: settings) }.value
+        guard started == epoch else { return }
+        if found.statuses != statuses { statuses = found.statuses }
+        if found.access != access { access = found.access }
+        if found.problems != problems { problems = found.problems }
+        if found.claudeHooksTwice != claudeHooksTwice { claudeHooksTwice = found.claudeHooksTwice }
     }
 
-    private func run(_ agents: [ConnectableAgent], connecting: Bool) {
-        guard isLive, running == nil, let first = agents.first else { return }
-        running = first
-        for agent in agents { notices[agent] = nil }
-        let connector = connector
-        Task {
-            for agent in agents {
-                running = agent
-                let result = await Task.detached { () -> Result<ConnectOutcome, AgentConnectorError> in
-                    do throws(AgentConnectorError) {
-                        return .success(connecting ? try connector.connect(agent) : try connector.disconnect(agent))
-                    } catch {
-                        return .failure(error)
-                    }
-                }.value
-                notices[agent] = Self.notice(for: result, agent: agent, connecting: connecting)
-            }
-            await reload()
-            running = nil
+    // Sandboxed, reading an ungranted folder is a denial: status comes only from folders Hoply may read, and a
+    // missing status means installed but not readable.
+    private nonisolated static func read(_ connector: AgentConnector, settings: AppSettings) -> Reading {
+        var reading = Reading(access: FolderGrants.shared.access(settings: settings))
+        for agent in ConnectableAgent.allCases {
+            let access = reading.access[agent.folder] ?? .notNeeded
+            guard access.allowsReading || !connector.isInstalled(agent) else { continue }
+            reading.statuses[agent] = connector.status(of: agent)
         }
+        guard connector.edition.needsFolderGrants else { return reading }
+        for agent in ConnectableAgent.allCases where reading.statuses[agent] != .notInstalled {
+            reading.problems[agent] = connector.accessProblem(for: agent)?.kind
+        }
+        if reading.access[.claude]?.allowsReading == true,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: connector.claudeSettingsPath)),
+           let file = try? SettingsJSON.parse(data) {
+            reading.claudeHooksTwice = ClaudeCodePlugin.isInstalledTwice(inSettings: file)
+        }
+        return reading
     }
 
     private static func notice(for result: Result<ConnectOutcome, AgentConnectorError>, agent: ConnectableAgent,
@@ -147,5 +246,13 @@ final class AgentConnections {
         self.statuses = statuses
         self.notices = notices
         self.running = running
+    }
+
+    func show(access: [AgentFolder: FolderAccess], notices: [AgentFolder: Notice] = [:],
+              problems: [ConnectableAgent: AgentConnectorError.Kind] = [:], claudeHooksTwice: Bool = false) {
+        self.access = access
+        folderNotices = notices
+        self.problems = problems
+        self.claudeHooksTwice = claudeHooksTwice
     }
 }

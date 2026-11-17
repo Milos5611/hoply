@@ -59,8 +59,8 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
 
 - **Live sessions** for Claude Code, Codex CLI, Copilot CLI, Copilot in JetBrains and Qwen Code, grouped by
   repository (worktrees and subfolders share a card). Each row shows the state (working, your turn, needs permission,
-  limited, ended), the task, the model, the last tool, tokens and cost, plus live subagents, a context-window warning
-  and the branch's git diff.
+  limited, ended), the task, the model, the last tool, tokens and cost, plus live subagents and a context-window
+  warning.
 - **Waiting on you.** Sessions that need you move to the top of the panel, with a notification that says why: a
   permission prompt, a question, a finished turn, a usage limit or an error. A turn shorter than 10 seconds ends
   without one (Settings → Notifications sets the delay, or Always), and quiet hours and per-project mute keep it calm.
@@ -77,13 +77,9 @@ Copilot in JetBrains, Qwen Code, model servers and Claude plan limits take one m
 - **Plan limits.** Claude's 5-hour and weekly windows (including model-specific weekly ones) and Codex's (5-hour and
   weekly, or 30 days on the free plan, with the plan's name): your pace against the clock, burn rate, a projection at
   reset, and alerts at 80% and 95%. Codex's come from its own session files, with no login and no network request.
-- **Dev servers.** The ports your agent sessions started, tied back to the session, with a Stop button.
-- **Clean up.** Merged worktrees, large build caches, old transcripts already in Hoply's history, and processes an
-  agent left running. Nothing goes without a review sheet, and files go to the Trash.
-- **Command palette** on ⌥Space, from any app: sessions, projects, dev servers, Dashboard pages and actions. Resume a
-  finished session in Terminal.
-- **A Dashboard window** with Overview, Projects, Sessions, Spending, Local model, Limits, Dev servers and Clean up
-  pages.
+- **Command palette** on ⌥Space, from any app: sessions, projects, Dashboard pages and actions. Resume a finished
+  session in Terminal.
+- **A Dashboard window** with Overview, Projects, Sessions, Spending, Local model and Limits pages.
 
 ### What each source reports
 
@@ -111,8 +107,7 @@ Anything else that talks to your model server, such as a chat app, shows up in t
   - an **update check** at `https://hoply.dev/appcast.xml`, at launch and every hour (release builds only; Settings →
     Updates turns it off), plus the download of a new version when you choose it or turn on automatic install.
 - Agent records (transcripts, Codex session files, Copilot's database and session files) are read, never changed.
-  The two exceptions are things you ask for: Connect writes the hook config above, and Clean up moves what you tick
-  to the Trash.
+  The one exception is something you ask for: Connect writes the hook config above.
 - Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`. Model-server tokens and passwords live in
   your Keychain, never in settings, URLs or logs.
 
@@ -248,30 +243,10 @@ restart running sessions.
 </details>
 
 <details>
-<summary><b>Clean up</b></summary>
-
-The Dashboard's Clean up page lists what Hoply thinks is safe to remove, and what it keeps and why. Nothing is
-removed until you tick it and confirm the review sheet, and each item is checked again right before it goes.
-
-- **Worktrees:** linked git worktrees that are merged into the default branch, clean, unlocked and idle for a week,
-  with no session or dev server in them. The folder moves to the Trash and git forgets the worktree; the branch stays.
-  Squash-merged branches count as unmerged and are kept.
-- **Build caches:** `.next`, `.turbo`, `.build`, `target` and the like, over 50 MB, in projects idle for two weeks. In
-  a repo the folder must be gitignored. `node_modules` is opt-in.
-- **Claude transcripts:** sessions older than 90 days that are fully in Hoply's history. The usage stays in Hoply;
-  Claude Code can no longer resume those sessions.
-- **Orphan processes:** processes an agent session started and left running after it ended. These are stopped, not
-  trashed.
-
-Files go to the Trash, so Finder's Put Back works.
-
-</details>
-
-<details>
 <summary><b>Command palette</b></summary>
 
-⌥Space opens a search field over whatever app is in front: live and recent sessions, projects, dev servers, Dashboard
-pages and actions. Type `>` to list actions only. Return runs the highlighted row and ⌘Return its second action;
+⌥Space opens a search field over whatever app is in front: live and recent sessions, projects, Dashboard pages
+and actions. Type `>` to list actions only. Return runs the highlighted row and ⌘Return its second action;
 things you pick often rank higher.
 
 - **Resume:** Return on a finished Claude Code, Codex CLI, Copilot CLI or Qwen Code session writes a small `.command`

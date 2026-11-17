@@ -11,7 +11,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(_ page: DashboardPage? = nil) {
-        if let page { model.history.select(page) }
+        if let page { model.selectDashboardPage(page) }
         let window = self.window ?? makeWindow()
         self.window = window
         NSApp.setActivationPolicy(.regular)
@@ -47,7 +47,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let controller = NSHostingController(rootView: DashboardView().environment(model))
+        let controller = NSHostingController(rootView: ModelScope(model: model) { DashboardView() })
         controller.sceneBridgingOptions = [.toolbars, .title]
         controller.sizingOptions = [.minSize]
         let window = NSWindow(contentViewController: controller)

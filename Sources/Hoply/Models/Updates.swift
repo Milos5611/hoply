@@ -1,3 +1,4 @@
+#if Sparkle
 import AgentKit
 import AppKit
 import Observation
@@ -31,18 +32,10 @@ final class Updates: NSObject {
 
     let runningVersion: String?
 
-    private static var shortVersion: String? {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-    }
-
-    var version: String {
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "\(Self.shortVersion ?? "?") (\(build))"
-    }
+    var version: String { AppVersion.full }
 
     init(live: Bool) {
-        // Preview models get none, so --snapshot PNGs (the site's screenshots) never show a version that goes stale.
-        runningVersion = live ? Self.shortVersion : nil
+        runningVersion = live ? AppVersion.short : nil
         super.init()
         guard live, Bundle.main.bundleURL.pathExtension == "app",
               UpdateFeed(info: Bundle.main.infoDictionary ?? [:]) != nil else { return }
@@ -197,3 +190,4 @@ extension Updates: @preconcurrency SPUStandardUserDriverDelegate {
         reminder.found(PendingUpdate(version: update.displayVersionString, stage: .available), seen: handleShowingUpdate)
     }
 }
+#endif

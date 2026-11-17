@@ -93,3 +93,18 @@ public enum ProjectEditError: Error, Equatable, Sendable {
     case sameProject
     case notMerged
 }
+
+enum PathScope {
+    static func normalized(_ path: String) -> String {
+        var path = path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
+    static func contains(_ root: String, _ path: String) -> Bool {
+        let root = normalized(root)
+        let path = normalized(path)
+        guard !root.isEmpty, !path.isEmpty else { return false }
+        return path == root || path.hasPrefix(root == "/" ? root : root + "/")
+    }
+}

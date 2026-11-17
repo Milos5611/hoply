@@ -1,3 +1,4 @@
+#if Sparkle
 import AgentKit
 import SwiftUI
 
@@ -41,3 +42,4 @@ struct UpdateCard: View {
         }
     }
 }
+#endif

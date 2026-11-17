@@ -3,22 +3,17 @@ import SwiftUI
 
 enum SessionPlace: Equatable {
     case project(String)
-    case worktree(String)
-    case subfolder(String)
+    case folder(String)
 
     init?(cwd: String?, root: String?) {
         guard let cwd, let root, cwd != root else { return nil }
-        if cwd.hasPrefix(root.hasSuffix("/") ? root : root + "/") {
-            self = .subfolder(String(cwd.dropFirst(root.count).drop { $0 == "/" }))
-        } else {
-            self = .worktree((cwd as NSString).lastPathComponent)
-        }
+        self = .folder(cwd.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+                       ? String(cwd.dropFirst(root.count).drop { $0 == "/" }) : (cwd as NSString).lastPathComponent)
     }
 
     var text: Text {
         switch self {
-        case .project(let name), .subfolder(let name): return Text(name)
-        case .worktree(let name): return Text("\(Image(systemName: "arrow.triangle.branch")) \(name)")
+        case .project(let name), .folder(let name): return Text(name)
         }
     }
 }
@@ -72,11 +67,6 @@ struct SessionRow: View {
                         .padding(.top, 2)
                         .help(subagentHelp)
                 }
-                let servers = model.devServers.rowServers(for: session.key)
-                if !servers.isEmpty {
-                    DevServerStrip(servers: servers)
-                        .padding(.top, 3)
-                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
@@ -94,8 +84,9 @@ struct SessionRow: View {
                         .foregroundStyle(.tertiary)
                         .help(Format.copilot(totals) ?? "")
                 }
-                SessionFacts(diff: model.diffStat(for: session), context: model.contextWindow(for: session.key),
-                             path: session.cwd)
+                if let context = model.contextWindow(for: session.key), context.isWarning {
+                    ContextWarning(context: context)
+                }
             }
             .fixedSize()
         }
@@ -207,37 +198,13 @@ struct SessionRow: View {
     }
 }
 
-struct SessionFacts: View {
-    let diff: GitDiffStat?
-    let context: ContextWindow?
-    var path: String?
+struct ContextWarning: View {
+    let context: ContextWindow
 
     var body: some View {
-        let diff = diff.flatMap { $0.isClean ? nil : $0 }
-        let context = context.flatMap { $0.isWarning ? $0 : nil }
-        if diff != nil || context != nil {
-            HStack(spacing: 6) {
-                if let diff {
-                    HStack(spacing: 4) {
-                        if diff.added > 0 || diff.removed > 0 {
-                            Text("+\(diff.added)")
-                                .foregroundStyle(.green)
-                            Text("−\(diff.removed)")
-                                .foregroundStyle(.red)
-                        } else {
-                            Text("\(diff.untracked) new")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .help(Format.diffSummary(diff, path: path))
-                }
-                if let context {
-                    Text("ctx \(Format.percent(context.fraction))")
-                        .foregroundStyle(context.fraction >= 0.95 ? Color.red : Color.orange)
-                        .help(Format.contextSummary(context))
-                }
-            }
+        Text("ctx \(Format.percent(context.fraction))")
             .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-        }
+            .foregroundStyle(context.fraction >= 0.95 ? Color.red : Color.orange)
+            .help(Format.contextSummary(context))
     }
 }

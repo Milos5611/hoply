@@ -110,10 +110,10 @@ struct AwayFixButton: View {
             ProgressView()
                 .controlSize(.small)
         } else if !agents.isEmpty {
-            Button(title) { connections.connect(agents) }
+            Button(title) { model.connect(agents) }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(connections.running != nil)
+                .disabled(connections.isBusy)
                 .help(AwayText.fixHelp(agents))
         }
     }
@@ -179,9 +179,7 @@ enum AwayText {
     }
 
     private static func list(_ agents: [ConnectableAgent]) -> String {
-        let names = agents.map(\.displayName)
-        guard names.count > 2 else { return names.joined(separator: " and ") }
-        return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        AgentText.list(agents)
     }
 
     private static func noneIs(_ agents: [ConnectableAgent], _ state: String) -> String {

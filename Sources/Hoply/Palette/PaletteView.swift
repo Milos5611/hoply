@@ -41,7 +41,7 @@ struct PaletteView: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 20)
-            TextField("Search sessions, projects, dev servers and pages", text: Binding(get: { palette.query },
+            TextField("Search sessions, projects and pages", text: Binding(get: { palette.query },
                                                                                         set: { palette.setQuery($0) }))
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
@@ -56,7 +56,8 @@ struct PaletteView: View {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(rows) { row in
-                        PaletteRow(row: row, isSelected: row.id == selected?.id, isHovered: row.id == hovered)
+                        PaletteRow(row: row, isSelected: row.id == selected?.id, isHovered: row.id == hovered,
+                                   confirmation: palette.confirmation?.id == row.id ? palette.confirmation?.text : nil)
                             .contentShape(Rectangle())
                             .onHover { inside in
                                 if inside {
@@ -127,6 +128,7 @@ struct PaletteRow: View {
     let row: Palette.Row
     let isSelected: Bool
     let isHovered: Bool
+    var confirmation: String?
 
     var body: some View {
         let entry = row.entry
@@ -149,7 +151,12 @@ struct PaletteRow: View {
             if let status = entry.status {
                 StatePill(status: status, failed: entry.failed)
             }
-            if isSelected {
+            if let confirmation {
+                Label(confirmation, systemImage: "checkmark")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .fixedSize()
+            } else if isSelected {
                 HStack(spacing: 5) {
                     Text(entry.primary.label)
                     KeyCap("↩")
@@ -192,7 +199,6 @@ struct PaletteRow: View {
         switch kind {
         case .session: return "Session"
         case .project: return "Project"
-        case .devServer: return "Dev server"
         case .page: return "Page"
         case .action: return "Action"
         }

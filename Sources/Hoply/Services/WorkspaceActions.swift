@@ -16,10 +16,6 @@ enum WorkspaceActions {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 
-    static func openInBrowser(_ url: URL) {
-        NSWorkspace.shared.open(url)
-    }
-
     static func chooseFolder(message: String, startingAt path: String? = nil) async -> String? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false

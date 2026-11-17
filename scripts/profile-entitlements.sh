@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[ $# -eq 3 ] || { echo "Usage: scripts/profile-entitlements.sh <profile.provisionprofile> <iCloud container> <bundle id>" >&2; exit 2; }
+[ $# -eq 3 ] || [ $# -eq 4 ] ||
+  { echo "Usage: scripts/profile-entitlements.sh <profile.provisionprofile> <iCloud container> <bundle id> [Production|Development]" >&2; exit 2; }
 profile="$1"
 container="$2"
 bundle="$3"
+environment="${4:-}"
+case "$environment" in "" | Production | Development) ;; *) echo "Unknown iCloud environment: $environment" >&2; exit 2 ;; esac
 pb=/usr/libexec/PlistBuddy
 
 work="$(mktemp -d -t hoply-profile)"
@@ -51,9 +54,9 @@ matches "$container" <<<"$(values Entitlements:com.apple.developer.icloud-contai
 matches CloudKit <<<"$(values Entitlements:com.apple.developer.icloud-services)" ||
   fail "no CloudKit in com.apple.developer.icloud-services"
 
-if [ "$(get ProvisionsAllDevices || true)" = true ]; then
+if [ -z "$environment" ] && [ "$(get ProvisionsAllDevices || true)" = true ]; then
   environment=Production
-else
+elif [ -z "$environment" ]; then
   environment=Development
 fi
 matches "$environment" <<<"$(values Entitlements:com.apple.developer.icloud-container-environment)" ||

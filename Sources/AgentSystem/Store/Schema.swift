@@ -1,7 +1,7 @@
 import Foundation
 
 public enum Schema {
-    public static let migrations: [String] = [v1, v2, v3, v4, v5]
+    public static let migrations: [String] = [v1, v2, v3, v4, v5, v6]
 
     static let v1 = """
     CREATE TABLE projects (
@@ -153,6 +153,10 @@ public enum Schema {
     static let v5 = """
     ALTER TABLE limit_samples ADD COLUMN plan TEXT;
     ALTER TABLE sessions ADD COLUMN context_window INTEGER;
+    """
+
+    static let v6 = """
+    DROP TABLE IF EXISTS cleanup_log;
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {

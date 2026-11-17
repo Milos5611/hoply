@@ -5,6 +5,8 @@ public struct AgentConnectorError: Error, Equatable, LocalizedError, Sendable {
     public enum Kind: Equatable, Sendable {
         case unreadable
         case writeFailed
+        case needsFolderAccess(AgentFolder)
+        case linkOutsideGrant(AgentFolder, target: String, allow: String)
     }
 
     public let kind: Kind
@@ -27,49 +29,48 @@ public struct AgentConnector: Sendable {
     public let copilotHome: String
     public let codexHome: String
     public let port: Int
+    public let edition: Edition
+    private let grants: FolderGrants
     private let now: @Sendable () -> Date
 
     public init(claudeConfigDirectory: String, copilotHome: String, codexHome: String, port: Int,
+                edition: Edition = .current, grants: FolderGrants = .shared,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.claudeConfigDirectory = URL(fileURLWithPath: claudeConfigDirectory).standardized.path
         self.copilotHome = URL(fileURLWithPath: copilotHome).standardized.path
         self.codexHome = URL(fileURLWithPath: codexHome).standardized.path
         self.port = port
+        self.edition = edition
+        self.grants = grants
         self.now = now
     }
 
-    public init(settings: AppSettings, environment: [String: String] = ProcessInfo.processInfo.environment) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.init(claudeConfigDirectory: Self.directory(settings.claudeConfigDir,
-                                                        default: Self.defaultClaudeConfigDirectory(environment: environment,
-                                                                                                   home: home)),
-                  copilotHome: Self.directory(settings.copilotHome,
-                                              default: Self.defaultCopilotHome(environment: environment, home: home)),
-                  codexHome: Self.directory(settings.codexHome,
-                                            default: Self.defaultCodexHome(environment: environment, home: home)),
-                  port: settings.port)
+    public init(settings: AppSettings, environment: [String: String] = ProcessInfo.processInfo.environment,
+                home: String = UserHome.path, edition: Edition = .current, grants: FolderGrants = .shared) {
+        self.init(claudeConfigDirectory: AgentFolder.claude.path(settings: settings, environment: environment, home: home),
+                  copilotHome: AgentFolder.copilot.path(settings: settings, environment: environment, home: home),
+                  codexHome: AgentFolder.codex.path(settings: settings, environment: environment, home: home),
+                  port: settings.port, edition: edition, grants: grants)
     }
 
     public static func defaultClaudeConfigDirectory(environment: [String: String], home: String) -> String {
-        directory(environment["CLAUDE_CONFIG_DIR"] ?? "", default: home + "/.claude")
+        AgentFolder.claude.defaultPath(environment: environment, home: home)
     }
 
     public static func defaultCopilotHome(environment: [String: String], home: String) -> String {
-        directory(environment["COPILOT_HOME"] ?? "", default: home + "/.copilot")
+        AgentFolder.copilot.defaultPath(environment: environment, home: home)
     }
 
     public static func defaultCodexHome(environment: [String: String], home: String) -> String {
-        directory(environment["CODEX_HOME"] ?? "", default: home + "/.codex")
-    }
-
-    static func directory(_ configured: String, default fallback: String) -> String {
-        let trimmed = configured.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? fallback : (trimmed as NSString).expandingTildeInPath
+        AgentFolder.codex.defaultPath(environment: environment, home: home)
     }
 
     public var claudeSettingsPath: String { claudeConfigDirectory + "/settings.json" }
-    public var copilotHooksPath: String { copilotHome + "/hooks/" + CopilotCLIHooks.fileName }
+    public var claudeInstalledPluginsPath: String { claudeConfigDirectory + "/plugins/installed_plugins.json" }
+    public var copilotHooksDirectory: String { copilotHome + "/hooks" }
+    public var copilotHooksPath: String { copilotHooksDirectory + "/" + CopilotCLIHooks.fileName }
     public var codexHooksPath: String { codexHome + "/" + CodexHooks.fileName }
+    public var claudePlugin: ClaudeCodePlugin { ClaudeCodePlugin(port: port) }
     public var claudeHooks: ClaudeCodeHooks { ClaudeCodeHooks(port: port) }
     public var copilotHooks: CopilotCLIHooks { CopilotCLIHooks(port: port) }
     public var codexHooks: CodexHooks { CodexHooks(port: port) }
@@ -98,6 +99,9 @@ public struct AgentConnector: Sendable {
 
     public func status(of agent: ConnectableAgent) -> ConnectionStatus {
         guard isInstalled(agent) else { return .notInstalled }
+        if let problem = accessProblem(for: agent), case .linkOutsideGrant = problem.kind {
+            return .unreadable(problem.message)
+        }
         let data: Data?
         do {
             data = try Self.read(configPath(for: agent))
@@ -108,7 +112,10 @@ public struct AgentConnector: Sendable {
         case .claudeCode:
             guard let data else { return .notConnected }
             do {
-                return claudeHooks.status(of: try SettingsJSON.parse(data))
+                let settings = try SettingsJSON.parse(data)
+                let hooks = claudeHooks.status(of: settings)
+                guard edition.needsFolderGrants, hooks == .notConnected else { return hooks }
+                return pluginStatus(settings: settings)
             } catch {
                 return .unreadable(Self.unreadable(claudeSettingsPath, error).message)
             }
@@ -124,12 +131,25 @@ public struct AgentConnector: Sendable {
         }
     }
 
+    func pluginStatus(settings: [String: Any]) -> ConnectionStatus {
+        let keys = ClaudeCodePlugin.enabledKeys(inSettings: settings)
+        guard !keys.isEmpty,
+              let installed = (try? Self.read(claudeInstalledPluginsPath)).flatMap({ $0 }),
+              let plugins = try? SettingsJSON.parse(installed),
+              let folder = ClaudeCodePlugin.installPath(forKeys: keys, installedPlugins: plugins) else {
+            return .notConnected
+        }
+        let hooks = (try? Self.read(folder + "/" + ClaudeCodePlugin.hooksPath)).flatMap { $0 }
+        return claudePlugin.status(installedHooks: hooks.flatMap { try? SettingsJSON.parse($0) })
+    }
+
     public func statuses() -> [ConnectableAgent: ConnectionStatus] {
         Dictionary(uniqueKeysWithValues: ConnectableAgent.allCases.map { ($0, status(of: $0)) })
     }
 
     @discardableResult
     public func connect(_ agent: ConnectableAgent) throws(AgentConnectorError) -> ConnectOutcome {
+        if let problem = accessProblem(for: agent) { throw problem }
         switch agent {
         case .claudeCode: return try editJSON(.claudeCode) { settings throws(SettingsJSONError) in
             try claudeHooks.connect(settings)
@@ -143,11 +163,44 @@ public struct AgentConnector: Sendable {
 
     @discardableResult
     public func disconnect(_ agent: ConnectableAgent) throws(AgentConnectorError) -> ConnectOutcome {
+        if let problem = accessProblem(for: agent, followingLink: agent != .copilotCLI) { throw problem }
         switch agent {
         case .claudeCode: return try editJSON(.claudeCode) { settings in claudeHooks.disconnect(settings) }
         case .copilotCLI: return try disconnectCopilot()
         case .codexCLI: return try editJSON(.codexCLI) { file in codexHooks.disconnect(file) }
         }
+    }
+
+    public func accessProblem(for agent: ConnectableAgent) -> AgentConnectorError? {
+        accessProblem(for: agent, followingLink: true)
+    }
+
+    // Sandboxed, the write lands where the path really is: a settings file linked elsewhere (or a linked hooks
+    // folder) needs a grant there too, and Copilot's disconnect renames only the link.
+    func accessProblem(for agent: ConnectableAgent, followingLink: Bool) -> AgentConnectorError? {
+        guard edition.agentConfigWrites != .always else { return nil }
+        let granted = grants.grants
+        let folder = agent.folder
+        let path = configPath(for: agent)
+        let directory = FolderGrants.canonical(configDirectory(for: agent))
+        guard edition.writesAgentConfig(at: directory, grants: granted) else {
+            let message = granted.contains { $0.covers(directory, needsWrite: false) }
+                ? "Hoply may only read \(Self.display(directory)). Allow it again so Hoply can add its hooks."
+                : "Allow \(Self.display(directory)) so Hoply can add its hooks to \(Self.display(path))."
+            return AgentConnectorError(kind: .needsFolderAccess(folder), path: path, message: message)
+        }
+        let written = followingLink ? [path, Self.resolvingLinks(path)] : [path]
+        for file in written {
+            let parent = FolderGrants.canonical((file as NSString).deletingLastPathComponent)
+            guard !edition.writesAgentConfig(at: parent, grants: granted) else { continue }
+            let target = (parent as NSString).appendingPathComponent((file as NSString).lastPathComponent)
+            let allow = FolderGrantRules.covering(directory, parent)
+            return AgentConnectorError(
+                kind: .linkOutsideGrant(folder, target: target, allow: allow), path: path,
+                message: "\(Self.display(path)) links to \(Self.display(target)), outside the folders Hoply may "
+                    + "change. Allow \(Self.display(allow)), which holds both, so Hoply can add its hooks.")
+        }
+        return nil
     }
 
     private func editJSON(
@@ -231,7 +284,7 @@ public struct AgentConnector: Sendable {
     }
 
     static func display(_ path: String) -> String {
-        (path as NSString).abbreviatingWithTildeInPath
+        UserHome.abbreviating(path)
     }
 
     static func createDirectory(_ path: String) throws(AgentConnectorError) {

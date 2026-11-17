@@ -116,7 +116,6 @@ final class CopilotStoreTests: XCTestCase {
         let s1 = try await ledger.reader.session(SessionKey(source: .copilotCLI, id: "s1"))
         XCTAssertEqual(s1?.title, "Initialize Project Setup")
         XCTAssertEqual(s1?.turns, 2)
-        XCTAssertEqual(s1?.branch, "main")
         XCTAssertEqual(s1?.project?.name, "corestory")
         XCTAssertEqual(s1?.project?.kind, .repo)
         XCTAssertEqual(s1?.totals.premiumRequests ?? 0, 16, accuracy: 1e-9)

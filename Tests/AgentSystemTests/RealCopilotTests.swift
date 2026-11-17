@@ -47,8 +47,7 @@ final class RealCopilotTests: XCTestCase {
                      totals.costUSD, totals.aiu, totals.premiumRequests, totals.calls, sessions.totalCount,
                      totals.hasUnpriced ? "yes" : "no"))
         for project in projects {
-            print(String(format: "  %@  $%.4f  %d sessions  %@", project.title, project.totals.apiEquivUSD, project.sessionCount,
-                         project.branches.joined(separator: ", ")))
+            print(String(format: "  %@  $%.4f  %d sessions", project.title, project.totals.apiEquivUSD, project.sessionCount))
         }
         XCTAssertEqual(progress.copilot, .ready(schemaVersion: CopilotStoreIngester.knownSchemaVersion))
         XCTAssertEqual(totals.calls, expected.calls)

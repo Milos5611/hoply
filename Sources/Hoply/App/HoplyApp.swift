@@ -3,6 +3,12 @@ import AgentSystem
 import AppKit
 import SwiftUI
 
+#if AppStore && Sparkle
+#error("The App Store edition can't contain Sparkle: build it with --disable-default-traits --traits AppStore")
+#elseif !AppStore && !Sparkle
+#error("Build with the Sparkle trait (the default) or with --disable-default-traits --traits AppStore")
+#endif
+
 @main
 struct HoplyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

@@ -16,7 +16,7 @@ public actor IngestCoordinator {
 
     private let continuation: AsyncStream<IngestUpdate>.Continuation
     private let store: Store
-    private let claude: ClaudeTranscriptIngester
+    private let claude: ClaudeTranscriptIngester?
     private let copilot: CopilotStoreIngester?
     private let codex: CodexRolloutIngester?
     private let copilotEvents: CopilotEventsIngester?
@@ -58,7 +58,7 @@ public actor IngestCoordinator {
     private var recording = 0
     private var telemetryCwds: [SessionKey: String] = [:]
 
-    public init(store: Store, claude: ClaudeTranscriptIngester = ClaudeTranscriptIngester(),
+    public init(store: Store, claude: ClaudeTranscriptIngester? = ClaudeTranscriptIngester(),
                 copilot: CopilotStoreIngester? = nil, codex: CodexRolloutIngester? = nil,
                 copilotEvents: CopilotEventsIngester? = nil, watch: Bool = true,
                 rescanInterval: Duration = .seconds(60),
@@ -177,7 +177,7 @@ public actor IngestCoordinator {
         while copilotPolling { try? await Task.sleep(for: .milliseconds(10)) }
         var reset = false
         do {
-            try await store.resetCursors(source: .claudeCode)
+            if claude != nil { try await store.resetCursors(source: .claudeCode) }
             if codex != nil { try await store.resetCursors(source: .codexCLI) }
             if copilot != nil || copilotEvents != nil { try await store.resetCursors(source: .copilotCLI) }
             cursors = try await fileCursors()
@@ -434,7 +434,8 @@ public actor IngestCoordinator {
     }
 
     private func fileCursors() async throws -> [String: FileCursor] {
-        var result = try await store.cursors(source: .claudeCode)
+        var result: [String: FileCursor] = [:]
+        if claude != nil { result = try await store.cursors(source: .claudeCode) }
         if codex != nil { result.merge(try await store.cursors(source: .codexCLI)) { claude, _ in claude } }
         if let copilotEvents {
             let events = try await store.cursors(source: .copilotCLI).filter { copilotEvents.isEventsFile($0.key) }
@@ -444,12 +445,13 @@ public actor IngestCoordinator {
     }
 
     private func discover() -> [ClaudeTranscriptIngester.TranscriptFile] {
-        (claude.discover() + (codex?.discover() ?? []) + (copilotEvents?.discover() ?? []))
+        ((claude?.discover() ?? []) + (codex?.discover() ?? []) + (copilotEvents?.discover() ?? []))
             .sorted { $0.stat.modified > $1.stat.modified }
     }
 
     private func isLedgerFile(_ path: String) -> Bool {
-        claude.isTranscript(path) || (codex?.isRollout(path) ?? false) || (copilotEvents?.isEventsFile(path) ?? false)
+        (claude?.isTranscript(path) ?? false) || (codex?.isRollout(path) ?? false)
+            || (copilotEvents?.isEventsFile(path) ?? false)
     }
 
     private func copilotEventsState(_ path: String, upTo offset: Int64,
@@ -576,7 +578,7 @@ public actor IngestCoordinator {
     }
 
     private func startWatcher() {
-        let paths = ([claude.projectsDirectory] + (codex?.watchedDirectories ?? [])
+        let paths = ((claude.map { [$0.projectsDirectory] } ?? []) + (codex?.watchedDirectories ?? [])
                      + (copilotEvents?.watchedDirectories ?? []))
             .filter { FileManager.default.fileExists(atPath: $0) }
         guard !paths.isEmpty else { return }
