@@ -791,6 +791,10 @@ extension AppModel {
         self.settings = settings
     }
 
+    func showPreview(claudeLimits: ClaudeLimits?) {
+        self.claudeLimits = claudeLimits
+    }
+
     func showPreview(approvals: [ApprovalRequest], events: [AgentEvent]) {
         ingest(events)
         self.approvals = approvals

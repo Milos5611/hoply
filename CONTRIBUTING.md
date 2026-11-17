@@ -147,6 +147,11 @@ and the Mac App Store edition's first-run card, folder access, Agents states and
 It needs no Screen Recording permission, but it can't show Liquid Glass or vibrancy, because the window server draws
 those; the Dashboard snapshots draw a plain stand-in for the sidebar for the same reason.
 
+The same run writes the Mac App Store listing's screenshots (`App/AppStoreShots.swift`): `appstore-1-panel`,
+`appstore-2-approve`, `appstore-3-spending`, `appstore-4-limits` and `appstore-5-search`, each a caption over the
+icon's gradient with the store edition's UI, light only, exactly 2880×1800 without alpha (Apple's largest 16:10
+size). Re-render them when the UI they show changes; the site doesn't use them.
+
 hoply.dev uses some of these images by file name (`panel`, `panel-approval`, `palette-query` and the Dashboard pages).
 If your change renames or drops one, say so in the pull request.
 

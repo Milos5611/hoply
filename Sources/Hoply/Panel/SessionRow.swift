@@ -23,12 +23,13 @@ struct SessionRow: View {
     let session: AgentSession
     let status: SessionStatus
     var place: SessionPlace?
+    var replyDraft = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             row
             ForEach(model.replies(for: session.key)) { reply in
-                ReplyStrip(reply: reply)
+                ReplyStrip(reply: reply, text: replyDraft)
                     .padding(.leading, 40)
             }
         }

@@ -125,6 +125,7 @@ struct LocalModelStatTile: View {
 struct WaitingCard: View {
     @Environment(AppModel.self) private var model
     let grouping: SessionGrouping
+    var replyDraft = ""
 
     var body: some View {
         let sessions = grouping.waiting
@@ -141,7 +142,8 @@ struct WaitingCard: View {
                 }
                 ForEach(sessions) { session in
                     SessionRow(session: session, status: grouping.status(of: session),
-                               place: model.projectTitle(for: session).map(SessionPlace.project))
+                               place: model.projectTitle(for: session).map(SessionPlace.project),
+                               replyDraft: replyDraft)
                 }
             }
         }
