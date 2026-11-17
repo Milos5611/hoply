@@ -8,8 +8,9 @@ struct ReplyStrip: View {
     @State private var text = ""
     @State private var expanded: Bool
 
-    init(reply: TurnReplyRequest, expanded: Bool = false) {
+    init(reply: TurnReplyRequest, expanded: Bool = false, text: String = "") {
         self.reply = reply
+        _text = State(initialValue: text)
         _expanded = State(initialValue: expanded)
     }
 

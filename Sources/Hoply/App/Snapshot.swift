@@ -287,6 +287,7 @@ enum Snapshot {
                            to: directory.appendingPathComponent("session-timeline-\(name).png"))
                 try renderStore(to: directory, name: name, appearance: looks, surface: popover, now: now)
             }
+            try AppStoreShots.render(to: directory, now: now)
             print(directory.path)
         } catch {
             FileHandle.standardError.write(Data("Snapshot failed: \(error)\n".utf8))
