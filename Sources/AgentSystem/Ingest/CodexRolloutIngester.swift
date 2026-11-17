@@ -5,8 +5,7 @@ public struct CodexRolloutIngester: Sendable {
     public let home: String
 
     public static var defaultHome: String {
-        AgentConnector.defaultCodexHome(environment: ProcessInfo.processInfo.environment,
-                                        home: FileManager.default.homeDirectoryForCurrentUser.path)
+        AgentFolder.codex.defaultPath(environment: ProcessInfo.processInfo.environment, home: UserHome.path)
     }
 
     public init(home: String = CodexRolloutIngester.defaultHome) {

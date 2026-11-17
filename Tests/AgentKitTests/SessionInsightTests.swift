@@ -405,24 +405,3 @@ final class MonogramTests: XCTestCase {
         XCTAssertEqual(spread, Set(0..<8))
     }
 }
-
-final class GitDiffStatTests: XCTestCase {
-    func testShortstat() {
-        XCTAssertEqual(GitDiffStat(shortstat: " 3 files changed, 120 insertions(+), 34 deletions(-)\n"),
-                       GitDiffStat(filesChanged: 3, added: 120, removed: 34))
-        XCTAssertEqual(GitDiffStat(shortstat: " 1 file changed, 1 insertion(+)"), GitDiffStat(filesChanged: 1, added: 1))
-        XCTAssertEqual(GitDiffStat(shortstat: " 2 files changed, 7 deletions(-)"), GitDiffStat(filesChanged: 2, removed: 7))
-        XCTAssertEqual(GitDiffStat(shortstat: " 1 file changed, 0 insertions(+), 0 deletions(-)"),
-                       GitDiffStat(filesChanged: 1))
-        XCTAssertEqual(GitDiffStat(shortstat: ""), GitDiffStat())
-        XCTAssertEqual(GitDiffStat(shortstat: "\n")?.isClean, true)
-        XCTAssertNil(GitDiffStat(shortstat: "fatal: not a git repository"))
-        XCTAssertNil(GitDiffStat(shortstat: "3 bananas changed"))
-        XCTAssertFalse(GitDiffStat(untracked: 1).isClean)
-    }
-
-    func testUntrackedCount() {
-        XCTAssertEqual(GitDiffStat.entryCount(nulSeparated: Data("a.txt\0dir/b c.txt\0".utf8)), 2)
-        XCTAssertEqual(GitDiffStat.entryCount(nulSeparated: Data()), 0)
-    }
-}

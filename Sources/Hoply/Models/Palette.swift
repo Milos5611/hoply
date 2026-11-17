@@ -14,7 +14,13 @@ final class Palette {
 
     struct Command {
         var label: String
+        var confirmation: String?
         var run: () -> Void
+    }
+
+    struct Confirmation: Equatable {
+        var id: String
+        var text: String
     }
 
     struct Entry {
@@ -43,9 +49,12 @@ final class Palette {
     private(set) var recentSessions: [RecentSession] = []
     private(set) var recentProjects: [RecentProject] = []
     private(set) var frecency = Frecency()
+    private(set) var confirmation: Confirmation?
     private var selectedID: String?
     @ObservationIgnored weak var model: AppModel?
     @ObservationIgnored var dismiss: (() -> Void)?
+    @ObservationIgnored var edition = Edition.current
+    @ObservationIgnored private var confirmationTask: Task<Void, Never>?
 
     @ObservationIgnored private let isLive: Bool
     @ObservationIgnored private var refreshLoop: Task<Void, Never>?
@@ -60,6 +69,7 @@ final class Palette {
     func open() {
         query = ""
         selectedID = nil
+        clearConfirmation()
         isOpen = true
         guard isLive else { return }
         refreshLoop?.cancel()
@@ -72,6 +82,7 @@ final class Palette {
     }
 
     func close() {
+        clearConfirmation()
         isOpen = false
         refreshLoop?.cancel()
         refreshLoop = nil
@@ -128,8 +139,25 @@ final class Palette {
         let now = Date()
         frecency.record(row.id, at: now)
         if isLive, let data = frecency.encoded() { UserDefaults.standard.set(data, forKey: Self.frecencyKey) }
-        dismiss?()
+        guard let text = command.confirmation else {
+            dismiss?()
+            command.run()
+            return
+        }
         command.run()
+        confirmation = Confirmation(id: row.id, text: text)
+        confirmationTask?.cancel()
+        confirmationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            self?.dismiss?()
+        }
+    }
+
+    private func clearConfirmation() {
+        confirmationTask?.cancel()
+        confirmationTask = nil
+        confirmation = nil
     }
 
     // MARK: - Providers
@@ -139,7 +167,7 @@ final class Palette {
         let live = liveSessions(model)
         let liveKeys = Set(live.compactMap { PaletteItem.sessionKey(fromID: $0.item.id) })
         return live + recentSessions.filter { !liveKeys.contains($0.key) }.map { recent($0, model) }
-            + recentProjects.map { project($0, model) } + model.devServers.servers.map { devServer($0, model) }
+            + recentProjects.map { project($0, model) }
             + DashboardPage.allCases.map { page($0, model) } + model.settings.modelServers.map { modelServer($0, model) }
             + actions(model)
     }
@@ -174,15 +202,22 @@ final class Palette {
         let source = session.key.source
         let title = session.title ?? session.project.map { "Session in \($0.title)" } ?? "\(source.displayName) session"
         let details = Command(label: "Details") { [weak model] in model?.open(.session(session.key)) }
-        let canResume = ResumeScript.isSupported(source) && !session.cwd.isEmpty
-        let resume = Command(label: "Resume") { [weak model] in
+        var canResume = ResumeScript.isSupported(source) && !session.cwd.isEmpty
+        var resume = Command(label: "Resume") { [weak model] in
             if !ResumeLauncher.resume(source: source, sessionID: session.key.id, cwd: session.cwd) {
                 model?.open(.session(session.key))
             }
         }
+        if !edition.opensTerminal {
+            let line = ResumeScript.commandLine(source: source, sessionID: session.key.id, cwd: session.cwd)
+            canResume = canResume && line != nil
+            resume = Command(label: "Copy Resume Command", confirmation: "Copied") {
+                if let line { WorkspaceActions.copy(line) }
+            }
+        }
         let item = PaletteItem(
             id: PaletteItem.sessionID(session.key), kind: .session, title: title,
-            subtitle: [source.displayName, session.title == nil ? nil : session.project?.title, session.branch,
+            subtitle: [source.displayName, session.title == nil ? nil : session.project?.title,
                        Format.lastActive(session.lastAt)].compactMap { $0 }.joined(separator: " · "),
             keywords: [session.cwd, session.key.id].filter { !$0.isEmpty }, lastActive: session.lastAt)
         return Entry(item: item, icon: .source(source), primary: canResume ? resume : details,
@@ -199,17 +234,6 @@ final class Palette {
             model?.history.openProject(project)
             model?.openDashboard()
         }, secondary: folderCommand(project.root, model))
-    }
-
-    private func devServer(_ server: DevServer, _ model: AppModel) -> Entry {
-        let item = PaletteItem(
-            id: PaletteItem.devServerID(server.id), kind: .devServer, title: server.shortName,
-            subtitle: [server.projectName, "localhost:\(server.port)", server.memoryLabel].compactMap { $0 }
-                .joined(separator: " · "),
-            keywords: ["dev server", server.cwd])
-        return Entry(item: item, icon: .symbol(DashboardPage.devServers.symbol),
-                     primary: Command(label: "Open in Browser") { WorkspaceActions.openInBrowser(server.url) },
-                     secondary: Command(label: "Show in Dev servers") { [weak model] in model?.openDashboard(.devServers) })
     }
 
     private func page(_ page: DashboardPage, _ model: AppModel) -> Entry {
@@ -273,11 +297,6 @@ final class Palette {
                               "Ollama, LM Studio, llama.cpp, vLLM or any OpenAI-compatible server",
                               symbol: "plus.circle", label: "Add",
                               keywords: ["local model", "ollama", "vllm", "lm studio"]) { $0.beginAddingModelServer() })
-        actions.append(action("cleanup", "Scan for Clean Up", "Find worktrees, caches and old transcripts to review",
-                              symbol: DashboardPage.cleanUp.symbol, label: "Scan") { model in
-            model.cleanup.refresh()
-            model.openDashboard(.cleanUp)
-        })
         if model.history.isReady, !model.history.progress.isBackfilling {
             actions.append(action("reindex", "Reindex History", "Re-read transcripts and the Copilot store; nothing is deleted",
                                   symbol: "arrow.triangle.2.circlepath") { $0.history.reindex() })

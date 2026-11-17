@@ -6,6 +6,7 @@ public final class HubServer: @unchecked Sendable {
     public enum Status: Equatable, Sendable {
         case stopped
         case listening(UInt16)
+        case portInUse(UInt16)
         case failed(String)
     }
 
@@ -104,7 +105,7 @@ public final class HubServer: @unchecked Sendable {
                 case .ready:
                     self?.onStatus?(.listening(port))
                 case .failed(let error):
-                    self?.onStatus?(.failed(HubServer.describe(error, port: port)))
+                    self?.onStatus?(HubServer.status(for: error, port: port))
                     listener?.cancel()
                 default:
                     break
@@ -120,11 +121,9 @@ public final class HubServer: @unchecked Sendable {
         }
     }
 
-    private static func describe(_ error: NWError, port: UInt16) -> String {
-        if case .posix(let code) = error, code == .EADDRINUSE {
-            return "Port \(port) is already in use"
-        }
-        return error.localizedDescription
+    static func status(for error: NWError, port: UInt16) -> Status {
+        if case .posix(let code) = error, code == .EADDRINUSE { return .portInUse(port) }
+        return .failed(error.localizedDescription)
     }
 
     private func accept(_ connection: NWConnection) {

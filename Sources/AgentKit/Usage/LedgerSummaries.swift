@@ -61,12 +61,10 @@ public struct ProjectSummary: Sendable, Equatable, Identifiable {
     public var topModels: [ModelShare]
     public var firstActive: Date?
     public var lastActive: Date?
-    public var branches: [String]
-    public var worktrees: [String]
 
     public init(project: ProjectRef?, totals: LedgerTotals = .zero, sessionCount: Int = 0,
                 bySource: [AgentSource: LedgerTotals] = [:], topModels: [ModelShare] = [], firstActive: Date? = nil,
-                lastActive: Date? = nil, branches: [String] = [], worktrees: [String] = []) {
+                lastActive: Date? = nil) {
         self.project = project
         self.totals = totals
         self.sessionCount = sessionCount
@@ -74,8 +72,6 @@ public struct ProjectSummary: Sendable, Equatable, Identifiable {
         self.topModels = topModels
         self.firstActive = firstActive
         self.lastActive = lastActive
-        self.branches = branches
-        self.worktrees = worktrees
     }
 
     public var id: String { project.map { String($0.id) } ?? "" }
@@ -100,8 +96,6 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var project: ProjectRef?
     public var title: String?
     public var cwd: String?
-    public var branch: String?
-    public var worktree: String?
     public var firstAt: Date?
     public var lastAt: Date?
     public var turns: Int
@@ -114,15 +108,13 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var transcriptPath: String?
 
     public init(key: SessionKey, project: ProjectRef? = nil, title: String? = nil, cwd: String? = nil,
-                branch: String? = nil, worktree: String? = nil, firstAt: Date? = nil, lastAt: Date? = nil,
-                turns: Int = 0, totals: LedgerTotals = .zero, models: [ModelShare] = [], nativeCostUSD: Double? = nil,
-                linesAdded: Int? = nil, linesRemoved: Int? = nil, prURL: String? = nil, transcriptPath: String? = nil) {
+                firstAt: Date? = nil, lastAt: Date? = nil, turns: Int = 0, totals: LedgerTotals = .zero,
+                models: [ModelShare] = [], nativeCostUSD: Double? = nil, linesAdded: Int? = nil,
+                linesRemoved: Int? = nil, prURL: String? = nil, transcriptPath: String? = nil) {
         self.key = key
         self.project = project
         self.title = title
         self.cwd = cwd
-        self.branch = branch
-        self.worktree = worktree
         self.firstAt = firstAt
         self.lastAt = lastAt
         self.turns = turns
@@ -143,16 +135,13 @@ public struct RecentSession: Sendable, Equatable, Identifiable {
     public var project: ProjectRef?
     public var title: String?
     public var cwd: String
-    public var branch: String?
     public var lastAt: Date
 
-    public init(key: SessionKey, project: ProjectRef? = nil, title: String? = nil, cwd: String, branch: String? = nil,
-                lastAt: Date) {
+    public init(key: SessionKey, project: ProjectRef? = nil, title: String? = nil, cwd: String, lastAt: Date) {
         self.key = key
         self.project = project
         self.title = title
         self.cwd = cwd
-        self.branch = branch
         self.lastAt = lastAt
     }
 

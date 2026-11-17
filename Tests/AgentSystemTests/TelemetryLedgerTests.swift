@@ -220,8 +220,6 @@ final class ProjectQueriesTests: XCTestCase {
         XCTAssertEqual(corestory.bySource[.copilotCLI]?.costUSD ?? 0, 0.02, accuracy: 1e-12)
         XCTAssertEqual(corestory.bySource.values.reduce(LedgerTotals.zero, +), corestory.totals)
         XCTAssertEqual(corestory.topModels.map(\.model), ["claude-opus-5", "claude-opus-5-5"], "two of three, largest first")
-        XCTAssertEqual(corestory.branches, ["feature", "main"])
-        XCTAssertEqual(corestory.worktrees, [root + "/corestory-feature"])
         XCTAssertEqual(corestory.lastActive, t0.addingTimeInterval(300))
         XCTAssertEqual(corestory.firstActive, t0)
         XCTAssertEqual(projects[2].firstActive, t0.addingTimeInterval(200))

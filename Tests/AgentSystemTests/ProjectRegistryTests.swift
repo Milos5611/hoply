@@ -35,7 +35,7 @@ final class ProjectRegistryTests: XCTestCase {
     }
 
     func testStoreGroupsWorktreeSessionsUnderTheMainRepo() async throws {
-        let (directory, repo, worktree) = try makeRepo()
+        let (directory, repo, _) = try makeRepo()
         let path = directory.path("hoply.sqlite")
         let store = try Store(path: path, resolver: ProjectResolver(home: "/nonexistent-home"))
         let reader = try StoreReader(path: path)
@@ -48,7 +48,5 @@ final class ProjectRegistryTests: XCTestCase {
         let page = try await reader.sessions(in: DateInterval(start: t0.addingTimeInterval(-1), duration: 10))
         XCTAssertEqual(page.totalCount, 2)
         XCTAssertEqual(Set(page.sessions.compactMap(\.project?.root)), [repo])
-        XCTAssertEqual(page.sessions.first { $0.key.id == "wt" }?.worktree, worktree)
-        XCTAssertNil(page.sessions.first { $0.key.id == "main" }?.worktree)
     }
 }

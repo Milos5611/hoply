@@ -7,6 +7,11 @@ struct PanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             PanelHeader()
+            if model.isSampleData {
+                SampleDataBanner()
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
             Group {
                 if model.showingSettings {
                     SettingsView()
@@ -97,37 +102,24 @@ struct PanelFooter: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if let notice = model.devServers.notice {
-                Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(notice.isError ? Color.red : Color.green)
-                Text(notice.text)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help(notice.text)
-            } else {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 6, height: 6)
-                Text(statusText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help(statusText)
-            }
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(statusText)
             Spacer(minLength: 6)
             Group {
                 if model.history.progress.isBackfilling {
                     BackfillIndicator(progress: model.history.progress)
-                } else if model.cleanup.reclaimableBytes >= ReclaimableButton.minimumBytes {
-                    ReclaimableButton(bytes: model.cleanup.reclaimableBytes)
                 }
-                if let version = model.updates.runningVersion {
+                if let version = model.runningVersion {
                     Text("v\(version)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
-                        .help("Hoply \(model.updates.version)")
+                        .help("Hoply \(AppVersion.full)")
                 }
                 Button {
                     model.quit()
@@ -148,6 +140,7 @@ struct PanelFooter: View {
     private var statusText: String {
         switch model.serverStatus {
         case .listening(let port): return "Listening on 127.0.0.1:\(port)"
+        case .portInUse(let port): return "Port \(port) is already in use"
         case .failed(let message): return message
         case .stopped: return "Listener stopped"
         }
@@ -156,26 +149,9 @@ struct PanelFooter: View {
     private var statusColor: Color {
         switch model.serverStatus {
         case .listening: return .green
-        case .failed: return .red
+        case .portInUse, .failed: return .red
         case .stopped: return .secondary
         }
-    }
-}
-
-struct ReclaimableButton: View {
-    static let minimumBytes: Int64 = 100 * 1_048_576
-
-    @Environment(AppModel.self) private var model
-    let bytes: Int64
-
-    var body: some View {
-        Button { model.openDashboard(.cleanUp) } label: {
-            Label("\(Format.bytes(bytes)) reclaimable", systemImage: DashboardPage.cleanUp.symbol)
-                .font(.system(size: 11).monospacedDigit())
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
-        .help("Review merged worktrees, build caches and old transcripts in Clean up")
     }
 }
 

@@ -126,6 +126,33 @@ final class ApprovalTests: XCTestCase {
 }
 
 #if canImport(Network)
+final class HubServerPortTests: XCTestCase {
+    func testAnAddressInUseErrorIsItsOwnStatus() {
+        XCTAssertEqual(HubServer.status(for: .posix(.EADDRINUSE), port: 4318), .portInUse(4318))
+        if case .failed = HubServer.status(for: .posix(.EACCES), port: 80) {} else {
+            XCTFail("other errors stay failures")
+        }
+    }
+
+    func testASecondListenerOnTheSamePortReportsPortInUse() async {
+        let port = UInt16.random(in: 49_000...49_900)
+        let first = HubServer()
+        let second = HubServer()
+        let listening = expectation(description: "first listening")
+        let taken = expectation(description: "second refused")
+        first.onStatus = { status in if case .listening = status { listening.fulfill() } }
+        second.onStatus = { status in if status == .portInUse(port) { taken.fulfill() } }
+        first.start(port: port)
+        await fulfillment(of: [listening], timeout: 5)
+        second.start(port: port)
+        await fulfillment(of: [taken], timeout: 5)
+        first.stop()
+        second.stop()
+    }
+}
+#endif
+
+#if canImport(Network)
 final class ApprovalServerTests: XCTestCase {
     private final class Captured: @unchecked Sendable {
         private let lock = NSLock()
@@ -228,6 +255,43 @@ final class ApprovalServerTests: XCTestCase {
         server.setHoldsApprovals(true)
         let second = try await Self.post(port: port, approve: false)
         XCTAssertEqual(second, "{}", "older hook without the header")
+        await fulfillment(of: [held], timeout: 0.2)
+    }
+
+    private static func shell(_ command: String, input body: Data) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        input.fileHandleForWriting.write(body)
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func testPluginCommandsReturnAtOnceWhileNothingIsHeld() async throws {
+        held.isInverted = true
+        let hooks = try XCTUnwrap(ClaudeCodePlugin(port: Int(port)).hooksFile["hooks"] as? [String: Any])
+        func command(_ event: String) throws -> String {
+            let groups = try XCTUnwrap(hooks[event] as? [[String: Any]])
+            return try XCTUnwrap((groups.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+        }
+        let approve = try command("PermissionRequest")
+        let reply = try command("Stop")
+        let permission = try Self.body()
+        let stop = try JSONSerialization.data(withJSONObject: try XCTUnwrap(
+            try Fixture.hookPayloads("claude_hooks.json")["Stop"]))
+        let started = Date()
+        let answers = try await Task.detached {
+            [try Self.shell(approve, input: permission), try Self.shell(reply, input: stop)]
+        }.value
+        XCTAssertEqual(answers, ["{}", "{}"], "approvals and Away mode off: Claude Code decides as usual")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
         await fulfillment(of: [held], timeout: 0.2)
     }
 

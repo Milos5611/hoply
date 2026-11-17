@@ -90,6 +90,7 @@ final class History {
     private(set) var pricedModels: [String] = []
     private(set) var codexLimits: [LimitKind: LimitSample] = [:]
     private(set) var note: String?
+    private(set) var isEmpty: Bool?
 
     private(set) var page: DashboardPage = .overview
     private(set) var isDashboardVisible = false
@@ -152,6 +153,7 @@ final class History {
     @ObservationIgnored private var localModelLoadedAt: Date?
     @ObservationIgnored private var requestedSession: SessionKey?
     @ObservationIgnored private var plan = AppSettings()
+    @ObservationIgnored private var preview: HistoryPreview?
 
     var todayTotal: LedgerTotals { today.values.reduce(.zero, +) }
     var isReady: Bool { status == .ready }
@@ -552,6 +554,7 @@ final class History {
         projectAutoSelect = true
         page = .projects
         if isDashboardVisible { reload(.projects) }
+        showPreviewDetail()
     }
 
     func closeProject() {
@@ -629,7 +632,9 @@ final class History {
             let week = try await reader.totalsBySource(in: StoreReader.days(7, endingAt: now)).values.reduce(.zero, +)
             let windows = try await ledger.contextWindows(for: sessions)
             let subagents = try await ledger.subagentCounts(for: keys)
+            let empty = isEmpty == false ? false : try await ledger.recentSessions(limit: 1).isEmpty && week.calls == 0
             guard generation == refreshGeneration else { return }
+            if empty != isEmpty { isEmpty = empty }
             if totals != sessionTotals { sessionTotals = totals }
             if today != self.today { self.today = today }
             if week != self.week { self.week = week }
@@ -756,8 +761,6 @@ final class History {
                                       copilot: copilot, copilotMonth: month)
                 guard generation == pageGeneration[page] else { return }
                 if data != limits { limits = data }
-            case .devServers, .cleanUp:
-                break
             case .localModel:
                 let range = localModelRange, server = localModelServerID
                 let interval = range.interval(now: now)
@@ -822,6 +825,7 @@ struct HistoryPreview {
 
 extension History {
     func show(_ preview: HistoryPreview, page: DashboardPage = .overview) {
+        self.preview = preview
         status = .ready
         progress = preview.progress
         sessionTotals = preview.sessionTotals
@@ -850,6 +854,25 @@ extension History {
         pricedModels = preview.pricedModels
         codexLimits = preview.codexLimits
         self.page = page
+    }
+
+    private func showPreviewDetail() {
+        guard ledger == nil, let preview, let opened = openedProject else { return }
+        if let project = opened.project {
+            guard var detail = preview.projectDetail,
+                  let summary = preview.projects.projects.first(where: { $0.project?.id == project.id }) else { return }
+            detail.summary = summary
+            projectDetail = detail
+        } else {
+            projectDetail = preview.unassignedDetail
+        }
+        selectedProjectSession = projectDetail?.sessions.sessions.first
+    }
+
+    func showEmptyLedger() {
+        status = .ready
+        isEmpty = true
+        week = .zero
     }
 
     func showProjectDetail(_ preview: HistoryPreview, unassigned: Bool = false) {

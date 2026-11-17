@@ -175,14 +175,11 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
 
-    func testCleanupKeyDecodesLeniently() {
-        XCTAssertFalse(AppSettings.decode(Data(v1JSON.utf8)).cleanupIncludesNodeModules)
-        let wrong = AppSettings.decode(Data(#"{"port": 5000, "cleanupIncludesNodeModules": "yes"}"#.utf8))
-        XCTAssertFalse(wrong.cleanupIncludesNodeModules)
-        XCTAssertEqual(wrong.port, 5000)
-        var settings = AppSettings()
-        settings.cleanupIncludesNodeModules = true
-        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    func testSettingsSavedWithTheRemovedCleanupKeyStillDecode() {
+        let json = #"{"port": 5000, "cleanupIncludesNodeModules": true, "paletteEnabled": false}"#
+        let settings = AppSettings.decode(Data(json.utf8))
+        XCTAssertEqual(settings.port, 5000)
+        XCTAssertFalse(settings.paletteEnabled)
     }
 
     func testPaletteKeysDecodeLeniently() throws {

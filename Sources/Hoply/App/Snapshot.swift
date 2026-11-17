@@ -1,5 +1,4 @@
 import AgentKit
-import AgentSystem
 import AppKit
 import SwiftUI
 
@@ -40,6 +39,7 @@ enum Snapshot {
                 model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
                 model.history.show(PreviewData.history(now: now))
                 model.showingSettings = false
+                #if Sparkle
                 model.updates.showPreview(enabled: true, pending: PreviewData.availableUpdate)
                 try render(PanelView(), model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-update-\(name).png"))
@@ -62,6 +62,7 @@ enum Snapshot {
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-updates-off-\(name).png"))
                 model.updates.showPreview(enabled: true)
+                #endif
                 model.showingSettings = true
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
@@ -106,39 +107,12 @@ enum Snapshot {
                     case .spending: 1_420
                     case .limits: 1_520
                     case .localModel: 1_560
-                    case .cleanUp: 1_180
                     default: 760
                     }
                     try render(DashboardView(plainSidebar: true).frame(width: 1180, height: height),
                                model: model, appearance: looks,
                                to: directory.appendingPathComponent("dashboard-\(page.rawValue)-\(name).png"))
                 }
-                let servers = PreviewData.devServers(now: now)
-                model.devServers.show(servers, stops: PreviewData.devServerStops(servers),
-                                      notice: DevServers.Notice(text: "Stopped Astro :4321", isError: false))
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
-                           appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-stop-\(name).png"))
-                try render(VStack(spacing: 0) { PanelSections().padding(.horizontal, 12); PanelFooter() }.frame(width: 448),
-                           model: model, appearance: looks, surface: popover,
-                           to: directory.appendingPathComponent("panel-dev-servers-stop-\(name).png"))
-                model.devServers.show(DevServerScan(snapshot: ProcessSnapshot(takenAt: now, processes: [])))
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 760), model: model,
-                           appearance: looks, to: directory.appendingPathComponent("dashboard-dev-servers-empty-\(name).png"))
-                model.devServers.show(servers)
-
-                model.history.show(PreviewData.history(now: now), page: .cleanUp)
-                model.cleanup.show(PreviewData.cleanupScan(now: now), report: PreviewData.cleanupReport(now: now),
-                                   log: PreviewData.cleanupLog(now: now))
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_180), model: model,
-                           appearance: looks, to: directory.appendingPathComponent("dashboard-clean-up-report-\(name).png"))
-                model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
-                                   log: PreviewData.cleanupLog(now: now))
-                model.cleanup.setSelected(model.cleanup.candidates, true)
-                try render(CleanupReviewSheet(), model: model, appearance: looks,
-                           to: directory.appendingPathComponent("dashboard-clean-up-review-\(name).png"))
-                model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
-                                   log: PreviewData.cleanupLog(now: now))
-
                 var disconnected = PreviewData.settings
                 disconnected.claudeLimitsEnabled = false
                 disconnected.copilotMonthlyAllowance = 0
@@ -311,11 +285,66 @@ enum Snapshot {
                 }.padding(16).frame(width: 322).background(DashboardBackground()),
                            model: model, appearance: looks,
                            to: directory.appendingPathComponent("session-timeline-\(name).png"))
+                try renderStore(to: directory, name: name, appearance: looks, surface: popover, now: now)
             }
             print(directory.path)
         } catch {
             FileHandle.standardError.write(Data("Snapshot failed: \(error)\n".utf8))
         }
+    }
+
+    private static func renderStore(to directory: URL, name: String, appearance looks: NSAppearance?, surface popover: Color,
+                                    now: Date) throws {
+        func file(_ base: String) -> URL { directory.appendingPathComponent("store-\(base)-\(name).png") }
+        let store = Edition.appStore
+
+        try render(PanelView().environment(\.edition, store), model: AppModel.storeFirstRunPreview(), appearance: looks,
+                   surface: popover, to: file("panel-first-run"))
+        let taken = AppModel.storeFirstRunPreview(portInUse: true)
+        taken.connections.dismissFolderCard()
+        try render(PanelView().environment(\.edition, store), model: taken, appearance: looks, surface: popover,
+                   to: file("panel-port-taken"))
+
+        let model = AppModel.preview(now: now)
+        model.showingSettings = true
+        model.connections.show(statuses: PreviewData.storeConnectedStatuses)
+        model.connections.show(access: PreviewData.storeFolderAccess, notices: PreviewData.storeFolderNotices)
+        try render(FolderAccessSettings().environment(\.edition, store).controlSize(.small).font(.system(size: 12.5))
+                       .padding(12).frame(width: 448),
+                   model: model, appearance: looks, surface: popover, to: file("settings-folders"))
+        model.connections.show(statuses: PreviewData.storeSetupStatuses, notices: PreviewData.storeSetupNotices)
+        model.connections.show(access: PreviewData.storeSetupAccess, problems: PreviewData.storeSetupProblems)
+        try render(AgentSettings().environment(\.edition, store).controlSize(.small).font(.system(size: 12.5))
+                       .padding(12).frame(width: 448),
+                   model: model, appearance: looks, surface: popover, to: file("settings-agents"))
+        try render(VStack(spacing: 0) { PanelHeader(); SettingsView() }.environment(\.edition, store)
+                       .frame(width: 448, height: 3_000),
+                   model: model, appearance: looks, surface: popover, to: file("panel-settings-full"))
+        model.connections.show(statuses: PreviewData.storeConnectedStatuses, notices: PreviewData.storeConnectedNotices)
+        model.connections.show(access: PreviewData.storeConnectedAccess, claudeHooksTwice: true)
+        try render(AgentSettings().environment(\.edition, store).controlSize(.small).font(.system(size: 12.5))
+                       .padding(12).frame(width: 448),
+                   model: model, appearance: looks, surface: popover, to: file("settings-agents-connected"))
+        var linked = PreviewData.settings
+        linked.iCloudLink = true
+        model.showPreview(settings: linked)
+        model.iCloudLink.show(available: true, status: .running, lastSync: now - 12)
+        try render(PhoneSettings().environment(\.edition, store).toggleStyle(.switch).controlSize(.small)
+                       .font(.system(size: 12.5)).padding(12).frame(width: 448),
+                   model: model, appearance: looks, surface: popover, to: file("settings-iphone-on"))
+
+        let sample = AppModel.samplePreview(now: now)
+        try render(PanelView().environment(\.edition, store), model: sample, appearance: looks, surface: popover,
+                   to: file("panel-sample-data"))
+        try render(DashboardView(plainSidebar: true).environment(\.edition, store).frame(width: 1180, height: 760),
+                   model: sample, appearance: looks, to: file("dashboard-sample-data"))
+        var resumable = PreviewData.history(now: now)
+        resumable.selectedSession = resumable.sessions.sessions.first { summary in
+            summary.cwd != nil && sample.session(summary.key).map { $0.state == .ended } ?? true
+        }
+        sample.history.show(resumable, page: .sessions)
+        try render(DashboardView(plainSidebar: true).environment(\.edition, store).frame(width: 1180, height: 1_000),
+                   model: sample, appearance: looks, to: file("dashboard-session-resume"))
     }
 
     private static func render(_ view: some View, model: AppModel, appearance: NSAppearance?,
@@ -338,6 +367,7 @@ enum Snapshot {
     }
 }
 
+#if Sparkle
 private struct MenuBarMarks: View {
     private static let states: [(hollowHub: Bool, badged: Bool, count: String)] = [
         (true, false, ""), (true, true, ""), (false, true, ""), (false, true, "2"),
@@ -367,3 +397,4 @@ private struct MenuBarMarks: View {
         }
     }
 }
+#endif

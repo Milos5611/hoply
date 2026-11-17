@@ -1,14 +1,15 @@
 import AgentKit
-import AgentSystem
 import Foundation
 
 enum PreviewData {
+    static let home = "/Users/you"
+
     static var settings: AppSettings {
         var settings = AppSettings()
         settings.modelServers = [zgxServer]
         settings.claudeLimitsEnabled = true
         settings.quietHoursEnabled = true
-        settings.mutedProjectRoots = ["\(NSHomeDirectory())/Project/hoply"]
+        settings.mutedProjectRoots = ["\(home)/Project/hoply"]
         settings.priceAliases = ["claude-sonnet-4-5": "claude-sonnet-5"]
         return settings
     }
@@ -17,7 +18,7 @@ enum PreviewData {
 
     static func approvalEvents(now: Date) -> [AgentEvent] {
         [AgentEvent(key: approvalSession, kind: .promptSubmitted("Upgrade the build to Node 24"), time: now - 300,
-                    cwd: "\(NSHomeDirectory())/Project/CoreStory", model: "claude-opus-5", fromHook: true),
+                    cwd: "\(home)/Project/CoreStory", model: "claude-opus-5", fromHook: true),
          AgentEvent(key: approvalSession, kind: .needsPermission("Allow Bash?"), time: now - 20, fromHook: true)]
     }
 
@@ -104,11 +105,11 @@ enum PreviewData {
 
     static func replyEvents(now: Date) -> [AgentEvent] {
         [AgentEvent(key: replySession, kind: .promptSubmitted("Move checkout to payment intents"), time: now - 1_260,
-                    cwd: "\(NSHomeDirectory())/Project/CoreStory", model: "claude-opus-5", fromHook: true),
+                    cwd: "\(home)/Project/CoreStory", model: "claude-opus-5", fromHook: true),
          AgentEvent(key: replySession, kind: .toolStarted("Bash"), time: now - 140, fromHook: true),
          AgentEvent(key: replySession, kind: .turnFinished(replyMessage), time: now - 95, fromHook: true),
          AgentEvent(key: copilotReplySession, kind: .promptSubmitted("Add rate limiting to the public API"),
-                    time: now - 840, cwd: "\(NSHomeDirectory())/Project/yasm-backend", fromHook: true),
+                    time: now - 840, cwd: "\(home)/Project/yasm-backend", fromHook: true),
          AgentEvent(key: copilotReplySession, kind: .turnFinished(nil), time: now - 170, fromHook: true)]
     }
 
@@ -130,7 +131,7 @@ enum PreviewData {
         let schema = key(.claudeCode, "schema")
         let notes = key(.claudeCode, "notes")
         let lint = key(.claudeCode, "lint")
-        let home = NSHomeDirectory()
+        let home = Self.home
         return [
             AgentEvent(key: auth, kind: .promptSubmitted("Refactor the auth middleware to use refresh tokens"),
                        time: at(46), cwd: "\(home)/Project/CoreStory", model: "claude-opus-5", fromHook: true),
@@ -346,7 +347,7 @@ enum PreviewData {
                                             copilot: .ready(schemaVersion: 7))
 
     static var projectRefs: [ProjectRef] {
-        let home = NSHomeDirectory()
+        let home = Self.home
         return [
             ProjectRef(id: 1, root: "\(home)/Project/CoreStory", name: "CoreStory", kind: .repo),
             ProjectRef(id: 2, root: "\(home)/Project/yasm-backend", name: "yasm-backend", kind: .repo),
@@ -358,79 +359,12 @@ enum PreviewData {
     }
 
     static var projectsByCwd: [String: ProjectRef] {
-        let home = NSHomeDirectory()
+        let home = Self.home
         let refs = projectRefs
         return ["\(home)/Project/CoreStory": refs[0], "\(home)/Project/CoreStory.worktrees/landing-hero": refs[0],
                 "\(home)/Project/yasm-backend": refs[1], "\(home)/Project/hoply": refs[2],
                 "\(home)/Project/hoply/Sources/AgentSystem": refs[2],
                 "\(home)/Project/CoreStory.RuleEngine": refs[3], "\(home)/Documents/notes": refs[4]]
-    }
-
-    static func devServers(now: Date) -> DevServerScan {
-        let home = NSHomeDirectory()
-        let uid: UInt32 = 501
-        func process(_ pid: Int32, parent: Int32 = 1, group: Int32? = nil, minutesAgo: Double, executable: String,
-                     arguments: [String], cwd: String, megabytes: UInt64 = 0, port: Int? = nil,
-                     addresses: [String] = ["127.0.0.1"]) -> ScannedProcess {
-            ScannedProcess(identity: ProcessIdentity(pid: pid, startedAt: now.addingTimeInterval(-minutesAgo * 60)),
-                           parentPID: parent, groupID: group ?? pid, uid: uid,
-                           name: (executable as NSString).lastPathComponent, executable: executable,
-                           arguments: arguments, cwd: cwd, memoryBytes: megabytes * 1_048_576,
-                           listeners: port.map { port in
-                               addresses.map { ListeningSocket(port: port, family: $0.contains(":") ? .ipv6 : .ipv4, address: $0) }
-                           } ?? [])
-        }
-        let coreStory = "\(home)/Project/CoreStory", backend = "\(home)/Project/yasm-backend"
-        let sparkdash = "\(home)/Project/sparkdash"
-        let node = "/opt/homebrew/bin/node"
-        let snapshot = ProcessSnapshot(takenAt: now.addingTimeInterval(-6), processes: [
-            process(4100, minutesAgo: 42, executable: "\(home)/.local/bin/claude", arguments: ["claude"], cwd: coreStory),
-            process(4210, parent: 4100, minutesAgo: 40, executable: node,
-                    arguments: ["node", "\(coreStory)/node_modules/next/dist/bin/next", "dev"], cwd: coreStory, megabytes: 96),
-            process(4211, parent: 4210, group: 4210, minutesAgo: 40, executable: node,
-                    arguments: ["next-server (v15.4.1)"], cwd: coreStory, megabytes: 316, port: 3000),
-            process(5300, minutesAgo: 190, executable: node,
-                    arguments: ["node", "\(coreStory)/node_modules/vite/bin/vite.js"], cwd: "\(coreStory)/apps/admin",
-                    megabytes: 148, port: 5173, addresses: ["127.0.0.1", "::1"]),
-            process(6100, minutesAgo: 1_500, executable: "/opt/homebrew/bin/python3.13",
-                    arguments: ["python3.13", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0"], cwd: sparkdash,
-                    megabytes: 86, port: 8000, addresses: ["0.0.0.0"]),
-            process(7000, minutesAgo: 13, executable: "/opt/homebrew/bin/copilot", arguments: ["copilot"], cwd: backend),
-            process(7040, parent: 7000, group: 7000, minutesAgo: 11, executable: "/usr/local/share/dotnet/dotnet",
-                    arguments: ["dotnet", "run"], cwd: backend, megabytes: 231, port: 5080),
-        ])
-        var projects = projectsByCwd
-        projects["\(coreStory)/apps/admin"] = projectRefs[0]
-        projects[sparkdash] = ProjectRef(id: 7, root: sparkdash, name: "sparkdash", kind: .repo)
-        let sessions = [
-            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "pricing"), pid: 4100, cwd: coreStory),
-            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "auth"), cwd: coreStory),
-            DevServerClassifier.Session(key: SessionKey(source: .copilotCLI, id: "orders"), cwd: backend),
-            DevServerClassifier.Session(key: SessionKey(source: .claudeCode, id: "schema"), cwd: backend),
-        ]
-        let classifier = DevServerClassifier(ownPID: 1, uid: uid, homeDirectory: home)
-        return DevServerScan(servers: classifier.servers(in: snapshot, projects: projects, sessions: sessions),
-                             snapshot: snapshot, duration: 0.04)
-    }
-
-    static func devServerStops(_ scan: DevServerScan) -> [String: DevServers.StopState] {
-        var stops: [String: DevServers.StopState] = [:]
-        for server in scan.servers {
-            switch server.port {
-            case 3000: stops[server.id] = .confirming
-            case 5173: stops[server.id] = .stopping
-            case 8000: stops[server.id] = .failed(DevServerStop.Refusal.leaderGone.reason)
-            default: break
-            }
-        }
-        return stops
-    }
-
-    static var gitStats: [String: GitDiffStat] {
-        let home = NSHomeDirectory()
-        return ["\(home)/Project/CoreStory": GitDiffStat(filesChanged: 5, added: 120, removed: 34, untracked: 3),
-                "\(home)/Project/CoreStory.worktrees/landing-hero": GitDiffStat(filesChanged: 2, added: 48, removed: 6),
-                "\(home)/Project/hoply": GitDiffStat(untracked: 2)]
     }
 
     static var editors: [Editor] {
@@ -442,7 +376,7 @@ enum PreviewData {
         history(now: now).sessions.sessions.compactMap { session in
             session.lastAt.map {
                 RecentSession(key: session.key, project: session.project, title: session.title, cwd: session.cwd ?? "",
-                              branch: session.branch, lastAt: $0)
+                              lastAt: $0)
             }
         }
     }
@@ -514,10 +448,10 @@ enum PreviewData {
         return [short, liveSpans(now: now), spans(now: now, long)]
     }
 
-    static let coreStoryCopy = ProjectRef(id: 8, root: "\(NSHomeDirectory())/Work/CoreStory-copy", name: "CoreStory-copy", kind: .repo)
+    static let coreStoryCopy = ProjectRef(id: 8, root: "\(home)/Work/CoreStory-copy", name: "CoreStory-copy", kind: .repo)
 
     static func projectEdits(now: Date) -> ProjectEditsPreview {
-        let home = NSHomeDirectory()
+        let home = Self.home
         let refs = projectRefs
         let archived = ProjectRef(id: 9, root: "\(home)/Project/archive/CoreStory-web", name: "CoreStory-web", kind: .repo)
         let scratch = ProjectRef(id: 10, root: "\(home)/Project/CoreStory-spike", name: "CoreStory-spike", kind: .folder)
@@ -888,16 +822,8 @@ enum PreviewData {
 
     private static func projectSummaries(_ entries: [Entry], now: Date) -> [ProjectSummary] {
         let refs = projectRefs
-        let home = NSHomeDirectory()
-        let facts: [Int?: (sessions: Int, minutesAgo: Double, branches: [String], worktrees: [String])] = [
-            0: (41, 0.4, ["auth-refresh", "feature/pricing", "landing-hero", "main"],
-                ["\(home)/Project/CoreStory.worktrees/landing-hero"]),
-            1: (26, 1, ["async-client", "main", "orders-paging"], []),
-            2: (33, 3, ["main", "v2-ledger"], []),
-            3: (12, 1_400, ["fix/flaky-ref", "main"], []),
-            4: (5, 4_400, [], []),
-            5: (3, 2_900, [], []),
-            nil: (7, 400, [], []),
+        let facts: [Int?: (sessions: Int, minutesAgo: Double)] = [
+            0: (41, 0.4), 1: (26, 1), 2: (33, 3), 3: (12, 1_400), 4: (5, 4_400), 5: (3, 2_900), nil: (7, 400),
         ]
         let grouped = Dictionary(grouping: entries, by: \.project)
         return grouped.map { project, entries in
@@ -913,13 +839,12 @@ enum PreviewData {
                 bySource[.claudeCode, default: .zero] += unpricedTotals
                 byModel["claude-nova-preview"] = unpricedTotals
             }
-            let fact = facts[project] ?? (1, 60, [], [])
+            let fact = facts[project] ?? (1, 60)
             return ProjectSummary(
                 project: project.map { refs[$0] }, totals: totals, sessionCount: fact.sessions, bySource: bySource,
                 topModels: byModel.map { ModelShare(model: $0.key, totals: $0.value) }
                     .sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD },
-                firstActive: entries.map(\.day).min(), lastActive: now.addingTimeInterval(-fact.minutesAgo * 60),
-                branches: fact.branches, worktrees: fact.worktrees)
+                firstActive: entries.map(\.day).min(), lastActive: now.addingTimeInterval(-fact.minutesAgo * 60))
         }.sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD }
     }
 
@@ -927,7 +852,7 @@ enum PreviewData {
         let title: String?
         var source: AgentSource = .claudeCode
         let project: Int?
-        let branch: String?
+        var folder: String?
         let minutesAgo: Double
         let hours: Double
         let turns: Int
@@ -938,58 +863,58 @@ enum PreviewData {
     }
 
     private static func sessionSummaries(now: Date, projects: [ProjectRef]) -> [SessionSummary] {
-        let home = NSHomeDirectory()
+        let home = Self.home
         let rows: [SessionRowSeed] = [
-            SessionRowSeed(title: "Build the pricing section", project: 0, branch: "feature/pricing", minutesAgo: 0.5,
-                           hours: 0.7, turns: 14, usd: 11.80, mix: [("claude-sonnet-5", 0.82), ("claude-haiku-4-5", 0.18)],
+            SessionRowSeed(title: "Build the pricing section", project: 0, minutesAgo: 0.5, hours: 0.7, turns: 14,
+                           usd: 11.80, mix: [("claude-sonnet-5", 0.82), ("claude-haiku-4-5", 0.18)],
                            native: true, id: liveKey.id),
             SessionRowSeed(title: "Add pagination to the orders endpoint", source: .copilotCLI, project: 1,
-                           branch: "orders-paging", minutesAgo: 1, hours: 0.2, turns: 3, usd: 1.83,
-                           mix: [("claude-opus-5", 1)]),
+                           minutesAgo: 1, hours: 0.2, turns: 3, usd: 1.83, mix: [("claude-opus-5", 1)]),
             SessionRowSeed(title: "Speed up the Copilot store reader", source: .copilotCLI, project: 2,
-                           branch: "v2-ledger", minutesAgo: 3, hours: 0.4, turns: 5, usd: 4.07,
+                           minutesAgo: 3, hours: 0.4, turns: 5, usd: 4.07,
                            mix: [("claude-opus-5", 0.86), ("claude-haiku-4.5", 0.14)]),
-            SessionRowSeed(title: "Refactor the auth middleware to use refresh tokens", project: 0, branch: "auth-refresh",
+            SessionRowSeed(title: "Refactor the auth middleware to use refresh tokens", project: 0,
                            minutesAgo: 4, hours: 0.8, turns: 9, usd: 4.12, mix: [("claude-opus-5", 1)]),
-            SessionRowSeed(title: nil, source: .qwenCode, project: 2, branch: nil, minutesAgo: 6, hours: 0.3, turns: 0,
+            SessionRowSeed(title: nil, source: .qwenCode, project: 2, minutesAgo: 6, hours: 0.3, turns: 0,
                            usd: 1.94, mix: [("Qwen3.8-Flash-Next", 1)]),
-            SessionRowSeed(title: "Update the README for v2", project: 2, branch: "main", minutesAgo: 8, hours: 0.4,
+            SessionRowSeed(title: "Update the README for v2", project: 2, minutesAgo: 8, hours: 0.4,
                            turns: 3, usd: 0.86, mix: [("claude-opus-5", 1)]),
             SessionRowSeed(title: "Polish the landing page hero animation", source: .codexCLI, project: 0,
-                           branch: "landing-hero", minutesAgo: 9, hours: 0.3, turns: 6, usd: 2.35, mix: [("gpt-6.1-sol", 1)]),
-            SessionRowSeed(title: "Store and Claude history", project: 2, branch: "v2-ledger", minutesAgo: 95, hours: 3.1,
+                           folder: "\(home)/Project/CoreStory.worktrees/landing-hero",
+                           minutesAgo: 9, hours: 0.3, turns: 6, usd: 2.35, mix: [("gpt-6.1-sol", 1)]),
+            SessionRowSeed(title: "Store and Claude history", project: 2, minutesAgo: 95, hours: 3.1,
                            turns: 41, usd: 38.40, mix: [("claude-opus-5", 0.91), ("claude-haiku-4-5", 0.09)]),
-            SessionRowSeed(title: "Pagination for the orders endpoint", project: 1, branch: "orders-paging",
+            SessionRowSeed(title: "Pagination for the orders endpoint", project: 1,
                            minutesAgo: 180, hours: 1.2, turns: 12, usd: 6.25, mix: [("claude-sonnet-5", 1)]),
-            SessionRowSeed(title: "Write unit tests for the Prometheus parser", project: 2, branch: "main",
+            SessionRowSeed(title: "Write unit tests for the Prometheus parser", project: 2,
                            minutesAgo: 260, hours: 0.6, turns: 7, usd: 1.94,
                            mix: [("Qwen3.8-Flash-Next", 0.7), ("claude-sonnet-5", 0.3)]),
-            SessionRowSeed(title: nil, source: .qwenCode, project: nil, branch: nil, minutesAgo: 400, hours: 0.5, turns: 0,
+            SessionRowSeed(title: nil, source: .qwenCode, project: nil, minutesAgo: 400, hours: 0.5, turns: 0,
                            usd: 0.71, mix: [("Qwen3.8-Flash-Next", 1)]),
-            SessionRowSeed(title: "Seed the fixtures for the draw", source: .copilotCLI, project: 0, branch: "main",
+            SessionRowSeed(title: "Seed the fixtures for the draw", source: .copilotCLI, project: 0,
                            minutesAgo: 1_100, hours: 0.6, turns: 3, usd: 3.12, mix: [("claude-opus-5", 1)]),
-            SessionRowSeed(title: "Investigate the flaky referee assignment test", project: 3, branch: "fix/flaky-ref",
+            SessionRowSeed(title: "Investigate the flaky referee assignment test", project: 3,
                            minutesAgo: 1_400, hours: 2.2, turns: 18, usd: 9.71,
                            mix: [("claude-opus-5", 0.64), ("claude-sonnet-5", 0.36)]),
-            SessionRowSeed(title: "Explain the bracket seeding rules", project: 3, branch: nil, minutesAgo: 1_700,
+            SessionRowSeed(title: "Explain the bracket seeding rules", project: 3, minutesAgo: 1_700,
                            hours: 0.3, turns: 2, usd: 0.42, mix: [("claude-haiku-4-5", 1)]),
-            SessionRowSeed(title: "Referee assignment edge cases", source: .copilotCLI, project: 3, branch: "fix/flaky-ref",
+            SessionRowSeed(title: "Referee assignment edge cases", source: .copilotCLI, project: 3,
                            minutesAgo: 2_000, hours: 1.1, turns: 4, usd: 6.90,
                            mix: [("claude-opus-5", 0.8), ("claude-haiku-4.5", 0.2)]),
-            SessionRowSeed(title: "Migrate the API client to async/await", project: 1, branch: "async-client",
+            SessionRowSeed(title: "Migrate the API client to async/await", project: 1,
                            minutesAgo: 2_900, hours: 4.5, turns: 33, usd: 27.15,
                            mix: [("claude-opus-5", 0.77), ("claude-sonnet-5", 0.23)]),
-            SessionRowSeed(title: "Quick shell question", project: 5, branch: nil, minutesAgo: 3_100, hours: 0.1, turns: 1,
+            SessionRowSeed(title: "Quick shell question", project: 5, minutesAgo: 3_100, hours: 0.1, turns: 1,
                            usd: 0.08, mix: [("claude-haiku-4-5", 1)]),
-            SessionRowSeed(title: "Try the nova preview model", project: 2, branch: "main", minutesAgo: 3_300, hours: 0.2,
+            SessionRowSeed(title: "Try the nova preview model", project: 2, minutesAgo: 3_300, hours: 0.2,
                            turns: 2, usd: 0, mix: [("claude-nova-preview", 1)]),
-            SessionRowSeed(title: "Landing page hero animation", project: 0, branch: "landing-hero", minutesAgo: 4_300,
+            SessionRowSeed(title: "Landing page hero animation", project: 0, minutesAgo: 4_300,
                            hours: 1.7, turns: 15, usd: 7.02, mix: [("claude-sonnet-5", 1)]),
-            SessionRowSeed(title: "Profile the ingest coordinator", project: 2, branch: "v2-ledger", minutesAgo: 5_800,
+            SessionRowSeed(title: "Profile the ingest coordinator", project: 2, minutesAgo: 5_800,
                            hours: 0.9, turns: 6, usd: 3.30, mix: [("Qwen3.8-Flash-Next", 1)]),
-            SessionRowSeed(title: nil, source: .copilotIDE, project: nil, branch: nil, minutesAgo: 6_500, hours: 0.4,
+            SessionRowSeed(title: nil, source: .copilotIDE, project: nil, minutesAgo: 6_500, hours: 0.4,
                            turns: 0, usd: 1.12, mix: [("claude-sonnet-5", 1)]),
-            SessionRowSeed(title: nil, source: .qwenCode, project: nil, branch: nil, minutesAgo: 7_200, hours: 1.3, turns: 4,
+            SessionRowSeed(title: nil, source: .qwenCode, project: nil, minutesAgo: 7_200, hours: 1.3, turns: 4,
                            usd: 2.05, mix: [("Qwen3.8-Flash-Next", 1)]),
         ]
         return rows.enumerated().map { index, row in
@@ -1002,11 +927,9 @@ enum PreviewData {
             }
             let total = models.reduce(LedgerTotals.zero) { $0 + $1.totals }
             let id = row.id ?? String(format: "%08x-preview-%02d", 0x5e55_1000 + index * 7_919, index)
-            let cwd = row.branch == "landing-hero" && row.minutesAgo < 60
-                ? "\(home)/Project/CoreStory.worktrees/landing-hero" : project?.root
             return SessionSummary(
-                key: SessionKey(source: row.source, id: id), project: project, title: row.title, cwd: cwd,
-                branch: row.branch, firstAt: last.addingTimeInterval(-row.hours * 3_600), lastAt: last,
+                key: SessionKey(source: row.source, id: id), project: project, title: row.title,
+                cwd: row.folder ?? project?.root, firstAt: last.addingTimeInterval(-row.hours * 3_600), lastAt: last,
                 turns: row.turns, totals: total, models: models,
                 nativeCostUSD: row.native ? row.usd * 0.987 : nil,
                 linesAdded: row.source == .claudeCode ? row.turns * 23 : nil,

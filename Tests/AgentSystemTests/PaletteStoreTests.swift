@@ -33,7 +33,7 @@ final class PaletteStoreTests: XCTestCase {
         XCTAssertEqual(all.map(\.key.id), ["cp", "new", "mid", "old"], "newest first; a session without a folder is left out")
         XCTAssertEqual(all.map(\.project?.name), ["api", "api", "demo", "demo"])
         XCTAssertEqual(all[2], RecentSession(key: SessionKey(source: .claudeCode, id: "mid"), project: all[3].project,
-                                             title: "Web", cwd: "/Users/dev/Project/demo", branch: "main",
+                                             title: "Web", cwd: "/Users/dev/Project/demo",
                                              lastAt: t0.addingTimeInterval(-3_600)))
         XCTAssertNil(all[1].title)
 

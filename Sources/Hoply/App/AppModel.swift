@@ -19,21 +19,23 @@ final class AppModel {
     private(set) var launchAtLogin = false
     private(set) var activity = RollingSeries(bucketLength: 30, capacity: 20, now: Date())
     private(set) var projectsByCwd: [String: ProjectRef] = [:]
-    private(set) var gitStats: [String: GitDiffStat] = [:]
     private(set) var editors: [Editor] = []
     private(set) var defaultEditorID = ""
     private(set) var approvals: [ApprovalRequest] = []
     private(set) var replies: [TurnReplyRequest] = []
+    private(set) var sample: AppModel?
+    private(set) var isSampleData = false
     var showingSettings = false
     let history = History()
     let modelServers: ModelServers
-    let devServers: DevServers
-    let cleanup: Cleanup
     let palette: Palette
     let hotKey: HotKey
     let projectEdits: ProjectEdits
     let connections: AgentConnections
+    #if Sparkle
     let updates: Updates
+    #endif
+    let runningVersion: String?
     let iCloudLink: ICloudLink
     @ObservationIgnored var paletteToggler: (() -> Void)?
     @ObservationIgnored var dashboardOpener: ((DashboardPage?) -> Void)?
@@ -42,7 +44,8 @@ final class AppModel {
 
     @ObservationIgnored private var board = SessionBoard()
     @ObservationIgnored private let server = HubServer()
-    @ObservationIgnored private let notifier = Notifier()
+    @ObservationIgnored private let notifier: Notifier
+    @ObservationIgnored private weak var sampleHost: AppModel?
     @ObservationIgnored private var policy = NotificationPolicy()
     @ObservationIgnored private let limitsClient = ClaudeLimitsClient()
     @ObservationIgnored private let keepAwake = KeepAwake()
@@ -55,14 +58,7 @@ final class AppModel {
     @ObservationIgnored private var dashboardOnScreen = false
     @ObservationIgnored private var isFetchingLimits = false
     @ObservationIgnored private var limitsEpoch = 0
-    @ObservationIgnored private let gitCache = GitStatCache()
-    @ObservationIgnored private var gitWatch: [SessionKey: GitWatch] = [:]
-    @ObservationIgnored private let isLive: Bool
-
-    private struct GitWatch: Equatable {
-        var cwd: String
-        var settled: Bool
-    }
+    @ObservationIgnored let isLive: Bool
 
     var attentionCount: Int {
         let grouping = grouping
@@ -83,6 +79,11 @@ final class AppModel {
         editors.first { $0.id == defaultEditorID } ?? editors.first
     }
     var isBundledApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+    var shown: AppModel { sample ?? self }
+    var sampleDataOffered: Bool {
+        !isSampleData && sample == nil && sessions.isEmpty && history.isEmpty == true
+            && !connections.statuses.values.contains(.connected)
+    }
     var awayProblem: AwayProblem? {
         guard settings.awayMode else { return nil }
         return AwayProblem(statuses: connections.statuses)
@@ -90,14 +91,17 @@ final class AppModel {
 
     init(live: Bool = true) {
         isLive = live
+        notifier = Notifier(enabled: live)
         modelServers = ModelServers(history: history, live: live)
-        devServers = DevServers(live: live)
-        cleanup = Cleanup(history: history, live: live)
         palette = Palette(live: live)
         hotKey = HotKey(live: live)
         projectEdits = ProjectEdits(history: history)
         connections = AgentConnections(live: live)
+        #if Sparkle
         updates = Updates(live: live)
+        #endif
+        // Preview models get none, so --snapshot PNGs (the site's screenshots) never show a version that goes stale.
+        runningVersion = live ? AppVersion.short : nil
         iCloudLink = ICloudLink(live: live)
         guard live else {
             settings = AppSettings()
@@ -195,11 +199,6 @@ final class AppModel {
             }
         })
         modelServers.start()
-        devServers.context = { [weak self] in self?.devServerContext }
-        devServers.onSnapshot = { [weak self] snapshot in self?.cleanup.observe(snapshot) }
-        devServers.start()
-        cleanup.context = { [weak self] in self?.cleanupContext }
-        cleanup.start()
         iCloudLink.follow(settings.iCloudLink)
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
@@ -249,38 +248,7 @@ final class AppModel {
         sessions = board.ordered
         history.track(sessions)
         resolveProjects()
-        watchGit()
         iCloudLink.changed()
-    }
-
-    private func watchGit() {
-        guard isLive else { return }
-        var watch: [SessionKey: GitWatch] = [:]
-        var stale: Set<String> = []
-        for session in sessions {
-            guard let cwd = session.cwd, !cwd.isEmpty else { continue }
-            let entry = GitWatch(cwd: cwd, settled: session.turnEnded || session.state == .idle)
-            watch[session.key] = entry
-            let known = gitWatch[session.key]
-            if known?.cwd != cwd || (entry.settled && known?.settled == false) { stale.insert(cwd) }
-        }
-        let kept = Set(watch.values.map(\.cwd))
-        let dropped = Set(gitWatch.values.map(\.cwd)).subtracting(kept)
-        gitWatch = watch
-        for cwd in dropped { gitStats[cwd] = nil }
-        guard !stale.isEmpty || !dropped.isEmpty else { return }
-        let cache = gitCache
-        Task {
-            for cwd in dropped { await cache.forget(cwd) }
-            for cwd in stale {
-                let stat = await cache.refresh(cwd)
-                if gitWatch.values.contains(where: { $0.cwd == cwd }) { gitStats[cwd] = stat }
-            }
-        }
-    }
-
-    func diffStat(for session: AgentSession) -> GitDiffStat? {
-        session.cwd.flatMap { gitStats[$0] }
     }
 
     func contextWindow(for key: SessionKey) -> ContextWindow? {
@@ -381,7 +349,9 @@ final class AppModel {
         modelServers.advance(to: now)
         publishSessions()
         checkLimitedSessions(now: now)
+        #if Sparkle
         perform(updates.tick(now: now, notify: settings.notificationsEnabled && !policy.isQuiet(at: now)))
+        #endif
     }
 
     private func checkLimitedSessions(now: Date) {
@@ -517,7 +487,11 @@ final class AppModel {
         case .localModel:
             openDashboard(.localModel)
         case .update:
+            #if Sparkle
             if updates.pending == nil { openPanel() } else { updates.update() }
+            #else
+            openPanel()
+            #endif
         case .panel:
             openPanel()
         }
@@ -542,35 +516,6 @@ final class AppModel {
         apply(updated)
     }
 
-    // MARK: - Dev servers
-
-    private var devServerContext: DevServers.Context {
-        let history = history
-        let live = sessions.filter { $0.state != .ended }.map { session in
-            DevServerClassifier.Session(key: session.key, cwd: session.cwd.flatMap { $0.isEmpty ? nil : $0 },
-                                        reportedPID: session.reportedPID, reportedAt: session.pidReportedAt)
-        }
-        let resolve: DevServerMonitor.ProjectLookup = { cwds in await history.resolveProjects(cwds) ?? [:] }
-        return DevServers.Context(hubPort: settings.port, sessions: live,
-                                  resolveProjects: history.isReady ? resolve : nil)
-    }
-
-    // MARK: - Clean up
-
-    private var cleanupContext: Cleanup.Context {
-        let live = sessions.filter { $0.state != .ended }.compactMap(\.cwd).filter { !$0.isEmpty }
-        return Cleanup.Context(activity: CleanupActivity(sessionDirectories: live,
-                                                         devServerDirectories: devServers.servers.map(\.cwd)),
-                               thresholds: CleanupRules.Thresholds(settings: settings))
-    }
-
-    func setCleanupIncludesNodeModules(_ included: Bool) {
-        var updated = settings
-        updated.cleanupIncludesNodeModules = included
-        apply(updated)
-        cleanup.refresh()
-    }
-
     func session(_ key: SessionKey?) -> AgentSession? {
         key.flatMap { key in sessions.first { $0.key == key } }
     }
@@ -589,7 +534,6 @@ final class AppModel {
     }
 
     private func watchChanged(cameOnScreen: Bool) {
-        devServers.setWatched(panelOnScreen || dashboardOnScreen)
         modelServers.setWatched(panelOnScreen || dashboardOnScreen)
         if cameOnScreen { modelServers.cameOnScreen() }
     }
@@ -657,6 +601,8 @@ final class AppModel {
         let old = settings
         guard updated != old else { return }
         settings = updated
+        // Sample data runs on a preview model: it must never save settings or restart the listener.
+        guard isLive else { return }
         updated.save()
         policy.preferences = NotificationPreferences(settings: updated)
         history.setPlan(updated)
@@ -726,7 +672,7 @@ final class AppModel {
 
     func setDefaultEditor(_ id: String) {
         defaultEditorID = id
-        UserDefaults.standard.set(id, forKey: Editor.defaultsKey)
+        if isLive { UserDefaults.standard.set(id, forKey: Editor.defaultsKey) }
     }
 
     func openInEditor(_ path: String, editor: Editor? = nil) {
@@ -739,7 +685,7 @@ final class AppModel {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        guard isBundledApp else { return }
+        guard isLive, isBundledApp else { return }
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -752,9 +698,45 @@ final class AppModel {
         refreshLaunchAtLogin()
     }
 
+    func restartListener() {
+        guard isLive else { return }
+        server.start(port: UInt16(clamping: settings.port))
+    }
+
     func quit() {
+        if let sampleHost { return sampleHost.quit() }
         server.stop()
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Sample data
+
+    func showSampleData() {
+        guard isLive, sample == nil else { return }
+        let preview = AppModel.preview()
+        preview.isSampleData = true
+        preview.sampleHost = self
+        preview.settings.port = settings.port
+        preview.serverStatus = serverStatus
+        preview.paletteToggler = paletteToggler
+        preview.dashboardOpener = dashboardOpener
+        preview.panelOpener = panelOpener
+        preview.settingsOpener = settingsOpener
+        preview.history.select(history.page)
+        showingSettings = false
+        sample = preview
+    }
+
+    func hideSampleData() {
+        if let sampleHost { return sampleHost.hideSampleData() }
+        guard let sample else { return }
+        showingSettings = sample.showingSettings
+        self.sample = nil
+    }
+
+    func selectDashboardPage(_ page: DashboardPage) {
+        history.select(page)
+        sample?.history.select(page)
     }
 }
 
@@ -772,15 +754,13 @@ extension AppModel {
         model.serverStatus = .listening(UInt16(clamping: PreviewData.settings.port))
         model.history.show(PreviewData.history(now: now))
         model.projectsByCwd = PreviewData.projectsByCwd
-        model.gitStats = PreviewData.gitStats
         model.editors = PreviewData.editors
         model.hotKey.show(status: .registered(PreviewData.settings.paletteHotKey))
-        model.devServers.show(PreviewData.devServers(now: now))
-        model.cleanup.show(PreviewData.cleanupScan(now: now), orphans: PreviewData.cleanupOrphans(now: now),
-                           log: PreviewData.cleanupLog(now: now))
         model.projectEdits.show(PreviewData.projectEdits(now: now))
         model.connections.show(statuses: PreviewData.connectionStatuses, notices: PreviewData.connectionNotices)
+        #if Sparkle
         model.updates.showPreview(enabled: true)
+        #endif
         return model
     }
 
@@ -788,6 +768,22 @@ extension AppModel {
         let model = AppModel(live: false)
         model.serverStatus = .listening(UInt16(clamping: model.settings.port))
         model.connections.show(statuses: PreviewData.connectionsNone)
+        return model
+    }
+
+    static func storeFirstRunPreview(portInUse: Bool = false) -> AppModel {
+        let model = AppModel(live: false)
+        let port = UInt16(clamping: model.settings.port)
+        model.serverStatus = portInUse ? .portInUse(port) : .listening(port)
+        model.connections.show(statuses: PreviewData.storeFirstRunStatuses)
+        model.connections.show(access: PreviewData.storeFirstRunAccess, problems: PreviewData.storeFirstRunProblems)
+        model.history.showEmptyLedger()
+        return model
+    }
+
+    static func samplePreview(now: Date = Date()) -> AppModel {
+        let model = preview(now: now)
+        model.isSampleData = true
         return model
     }
 

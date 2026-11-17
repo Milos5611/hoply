@@ -40,6 +40,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onReply: ((String, String) -> Void)?
     var onFinishReply: ((String) -> Void)?
     private var queue: Task<Void, Never>?
+    private let enabled: Bool
 
     private nonisolated static let approvalCategory = "hoply.approval"
     private nonisolated static let allowAction = "hoply.allow"
@@ -58,8 +59,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         "\(replyCategory).\(source.rawValue)"
     }
 
+    init(enabled: Bool = true) {
+        self.enabled = enabled
+        super.init()
+    }
+
     private var isAvailable: Bool {
-        Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
+        enabled && Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
     }
 
     /// Must run before launch finishes, so a click that launched the app still reaches the delegate.

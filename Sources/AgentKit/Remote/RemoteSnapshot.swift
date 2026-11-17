@@ -79,7 +79,8 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
                              projects: [String: ProjectRef] = [:], sessionTotals: [SessionKey: LedgerTotals] = [:],
                              limitedUntil: [SessionKey: Date] = [:], approvals: [ApprovalRequest] = [],
                              replies: [TurnReplyRequest] = [], today: [AgentSource: LedgerTotals]?,
-                             week: LedgerTotals? = nil, launch: RemoteLaunch? = nil, now: Date) -> RemoteSnapshot {
+                             week: LedgerTotals? = nil, launch: RemoteLaunch? = nil, edition: Edition = .current,
+                             now: Date) -> RemoteSnapshot {
         let approving = Set(approvals.map(\.key))
         let replying = Set(replies.map(\.key))
         let rows = sessions.map { session -> Session in
@@ -102,7 +103,7 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
         let spend = Spend(today: today.map { RemoteCost($0.values.reduce(.zero, +)) }, week: week.map(RemoteCost.init),
                           byAgent: byAgent)
         return RemoteSnapshot(device: device, deviceName: deviceName, away: away, updatedAt: now, sessions: ordered,
-                              spend: spend, launch: launch)
+                              spend: spend, launch: edition.offersPhoneLaunch ? launch : nil)
     }
 
     public static func projectName(_ session: AgentSession?, projects: [String: ProjectRef]) -> String? {

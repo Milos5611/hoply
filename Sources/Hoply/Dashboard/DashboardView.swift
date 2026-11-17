@@ -66,11 +66,16 @@ struct DashboardView: View {
             case .spending: SpendingPage()
             case .localModel: LocalModelPage()
             case .limits: LimitsPage()
-            case .devServers: DevServersPage()
-            case .cleanUp: CleanupPage()
             }
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity, alignment: .topLeading)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.isSampleData {
+                SampleDataBanner()
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
+            }
+        }
     }
 }
 

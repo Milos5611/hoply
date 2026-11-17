@@ -130,9 +130,7 @@ struct SessionTable: View {
     }
 
     private func place(_ session: SessionSummary) -> String {
-        var parts = [session.project?.title ?? session.cwd.map { ($0 as NSString).lastPathComponent } ?? "Unassigned"]
-        if let branch = session.branch, !branch.isEmpty { parts.append(branch) }
-        return parts.joined(separator: " · ")
+        session.project?.title ?? session.cwd.map { ($0 as NSString).lastPathComponent } ?? "Unassigned"
     }
 }
 
@@ -187,8 +185,10 @@ struct Pager: View {
 
 struct SessionDetail: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.edition) private var edition
     let session: SessionSummary?
     @State private var resumeFailed: SessionKey?
+    @State private var resumeCopied: SessionKey?
 
     var body: some View {
         if let session {
@@ -229,9 +229,6 @@ struct SessionDetail: View {
                               systemImage: "folder")
                     } else {
                         Label("Unassigned", systemImage: "questionmark.folder")
-                    }
-                    if let branch = session.branch, !branch.isEmpty {
-                        Label(branch, systemImage: "arrow.triangle.branch")
                     }
                     if let first = session.firstAt, let last = session.lastAt {
                         Label("\(Format.when(first)) – \(Format.when(last)) · \(Format.duration(from: first, to: last))",
@@ -366,6 +363,15 @@ struct SessionDetail: View {
         }
     }
 
+    private func copyResume(_ line: String, for key: SessionKey) {
+        WorkspaceActions.copy(line)
+        resumeCopied = key
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            if resumeCopied == key { resumeCopied = nil }
+        }
+    }
+
     private func canResume(_ session: SessionSummary) -> Bool {
         guard ResumeScript.isSupported(session.key.source), session.cwd?.isEmpty == false else { return false }
         return model.session(session.key).map { $0.state == .ended } ?? true
@@ -376,8 +382,20 @@ struct SessionDetail: View {
         if resumeFailed == session.key {
             Hint("Couldn't resume: the session's folder is gone, or the script couldn't be written.")
         }
+        if resumeCopied == session.key {
+            Hint("Resume command copied. Paste it into a terminal to continue this session.")
+        }
         HStack(spacing: 8) {
-            if canResume(session), let cwd = session.cwd {
+            if !edition.opensTerminal {
+                if canResume(session),
+                   let line = ResumeScript.commandLine(source: session.key.source, sessionID: session.key.id,
+                                                       cwd: session.cwd) {
+                    Button { copyResume(line, for: session.key) } label: {
+                        Image(systemName: resumeCopied == session.key ? "checkmark" : "doc.on.clipboard")
+                    }
+                    .tooltip(resumeCopied == session.key ? "Copied" : "Copy the command that resumes this session")
+                }
+            } else if canResume(session), let cwd = session.cwd {
                 Button {
                     let started = ResumeLauncher.resume(source: session.key.source, sessionID: session.key.id, cwd: cwd)
                     resumeFailed = started ? nil : session.key

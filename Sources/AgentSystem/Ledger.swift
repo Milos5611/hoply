@@ -13,6 +13,7 @@ public struct LedgerConfiguration: Sendable, Equatable {
     public var watchForChanges: Bool
     public var rescanInterval: Duration
     public var copilotPollInterval: Duration
+    public var folders: Set<AgentFolder>
 
     public init(databasePath: String = Store.defaultDatabaseURL.path,
                 claudeConfigDirectory: String = ClaudeTranscriptIngester.defaultConfigDirectory,
@@ -22,8 +23,9 @@ public struct LedgerConfiguration: Sendable, Equatable {
                 referenceModel: String = PricingTable.defaultReferenceModel,
                 watchForChanges: Bool = true, rescanInterval: Duration = .seconds(60),
                 copilotPollInterval: Duration = .seconds(10), priceAliases: [String: String] = [:],
-                codexHome: String? = nil) {
+                codexHome: String? = nil, folders: Set<AgentFolder> = Set(AgentFolder.allCases)) {
         self.priceAliases = priceAliases
+        self.folders = folders
         self.codexHome = codexHome
         self.databasePath = databasePath
         self.claudeConfigDirectory = claudeConfigDirectory
@@ -36,17 +38,17 @@ public struct LedgerConfiguration: Sendable, Equatable {
         self.copilotPollInterval = copilotPollInterval
     }
 
-    public init(settings: AppSettings) {
-        func directory(_ setting: String, default fallback: String) -> String {
-            let configured = setting.trimmingCharacters(in: .whitespaces)
-            return configured.isEmpty ? fallback : (configured as NSString).expandingTildeInPath
+    public init(settings: AppSettings, environment: [String: String] = ProcessInfo.processInfo.environment,
+                home: String = UserHome.path, edition: Edition = .current, grants: FolderGrants = .shared) {
+        func path(_ folder: AgentFolder) -> String {
+            folder.path(settings: settings, environment: environment, home: home)
         }
-        self.init(claudeConfigDirectory: directory(settings.claudeConfigDir,
-                                                   default: ClaudeTranscriptIngester.defaultConfigDirectory),
-                  copilotHome: directory(settings.copilotHome, default: CopilotStoreIngester.defaultHome),
+        let readable = AgentFolder.allCases.filter {
+            !edition.needsFolderGrants || grants.access(for: $0, at: path($0)).allowsReading
+        }
+        self.init(claudeConfigDirectory: path(.claude), copilotHome: path(.copilot),
                   localModelPatterns: settings.localModelPatterns, referenceModel: settings.referenceModel,
-                  priceAliases: settings.priceAliases,
-                  codexHome: directory(settings.codexHome, default: CodexRolloutIngester.defaultHome))
+                  priceAliases: settings.priceAliases, codexHome: path(.codex), folders: Set(readable))
     }
 }
 
@@ -64,11 +66,16 @@ public struct Ledger: Sendable {
                                              aliases: configuration.priceAliases)
         store = try Store(path: configuration.databasePath, pricing: pricing)
         reader = try StoreReader(path: configuration.databasePath)
+        let folders = configuration.folders
+        let copilot = folders.contains(.copilot)
         ingest = IngestCoordinator(store: store,
-                                   claude: ClaudeTranscriptIngester(configDirectory: configuration.claudeConfigDirectory),
-                                   copilot: CopilotStoreIngester(home: configuration.copilotHome),
-                                   codex: configuration.codexHome.map { CodexRolloutIngester(home: $0) },
-                                   copilotEvents: CopilotEventsIngester(home: configuration.copilotHome),
+                                   claude: folders.contains(.claude)
+                                       ? ClaudeTranscriptIngester(configDirectory: configuration.claudeConfigDirectory)
+                                       : nil,
+                                   copilot: copilot ? CopilotStoreIngester(home: configuration.copilotHome) : nil,
+                                   codex: folders.contains(.codex)
+                                       ? configuration.codexHome.map { CodexRolloutIngester(home: $0) } : nil,
+                                   copilotEvents: copilot ? CopilotEventsIngester(home: configuration.copilotHome) : nil,
                                    watch: configuration.watchForChanges, rescanInterval: configuration.rescanInterval,
                                    copilotPollInterval: configuration.copilotPollInterval)
     }

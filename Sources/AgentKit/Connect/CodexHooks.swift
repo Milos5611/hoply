@@ -28,6 +28,14 @@ public struct CodexHooks: Equatable, Sendable {
          "timeout": event == "SessionEnd" ? Self.sessionEndTimeout : Self.hookTimeout]
     }
 
+    public var fileContents: Data {
+        var hooks: [String: Any] = [:]
+        for event in Self.events {
+            hooks[event] = [["hooks": [hook(for: event)]]]
+        }
+        return SettingsJSON.encode(["hooks": hooks])
+    }
+
     public func status(of file: [String: Any]) -> ConnectionStatus {
         if let problem = Self.shapeProblem(file) { return .unreadable(problem) }
         let ours = ClaudeCodeHooks.ourHooks(in: file)

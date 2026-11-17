@@ -105,8 +105,6 @@ struct ProjectTile: View {
                         Metric(value: Format.tokens(summary.totals.tokens.total), label: "tokens")
                         Metric(value: Format.count(summary.sessionCount),
                                label: summary.sessionCount == 1 ? "session" : "sessions")
-                        Metric(value: summary.kind == .repo || !summary.branches.isEmpty ? "\(summary.branches.count)" : "–",
-                               label: summary.branches.count == 1 ? "branch" : "branches")
                         Metric(value: summary.lastActive.map { Format.lastActive($0) } ?? "–", label: "last active")
                     }
                     .lineLimit(1)
@@ -130,7 +128,7 @@ struct ProjectTile: View {
                 Text(summary.title)
                     .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
-                Text(place)
+                Text(summary.root.map(Format.path) ?? "")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -146,15 +144,6 @@ struct ProjectTile: View {
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var place: String {
-        let root = summary.root.map(Format.path) ?? ""
-        switch summary.worktrees.count {
-        case 0: return root
-        case 1: return "\(root) · 1 worktree"
-        case let count: return "\(root) · \(count) worktrees"
         }
     }
 }
@@ -395,14 +384,7 @@ struct ProjectDetailView: View {
         guard let root = summary.root else {
             return "Usage without a project: telemetry with no hoply.cwd and no readable process cwd. Assign a session from its details."
         }
-        var parts = [Format.path(root), Self.kindName(summary.kind)]
-        if !summary.branches.isEmpty {
-            parts.append(summary.branches.count == 1 ? "1 branch" : "\(summary.branches.count) branches")
-        }
-        if !summary.worktrees.isEmpty {
-            parts.append(summary.worktrees.count == 1 ? "1 worktree" : "\(summary.worktrees.count) worktrees")
-        }
-        return parts.joined(separator: " · ")
+        return "\(Format.path(root)) · \(Self.kindName(summary.kind))"
     }
 
     private static func kindName(_ kind: ProjectKind?) -> String {
@@ -420,7 +402,6 @@ struct ProjectDetailView: View {
             HeadlineTile(label: "Spend", value: "–", symbol: "dollarsign.circle")
             HeadlineTile(label: "Sessions", value: "–", symbol: "list.bullet.rectangle", tint: .teal)
             HeadlineTile(label: "Tokens", value: "–", symbol: "text.word.spacing", tint: .indigo)
-            HeadlineTile(label: "Branches", value: "–", symbol: "arrow.triangle.branch", tint: .green)
         }
     }
 
@@ -446,11 +427,6 @@ struct ProjectDetailView: View {
             } else if local.calls > 0 {
                 HeadlineTile(label: "Ran locally", value: Format.cost(local.apiEquivUSD),
                              detail: "API-equivalent, $0 spent", symbol: "cpu", tint: SourceBadge.color(for: .qwenCode))
-            } else {
-                HeadlineTile(label: "Branches", value: "\(summary.branches.count)",
-                             detail: summary.worktrees.isEmpty ? "no linked worktrees"
-                                 : summary.worktrees.count == 1 ? "1 linked worktree" : "\(summary.worktrees.count) linked worktrees",
-                             symbol: "arrow.triangle.branch", tint: .green)
             }
         }
     }

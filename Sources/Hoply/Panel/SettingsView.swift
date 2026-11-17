@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.edition) private var edition
 
     // Every change goes straight to the current settings, so edits made elsewhere (the header bell, a card's
     // mute tile, Limits "Connect") are never overwritten by a stale copy.
@@ -14,6 +15,10 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 AgentSettings()
+
+                if edition.needsFolderGrants {
+                    FolderAccessSettings()
+                }
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -75,7 +80,9 @@ struct SettingsView: View {
                     }
                 }
 
+                #if Sparkle
                 UpdateSettings()
+                #endif
 
                 if let note = model.lastNote {
                     Hint("Last listener message: \(note)")
@@ -143,6 +150,7 @@ struct CommitField: View {
     }
 }
 
+#if Sparkle
 struct UpdateSettings: View {
     @Environment(AppModel.self) private var model
 
@@ -239,6 +247,7 @@ private struct FeedFailureRow: View {
         return failure.detail.isEmpty ? last : "\(failure.detail)\n\(last)"
     }
 }
+#endif
 
 struct SwitchRow: View {
     let label: String

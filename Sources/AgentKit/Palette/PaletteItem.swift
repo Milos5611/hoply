@@ -4,17 +4,15 @@ public struct PaletteItem: Identifiable, Sendable, Equatable, Hashable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         case session
         case project
-        case devServer
         case page
         case action
 
         var order: Int {
             switch self {
             case .session: return 0
-            case .devServer: return 1
-            case .project: return 2
-            case .page: return 3
-            case .action: return 4
+            case .project: return 1
+            case .page: return 2
+            case .action: return 3
             }
         }
     }
@@ -48,7 +46,6 @@ public struct PaletteItem: Identifiable, Sendable, Equatable, Hashable {
 
     public static func sessionID(_ key: SessionKey) -> String { "session:\(key.source.rawValue):\(key.id)" }
     public static func projectID(_ id: Int64) -> String { "project:\(id)" }
-    public static func devServerID(_ id: String) -> String { "devserver:\(id)" }
     public static func pageID(_ rawValue: String) -> String { "page:\(rawValue)" }
     public static func actionID(_ name: String) -> String { "action:\(name)" }
 

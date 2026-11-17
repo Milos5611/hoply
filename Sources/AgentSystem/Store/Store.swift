@@ -16,7 +16,7 @@ public actor Store {
     private var lastRollup: Date
 
     public init(path: String = Store.defaultDatabaseURL.path, pricing: PricingTable = .bundled(),
-                resolver: ProjectResolver = ProjectResolver(home: NSHomeDirectory()),
+                resolver: ProjectResolver = ProjectResolver(home: UserHome.path),
                 fileSystem: any ProjectFileSystem & Sendable = LocalProjectFileSystem()) throws {
         if Backups.isPersistent(path) {
             try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
