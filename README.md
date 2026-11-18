@@ -19,7 +19,8 @@ run several agents at once and would rather not keep checking terminals. Everyth
 You need macOS 14 Sonoma or newer, on Apple silicon or Intel (it's one universal app); the Liquid Glass look needs
 macOS 26 Tahoe. Release builds are signed with a Developer ID and notarized by Apple, so macOS asks only its usual
 one-time question for an app from the internet.
-Hoply is free during early access.
+Hoply is free forever. [Hoply for iPhone](https://apps.apple.com/app/id6835517348), a separate $10 app on the App
+Store, shows your sessions and lets you approve or reply to your agents from your phone.
 
 **Updates.** Hoply checks for a new version at launch and every hour. When it finds one, the menu bar icon gets a dot,
 a card at the top of the panel offers it (Later hides the card for an hour; the dot stays until you update), and one
@@ -100,12 +101,14 @@ Anything else that talks to your model server, such as a chat app, shows up in t
 
 - Hoply's listener is bound to `127.0.0.1` and turns away any connection that isn't from your Mac.
 - No account, no analytics, no crash reporter. Nothing your agents do is sent anywhere.
-- Hoply makes three kinds of outgoing request:
+- Hoply makes four kinds of outgoing request:
   - to the **model servers you add**;
   - to **Anthropic's usage endpoint**, with your own Claude Code login, for the Claude limits card. This only starts
     once you press Connect there, and macOS asks you before Hoply may read that Keychain item;
   - an **update check** at `https://hoply.dev/appcast.xml`, at launch and every hour (release builds only; Settings →
     Updates turns it off), plus the download of a new version when you choose it or turn on automatic install.
+  - to **Apple's iCloud**, only while Settings → iPhone is on: session titles, project names (never paths), costs and
+    waiting requests go to your own private iCloud database, end-to-end encrypted, for Hoply for iPhone.
 - Agent records (transcripts, Codex session files, Copilot's database and session files) are read, never changed.
   The one exception is something you ask for: Connect writes the hook config above.
 - Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`. Model-server tokens and passwords live in
