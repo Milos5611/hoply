@@ -52,6 +52,15 @@ public enum TurnReply {
         return trimmed.count > messageLimit ? String(trimmed.prefix(messageLimit)) + "…" : trimmed
     }
 
+    // Agents echo the reason inside their own wording ("Stop hook feedback:\n[cmd]: …"); quoted in code it isn't one.
+    public static func sentText(in text: String) -> String? {
+        guard let range = text.range(of: reasonPrefix) else { return nil }
+        let before = text[..<range.lowerBound]
+        guard before.isEmpty || before.hasSuffix("\n") || before.hasSuffix(": ") else { return nil }
+        let reply = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return reply.isEmpty ? nil : reply
+    }
+
     public static func response(_ text: String?) -> HTTPResponse {
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return .json() }
         let output = ["decision": "block", "reason": reasonPrefix + text]

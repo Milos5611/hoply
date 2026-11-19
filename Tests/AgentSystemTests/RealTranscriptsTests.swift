@@ -6,6 +6,36 @@ import XCTest
 /// Opt-in: `HOPLY_REAL_TRANSCRIPTS=1 swift test --filter RealTranscriptsTests`. Reads the real `~/.claude`
 /// (read-only) into a temporary database and compares ledger totals with Claude Code's own `cost-state`.
 final class RealTranscriptsTests: XCTestCase {
+    func testConversationsFromRealTranscriptsFitTheirRecord() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOPLY_REAL_TRANSCRIPTS"] == "1",
+                          "Set HOPLY_REAL_TRANSCRIPTS=1 to read the real ~/.claude")
+        let directory = try TempDirectory()
+        let reader = ConversationReader(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
+                                                                           copilotHome: directory.path("copilot"),
+                                                                           pricingOverridesURL: nil,
+                                                                           watchForChanges: false,
+                                                                           codexHome: directory.path("codex"),
+                                                                           folders: [.claude]))
+        let files = ClaudeTranscriptIngester().discover().filter { !$0.path.contains("/subagents/") }.prefix(40)
+        var roles: [RemoteTranscript.Role: Int] = [:]
+        var markup = 0
+        var truncated = 0
+        var slowest: TimeInterval = 0
+        for file in files {
+            let id = URL(fileURLWithPath: file.path).deletingPathExtension().lastPathComponent
+            let started = Date()
+            let transcript = await reader.transcript(for: "claude-code:" + id, device: "real", answerID: nil)
+            slowest = max(slowest, Date().timeIntervalSince(started))
+            XCTAssertNil(transcript.problem, id)
+            XCTAssertLessThanOrEqual(try RemoteSchema.record(transcript).payload.count, RemoteTranscriptPolicy.byteLimit)
+            for message in transcript.messages { roles[message.role, default: 0] += 1 }
+            markup += transcript.messages.filter { $0.role == .user && $0.text.hasPrefix("<") }.count
+            if transcript.truncated { truncated += 1 }
+        }
+        print("Conversations from \(files.count) transcripts (\(truncated) truncated): \(roles.sorted { $0.key.rawValue < $1.key.rawValue }), \(markup) user messages starting with markup; slowest \(String(format: "%.2f", slowest)) s")
+        XCTAssertLessThan(slowest, 2)
+    }
+
     func testLedgerMatchesCostState() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["HOPLY_REAL_TRANSCRIPTS"] == "1",
                           "Set HOPLY_REAL_TRANSCRIPTS=1 to ingest the real ~/.claude")

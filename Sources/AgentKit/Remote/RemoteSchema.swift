@@ -3,6 +3,7 @@ import Foundation
 public enum RemoteSchema {
     public static let containerID = "iCloud.com.coolcraftcoders.hoply"
     public static let zoneName = "Hoply"
+    public static let transcriptZoneName = "HoplyTranscripts"
     public static let answerSubscriptionID = "hoply-answers"
     public static let version = 1
 
@@ -10,6 +11,7 @@ public enum RemoteSchema {
         public static let snapshot = "Snapshot"
         public static let request = "Request"
         public static let answer = "Answer"
+        public static let transcript = "Transcript"
     }
 
     // CloudKit never lets a field change between plain and encrypted: a new meaning needs a new field name.
@@ -22,6 +24,21 @@ public enum RemoteSchema {
     }
 
     public static func snapshotRecordName(device: String) -> String { "snapshot-" + device }
+
+    public static func transcriptRecordName(device: String, session: String) -> String {
+        "transcript-" + device + "-" + sessionHash(session)
+    }
+
+    // FNV-1a 64 of the UTF-8 bytes, 16 hex digits: the phone computes the same name, so never a per-launch hash.
+    public static func sessionHash(_ session: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in session.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: 16 - hex.count) + hex
+    }
 
     public static func sessionKey(_ key: SessionKey) -> String { "\(key.source.rawValue):\(key.id)" }
 
@@ -47,6 +64,12 @@ public enum RemoteSchema {
                      createdAt: answer.createdAt, payload: try encode(answer))
     }
 
+    public static func record(_ transcript: RemoteTranscript) throws -> RemoteRecord {
+        RemoteRecord(type: RecordType.transcript,
+                     name: transcriptRecordName(device: transcript.device, session: transcript.session), kind: nil,
+                     createdAt: transcript.updatedAt, payload: try encode(transcript))
+    }
+
     public static func snapshot(from record: RemoteRecord) -> RemoteSnapshot? {
         guard record.type == RecordType.snapshot else { return nil }
         return try? decode(RemoteSnapshot.self, from: record.payload)
@@ -57,6 +80,11 @@ public enum RemoteSchema {
         else { return nil }
         request.id = record.name
         return request
+    }
+
+    public static func transcript(from record: RemoteRecord) -> RemoteTranscript? {
+        guard record.type == RecordType.transcript else { return nil }
+        return try? decode(RemoteTranscript.self, from: record.payload)
     }
 
     // Never nil for an Answer record: one Hoply can't read is still deleted, so it can't linger in the zone.

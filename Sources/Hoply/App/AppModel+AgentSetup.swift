@@ -191,6 +191,7 @@ extension AppModel {
     private func foldersChanged() {
         history.reopen(LedgerConfiguration(settings: settings))
         connections.refresh()
+        iCloudLink.changed()
     }
 
     private func reopenPanel(settings: Bool) {

@@ -625,7 +625,7 @@ final class AppModel {
         if updated.iCloudLink != old.iCloudLink {
             iCloudLink.follow(updated.iCloudLink)
         }
-        if updated.iPhoneLaunch != old.iPhoneLaunch {
+        if updated.iPhoneLaunch != old.iPhoneLaunch || updated.iPhoneConversations != old.iPhoneConversations {
             iCloudLink.changed()
         }
         if updated.modelServers != old.modelServers {

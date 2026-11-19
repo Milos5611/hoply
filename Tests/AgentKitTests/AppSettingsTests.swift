@@ -175,6 +175,21 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
     }
 
+    func testIPhoneConversationsAreOnByDefaultAndDecodeLeniently() {
+        XCTAssertTrue(AppSettings().iPhoneConversations)
+        let older = AppSettings.decode(Data(v1JSON.utf8))
+        XCTAssertTrue(older.iPhoneConversations, "settings saved before conversations on the iPhone")
+        XCTAssertEqual(older.port, 4400)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "iPhoneConversations": "no", "iCloudLink": true}"#.utf8))
+        XCTAssertTrue(wrong.iPhoneConversations)
+        XCTAssertTrue(wrong.iCloudLink)
+        XCTAssertEqual(wrong.port, 5000)
+        XCTAssertFalse(AppSettings.decode(Data(#"{"iPhoneConversations": false}"#.utf8)).iPhoneConversations)
+        var settings = AppSettings()
+        settings.iPhoneConversations = false
+        XCTAssertEqual(AppSettings.decode(settings.encoded()), settings)
+    }
+
     func testSettingsSavedWithTheRemovedCleanupKeyStillDecode() {
         let json = #"{"port": 5000, "cleanupIncludesNodeModules": true, "paletteEnabled": false}"#
         let settings = AppSettings.decode(Data(json.utf8))

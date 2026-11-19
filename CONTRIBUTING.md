@@ -238,7 +238,8 @@ Sources/AgentKit/          platform-neutral core
   Pricing/                 price table (bundled as a string literal), cost-state calibration
   Projects/                cwd → project resolver (repo, worktree, folder, home, scratch), session grouping
   ModelServers/            servers, engines, per-engine metric names, detection
-  Remote/                  model server endpoints; the iCloud link's records, schema and answer rules (no CloudKit)
+  Remote/                  model server endpoints; the iCloud link's records, schema, answer and transcript rules (no CloudKit)
+  Conversation/            transcript lines → a session's conversation for the iPhone (prompts, replies, one line per tool)
   Git/ Metrics/ Notifications/ Palette/ Support/ Updates/
 Sources/AgentSystem/       macOS I/O adapters
   SQLite/ Store/           SQLite wrapper, schema + migrations, Store (the only writer), StoreReader (queries)
@@ -246,7 +247,7 @@ Sources/AgentSystem/       macOS I/O adapters
   Connect/                 AgentConnector (writes agent config) and the --connect CLI
   Folders/                 the real home folder, security-scoped folder grants (store edition)
   Processes/               a process's cwd through libproc (the OTel `process.pid` fallback)
-  Remote/                  Keychain, model server client, CloudLink (the iCloud link through CloudKit)
+  Remote/                  Keychain, model server client, CloudLink (the iCloud link through CloudKit), ConversationReader
   Power/                   keeps the Mac awake while Away
   Pricing/ Projects/
   Ledger.swift             store, reader and coordinator bundled for the app
@@ -285,7 +286,9 @@ README in the same pull request.
   tested without CloudKit.
 - **Fixtures come from real payloads, stripped to the keys the test needs.** No prompt or response text (use `"x"`),
   no tokens or credentials, and no paths or names from your machine. A fixture written by hand rather than captured
-  gets a `synthetic_` name prefix, like the ones already there, so nobody mistakes it for a real capture.
+  gets a `synthetic_` name prefix, like the ones already there, so nobody mistakes it for a real capture. The
+  conversation tests need message text, so their `synthetic_*_conversation.jsonl` fixtures are real line shapes with
+  made-up text.
 
 Known gap worth a test if you can capture it: Copilot CLI's OpenTelemetry service name and encoding aren't documented
 in detail. If its tokens appear as a separate "Copilot IDE" row, `TelemetryMapper.source(of:)` needs adjusting.
