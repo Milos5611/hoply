@@ -89,6 +89,11 @@ public actor StoreReader {
         return found.first
     }
 
+    public func sessionFile(_ key: SessionKey) throws -> (transcriptPath: String?, cwd: String?)? {
+        try db.query("SELECT transcript_path, cwd FROM sessions WHERE source = ? AND id = ?",
+                     [key.source.rawValue, key.id]) { row in (row.optionalText(0), row.optionalText(1)) }.first
+    }
+
     public func recentSessions(limit: Int, sources: Set<AgentSource>? = nil) throws -> [RecentSession] {
         let wanted = (sources ?? Set(AgentSource.allCases)).map(\.rawValue).sorted()
         return try db.query("""

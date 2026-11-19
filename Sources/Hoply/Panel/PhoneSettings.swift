@@ -26,6 +26,13 @@ struct PhoneSettings: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                Divider()
+                SwitchRow("Show conversations on iPhone", isOn: Binding(
+                    get: { link.isAvailable && model.settings.iCloudLink && model.settings.iPhoneConversations },
+                    set: { on in model.update { $0.iPhoneConversations = on } }
+                ))
+                .disabled(!link.isAvailable || !model.settings.iCloudLink)
+                Hint("Only for a session you open on the iPhone: its prompts, replies and one line per tool call go to your iCloud, encrypted, never tool output or file contents. Turning this off removes them from iCloud.")
                 if edition.offersPhoneLaunch {
                     Divider()
                     SwitchRow("Let iPhone start sessions", isOn: Binding(

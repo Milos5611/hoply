@@ -21,7 +21,6 @@ final class ICloudLink {
     }
 
     static let withdrawPendingKey = "HoplyICloudWithdrawPending"
-    private static let maxBackoff: TimeInterval = 300
     private static let accountRetry: TimeInterval = 600
     private static let storageRetry: TimeInterval = 900
     private static let coalesce: Duration = .milliseconds(250)
@@ -56,6 +55,9 @@ final class ICloudLink {
     @ObservationIgnored private var accountObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var launchRecents: LaunchRecents?
     @ObservationIgnored private var lastLaunch: RemoteLaunch.Result?
+    @ObservationIgnored private var transcripts = TranscriptWatches()
+    @ObservationIgnored private var transcriptRetry = RemoteRetry()
+    @ObservationIgnored private var conversations: Conversations?
 
     private struct AccountRestricted: Error {}
 
@@ -64,6 +66,12 @@ final class ICloudLink {
         var projects: [ProjectRef]
         var sessions: [RecentSession]
         var fetchedAt: Date
+    }
+
+    private struct Conversations {
+        var store: ObjectIdentifier?
+        var configuration: LedgerConfiguration
+        var reader: ConversationReader
     }
 
     init(live: Bool) {
@@ -122,6 +130,8 @@ final class ICloudLink {
         published = nil
         publishedAt = nil
         fetchedAt = nil
+        transcripts = TranscriptWatches()
+        transcriptRetry = RemoteRetry()
         // Away answers the phone wrote before this run started would undo the Mac's current setting.
         awaySetAt = Date()
         status = .connecting
@@ -145,6 +155,8 @@ final class ICloudLink {
         if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
         accountObserver = nil
         NSApp.unregisterForRemoteNotifications()
+        transcripts = TranscriptWatches()
+        conversations = nil
         UserDefaults.standard.set(true, forKey: Self.withdrawPendingKey)
         status = .removing
         // The withdraw waits for the runner, so a save still in flight can't land after the records are removed.
@@ -171,8 +183,9 @@ final class ICloudLink {
                 failures = 0
                 if status != .running { status = .running }
                 if talked { lastSync = Date() }
-                wait = RemoteLinkPolicy.pollInterval(openRequests: opened.count)
-                    - Date().timeIntervalSince(fetchedAt ?? .distantPast)
+                let untilPoll = pollInterval - Date().timeIntervalSince(fetchedAt ?? .distantPast)
+                wait = RemoteTranscriptPolicy.wait(untilPoll: untilPoll, watching: !transcripts.isEmpty,
+                                                   retry: transcriptRetry, now: Date())
             } catch {
                 guard !Task.isCancelled else { return }
                 guard let delay = failed(error) else { return }
@@ -227,7 +240,9 @@ final class ICloudLink {
         try Task.checkCancellation()
         let now = Date()
         let launch = launchCatalog(of: model)?.remote(last: lastLaunch)
-        let snapshot = snapshot(of: model, device: device, launch: launch, now: now)
+        let reader = conversationReader(of: model)
+        let snapshot = snapshot(of: model, device: device, launch: launch, transcriptAgents: reader?.agents ?? [],
+                                now: now)
         if RemoteLinkPolicy.shouldPublish(snapshot, last: published, at: publishedAt, now: now) {
             try Task.checkCancellation()
             try await cloud.publish(snapshot)
@@ -235,8 +250,7 @@ final class ICloudLink {
             publishedAt = now
             talked = true
         }
-        let pollDue = Date().timeIntervalSince(fetchedAt ?? .distantPast)
-            >= RemoteLinkPolicy.pollInterval(openRequests: opened.count)
+        let pollDue = Date().timeIntervalSince(fetchedAt ?? .distantPast) >= pollInterval
         if fetchRequested || pollDue {
             try Task.checkCancellation()
             fetchRequested = false
@@ -244,14 +258,85 @@ final class ICloudLink {
             fetchedAt = Date()
             talked = true
         }
+        // Transcript errors back off only transcripts: the link stays On and approvals and replies keep their pace.
+        if try await serveTranscripts(cloud, model: model, device: device) { talked = true }
         return talked
+    }
+
+    private var pollInterval: TimeInterval {
+        RemoteTranscriptPolicy.pollInterval(openRequests: opened.count, watching: !transcripts.isEmpty,
+                                            retry: transcriptRetry, now: Date())
+    }
+
+    private func serveTranscripts(_ cloud: CloudLink, model: AppModel, device: String) async throws -> Bool {
+        var talked = false
+        let now = Date()
+        transcripts.expire(now: now)
+        if !model.settings.iPhoneConversations { transcripts = TranscriptWatches() }
+        guard !transcriptRetry.isWaiting(at: now) else { return false }
+        do {
+            if !transcripts.isEmpty, let reader = conversationReader(of: model) {
+                let signals = await reader.signals(for: transcripts.sessions)
+                for watch in transcripts.due(signals, now: now) {
+                    let transcript = await reader.transcript(for: watch.session, device: device,
+                                                             answerID: watch.answerID, now: now)
+                    try Task.checkCancellation()
+                    guard model.settings.iPhoneConversations else { break }
+                    guard transcripts.built(transcript, signal: signals[watch.session], at: now) else { continue }
+                    try await cloud.publish(transcript)
+                    transcripts.published(transcript)
+                    transcriptRetry.succeeded()
+                    talked = true
+                }
+            }
+            let enabled = model.settings.iPhoneConversations
+            if !enabled { transcripts = TranscriptWatches() }
+            let stale = transcripts.stale(await cloud.transcriptRecords, device: device, enabled: enabled, now: now)
+            if !stale.isEmpty {
+                try Task.checkCancellation()
+                try await cloud.deleteTranscripts(stale)
+                transcriptRetry.succeeded()
+                talked = true
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            switch CloudLinkError(error) {
+            case .unavailable, .noAccount:
+                throw error
+            case .limited(let retryAfter):
+                transcriptRetry.failed(retryAfter: retryAfter, now: Date())
+            case .quotaExceeded, .network, .other:
+                transcriptRetry.failed(now: Date())
+            }
+        }
+        return talked
+    }
+
+    private func conversationReader(of model: AppModel) -> ConversationReader? {
+        guard model.settings.iPhoneConversations else {
+            conversations = nil
+            return nil
+        }
+        let ledger = model.history.ledger
+        let store = ledger.map { ObjectIdentifier($0.store) }
+        let configuration = ledger?.configuration ?? LedgerConfiguration(settings: model.settings)
+        if let conversations, conversations.store == store, conversations.configuration == configuration {
+            return conversations.reader
+        }
+        // No ledger yet (or it failed) must not read as "turned off" on the phone: this reader walks the folders.
+        let reader = ledger.map { ConversationReader(ledger: $0) } ?? ConversationReader(configuration: configuration)
+        conversations = Conversations(store: store, configuration: configuration, reader: reader)
+        return reader
     }
 
     private static func held(by model: AppModel) -> Set<String> {
         Set(model.approvals.map(\.id) + model.replies.map(\.id))
     }
 
-    private func snapshot(of model: AppModel, device: String, launch: RemoteLaunch?, now: Date) -> RemoteSnapshot {
+    private func snapshot(of model: AppModel, device: String, launch: RemoteLaunch?, transcriptAgents: [AgentSource],
+                          now: Date) -> RemoteSnapshot {
         let history = model.history
         let week = history.isReady ? history.week : nil
         // `today` is empty, not unknown, until the ledger's first refresh, which is also the one that sets `week`.
@@ -260,7 +345,7 @@ final class ICloudLink {
                                     sessions: model.sessions, projects: model.projectsByCwd,
                                     sessionTotals: history.sessionTotals, limitedUntil: model.grouping.limitedUntil,
                                     approvals: model.approvals, replies: model.replies, today: today, week: week,
-                                    launch: launch, now: now)
+                                    launch: launch, transcriptAgents: transcriptAgents, now: now)
     }
 
     private func launchCatalog(of model: AppModel) -> LaunchCatalog? {
@@ -306,8 +391,10 @@ final class ICloudLink {
         let now = Date()
         let resolution = RemoteAnswers.resolve(answers, approvals: model.approvals, replies: model.replies,
                                                device: cloud.device, handled: handled, awaySetAt: awaySetAt,
-                                               launch: launchCatalog(of: model), now: now)
+                                               launch: launchCatalog(of: model),
+                                               conversations: model.settings.iPhoneConversations, now: now)
         handled.formUnion(resolution.acknowledged)
+        transcripts.add(resolution.transcripts, now: now)
         for action in resolution.actions {
             apply(action, to: model)
         }
@@ -343,7 +430,7 @@ final class ICloudLink {
 
     private func failed(_ error: any Error) -> TimeInterval? {
         failures += 1
-        let backoff = Self.backoff(after: failures)
+        let backoff = RemoteRetry.backoff(after: failures)
         let now = Date()
         if error is AccountRestricted {
             status = .restricted
@@ -372,10 +459,6 @@ final class ICloudLink {
             status = .failed(message, retryAt: now + backoff)
             return backoff
         }
-    }
-
-    private static func backoff(after failures: Int) -> TimeInterval {
-        min(5 * pow(2, Double(min(max(failures, 1), 10) - 1)), maxBackoff)
     }
 
     private func nap(_ seconds: TimeInterval) async {
@@ -411,9 +494,9 @@ final class ICloudLink {
                     withdrawal = nil
                     return
                 case .limited(let retryAfter):
-                    delay = max(retryAfter ?? 0, Self.backoff(after: failures))
+                    delay = max(retryAfter ?? 0, RemoteRetry.backoff(after: failures))
                 case .quotaExceeded, .network, .other:
-                    delay = Self.backoff(after: failures)
+                    delay = RemoteRetry.backoff(after: failures)
                 }
                 status = .removeFailed(retryAt: Date() + delay)
                 try? await Task.sleep(for: .seconds(delay))

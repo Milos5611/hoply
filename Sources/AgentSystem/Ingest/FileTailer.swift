@@ -84,6 +84,24 @@ public enum FileTailer {
                          bytesConsumed: Int64(split.consumed))
     }
 
+    public static func lastLines(of path: String, maxBytes: Int) -> (lines: [Data], fromStart: Bool)? {
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+        let size = Int64(info.st_size)
+        let start = max(0, size - Int64(maxBytes))
+        // One byte before the window: a newline there means the window starts on a whole line.
+        let from = max(0, start - 1)
+        guard var data = try? readBytes(fd, at: from, count: Int(size - from)) else { return nil }
+        if start > 0 {
+            guard let newline = data.firstIndex(of: UInt8(ascii: "\n")) else { return ([], false) }
+            data = data[(newline + 1)...]
+        }
+        return (JSONLines.complete(in: data).lines, start == 0)
+    }
+
     static func readBytes(_ fd: Int32, at offset: Int64, count: Int) throws -> Data {
         guard count > 0 else { return Data() }
         var data = Data(count: count)

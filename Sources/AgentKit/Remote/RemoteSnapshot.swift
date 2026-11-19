@@ -61,9 +61,10 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
     public var sessions: [Session]
     public var spend: Spend
     public var launch: RemoteLaunch?
+    public var transcriptAgents: [String]?
 
     public init(device: String, deviceName: String? = nil, away: Bool, updatedAt: Date, sessions: [Session] = [],
-                spend: Spend = Spend(), launch: RemoteLaunch? = nil) {
+                spend: Spend = Spend(), launch: RemoteLaunch? = nil, transcriptAgents: [String]? = nil) {
         self.device = device
         self.deviceName = deviceName
         self.away = away
@@ -71,6 +72,7 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
         self.sessions = sessions
         self.spend = spend
         self.launch = launch
+        self.transcriptAgents = transcriptAgents
     }
 
     public static let maxSessions = 50
@@ -79,7 +81,8 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
                              projects: [String: ProjectRef] = [:], sessionTotals: [SessionKey: LedgerTotals] = [:],
                              limitedUntil: [SessionKey: Date] = [:], approvals: [ApprovalRequest] = [],
                              replies: [TurnReplyRequest] = [], today: [AgentSource: LedgerTotals]?,
-                             week: LedgerTotals? = nil, launch: RemoteLaunch? = nil, edition: Edition = .current,
+                             week: LedgerTotals? = nil, launch: RemoteLaunch? = nil,
+                             transcriptAgents: [AgentSource]? = nil, edition: Edition = .current,
                              now: Date) -> RemoteSnapshot {
         let approving = Set(approvals.map(\.key))
         let replying = Set(replies.map(\.key))
@@ -103,7 +106,10 @@ public struct RemoteSnapshot: Codable, Sendable, Equatable {
         let spend = Spend(today: today.map { RemoteCost($0.values.reduce(.zero, +)) }, week: week.map(RemoteCost.init),
                           byAgent: byAgent)
         return RemoteSnapshot(device: device, deviceName: deviceName, away: away, updatedAt: now, sessions: ordered,
-                              spend: spend, launch: edition.offersPhoneLaunch ? launch : nil)
+                              spend: spend, launch: edition.offersPhoneLaunch ? launch : nil,
+                              transcriptAgents: transcriptAgents.map { agents in
+                                  AgentSource.allCases.filter(agents.contains).map(\.rawValue)
+                              })
     }
 
     public static func projectName(_ session: AgentSession?, projects: [String: ProjectRef]) -> String? {
@@ -186,6 +192,7 @@ public enum RemoteLinkPolicy {
         if snapshot.sameContent(as: last) { return elapsed >= heartbeat }
         if snapshot.away != last.away || snapshot.attention != last.attention { return true }
         if (snapshot.launch == nil) != (last.launch == nil) || snapshot.launch?.last != last.launch?.last { return true }
+        if snapshot.transcriptAgents != last.transcriptAgents { return true }
         return elapsed >= publishInterval
     }
 

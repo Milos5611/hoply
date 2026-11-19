@@ -33,8 +33,15 @@ final class CloudLinkTests: XCTestCase {
         await assertUnavailable({ try await link.acknowledge(["a-1"]) }, "acknowledge")
         await assertUnavailable({ try await link.acknowledge([]) }, "acknowledge nothing")
         await assertUnavailable({ try await link.withdraw() }, "withdraw")
+        let transcript = RemoteTranscript(device: link.device, session: "claude-code:s", agent: "claude-code",
+                                          updatedAt: t0)
+        await assertUnavailable({ try await link.publish(transcript) }, "publish transcript")
+        await assertUnavailable({ try await link.deleteTranscripts(["transcript-x"]) }, "deleteTranscripts")
+        await assertUnavailable({ try await link.deleteTranscripts([]) }, "deleteTranscripts nothing")
         let open = await link.openRequestIDs
         XCTAssertEqual(open, [], "a failed open is not remembered")
+        let transcripts = await link.transcriptRecords
+        XCTAssertEqual(transcripts, [:])
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "nothing is written without iCloud")
     }
 
@@ -118,6 +125,48 @@ final class CloudLinkTests: XCTestCase {
         let snapshotKind: String? = snapshot[RemoteSchema.Field.kind]
         XCTAssertNil(snapshotKind)
         XCTAssertEqual(snapshot.recordID.recordName, "snapshot-mac-1")
+    }
+
+    func testTranscriptsGoToTheirOwnZoneWithContentEncrypted() throws {
+        let zone = CKRecordZone.ID(zoneName: RemoteSchema.transcriptZoneName, ownerName: CKCurrentUserDefaultName)
+        let transcript = RemoteTranscript(device: "mac-1", session: "claude-code:s1", agent: "claude-code",
+                                          answerID: "a-1", updatedAt: t0,
+                                          messages: [RemoteTranscript.Message(role: .user, text: "secret plan")])
+        let image = try RemoteSchema.record(transcript)
+        let record = CloudLink.record(from: image, zone: zone)
+        XCTAssertEqual(record.recordType, "Transcript")
+        XCTAssertEqual(record.recordID.zoneID.zoneName, "HoplyTranscripts")
+        XCTAssertEqual(record.recordID.recordName, RemoteSchema.transcriptRecordName(device: "mac-1",
+                                                                                     session: "claude-code:s1"))
+        let kind: String? = record[RemoteSchema.Field.kind]
+        let plainPayload: Data? = record[RemoteSchema.Field.payload]
+        XCTAssertNil(kind)
+        XCTAssertNil(plainPayload)
+        XCTAssertEqual(record.encryptedValues[RemoteSchema.Field.payload] as Data?, image.payload)
+        XCTAssertEqual(RemoteSchema.transcript(from: CloudLink.image(of: record)), transcript)
+    }
+
+    func testStateKeepsTranscriptRecordsAcrossLaunches() async throws {
+        let directory = try TempDirectory()
+        let url = directory.url.appendingPathComponent("Hoply/icloud-link.json")
+        let state = CloudLinkState(device: "mac-1", zoneReady: true, transcriptZoneReady: true,
+                                   transcripts: ["transcript-mac-1-a": t0, "transcript-mac-1-b": t0 + 60])
+        try state.save(to: url)
+        XCTAssertEqual(CloudLinkState.load(from: url), state)
+        let records = await CloudLink(stateURL: url).transcriptRecords
+        XCTAssertEqual(records, state.transcripts, "withdraw and pruning still know them after a relaunch")
+
+        try directory.write("Hoply/icloud-link.json", #"{"device": "mac-1", "zoneReady": true, "openRequests": []}"#)
+        let older = CloudLinkState.load(from: url)
+        XCTAssertTrue(older.zoneReady)
+        XCTAssertFalse(older.transcriptZoneReady, "a Mac linked before conversations makes the new zone")
+        XCTAssertEqual(older.transcripts, [:])
+        try directory.write("Hoply/icloud-link.json",
+                            #"{"device": "mac-1", "transcripts": ["a"], "transcriptZoneReady": "yes"}"#)
+        let lenient = CloudLinkState.load(from: url)
+        XCTAssertEqual(lenient.device, "mac-1")
+        XCTAssertEqual(lenient.transcripts, [:])
+        XCTAssertFalse(lenient.transcriptZoneReady)
     }
 
     func testStateKeepsTheDeviceAcrossLaunches() async throws {

@@ -62,15 +62,20 @@ struct CloudLinkState: Codable, Equatable {
     var changeToken: Data?
     var openRequests: [String]
     var launches: [String: Date]
+    var transcriptZoneReady: Bool
+    var transcripts: [String: Date]
 
     init(device: String = UUID().uuidString, zoneReady: Bool = false, subscriptionReady: Bool = false,
-         changeToken: Data? = nil, openRequests: [String] = [], launches: [String: Date] = [:]) {
+         changeToken: Data? = nil, openRequests: [String] = [], launches: [String: Date] = [:],
+         transcriptZoneReady: Bool = false, transcripts: [String: Date] = [:]) {
         self.device = device
         self.zoneReady = zoneReady
         self.subscriptionReady = subscriptionReady
         self.changeToken = changeToken
         self.openRequests = openRequests
         self.launches = launches
+        self.transcriptZoneReady = transcriptZoneReady
+        self.transcripts = transcripts
     }
 
     init(from decoder: any Decoder) throws {
@@ -82,6 +87,8 @@ struct CloudLinkState: Codable, Equatable {
         changeToken = try? container.decode(Data.self, forKey: .changeToken)
         openRequests = (try? container.decode([String].self, forKey: .openRequests)) ?? []
         launches = (try? container.decode([String: Date].self, forKey: .launches)) ?? [:]
+        transcriptZoneReady = (try? container.decode(Bool.self, forKey: .transcriptZoneReady)) ?? false
+        transcripts = (try? container.decode([String: Date].self, forKey: .transcripts)) ?? [:]
     }
 
     mutating func claimLaunch(_ answerID: String, createdAt: Date, now: Date) -> Bool {
@@ -151,6 +158,7 @@ public actor CloudLink {
     }
 
     public var openRequestIDs: [String] { state.openRequests }
+    public var transcriptRecords: [String: Date] { state.transcripts }
 
     public func claimLaunch(_ answerID: String, createdAt: Date, now: Date = Date()) -> Bool {
         let before = state
@@ -191,6 +199,42 @@ public actor CloudLink {
 
     public func publish(_ snapshot: RemoteSnapshot) async throws {
         try await save { try RemoteSchema.record(snapshot) }
+    }
+
+    public func publish(_ transcript: RemoteTranscript) async throws {
+        _ = try cloudContainer()
+        let image: RemoteRecord
+        do {
+            image = try RemoteSchema.record(transcript)
+        } catch {
+            throw CloudLinkError(error)
+        }
+        // Remembered before the save, so a withdraw after a crash mid-save still deletes it.
+        if state.transcripts[image.name] == nil {
+            state.transcripts[image.name] = transcript.updatedAt
+            saveState()
+        }
+        try await runTranscripts { link, database in
+            let record = Self.record(from: image, zone: link.transcriptZoneID)
+            let saved = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys,
+                                                         atomically: true).saveResults
+            _ = try saved[record.recordID]?.get()
+        }
+        state.transcripts[image.name] = max(state.transcripts[image.name] ?? transcript.updatedAt, transcript.updatedAt)
+        saveState()
+    }
+
+    public func deleteTranscripts(_ names: [String]) async throws {
+        let database = try cloudContainer().privateCloudDatabase
+        guard !names.isEmpty else { return }
+        do {
+            try await Self.delete(names.map { transcriptRecordID($0) }, in: database)
+        } catch where Self.zoneMissing(error) {
+        } catch {
+            throw CloudLinkError(error)
+        }
+        for name in names { state.transcripts[name] = nil }
+        saveState()
     }
 
     public func open(_ request: RemoteRequest) async throws {
@@ -246,13 +290,18 @@ public actor CloudLink {
     public func withdraw() async throws {
         let database = try cloudContainer().privateCloudDatabase
         let names = [RemoteSchema.snapshotRecordName(device: device)] + state.openRequests + leftovers
-        do {
-            try await Self.delete(names.map { recordID($0) }, in: database)
-        } catch where Self.zoneMissing(error) {
-        } catch {
-            throw CloudLinkError(error)
+        // Only this Mac's transcripts: another Mac on the same Apple ID shares the zone.
+        let transcripts = state.transcripts.keys.sorted()
+        for ids in [names.map { recordID($0) }, transcripts.map { transcriptRecordID($0) }] where !ids.isEmpty {
+            do {
+                try await Self.delete(ids, in: database)
+            } catch where Self.zoneMissing(error) {
+            } catch {
+                throw CloudLinkError(error)
+            }
         }
         state.openRequests = []
+        state.transcripts = [:]
         leftovers = []
         saveState()
     }
@@ -261,8 +310,16 @@ public actor CloudLink {
         CKRecordZone.ID(zoneName: RemoteSchema.zoneName, ownerName: CKCurrentUserDefaultName)
     }
 
+    private nonisolated var transcriptZoneID: CKRecordZone.ID {
+        CKRecordZone.ID(zoneName: RemoteSchema.transcriptZoneName, ownerName: CKCurrentUserDefaultName)
+    }
+
     private nonisolated func recordID(_ name: String) -> CKRecord.ID {
         CKRecord.ID(recordName: name, zoneID: zoneID)
+    }
+
+    private nonisolated func transcriptRecordID(_ name: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: name, zoneID: transcriptZoneID)
     }
 
     private func cloudContainer() throws -> CKContainer {
@@ -314,6 +371,33 @@ public actor CloudLink {
         }
     }
 
+    private func runTranscripts(_ body: (isolated CloudLink, CKDatabase) async throws -> Void) async throws {
+        let database = try cloudContainer().privateCloudDatabase
+        do {
+            try await body(self, database)
+        } catch where Self.zoneMissing(error) {
+            state.transcriptZoneReady = false
+            saveState()
+            do {
+                try await ensureTranscriptZone(database)
+                try await body(self, database)
+            } catch {
+                throw CloudLinkError(error)
+            }
+        } catch {
+            throw CloudLinkError(error)
+        }
+    }
+
+    private func ensureTranscriptZone(_ database: CKDatabase) async throws {
+        guard !state.transcriptZoneReady else { return }
+        let zone = CKRecordZone(zoneID: transcriptZoneID)
+        let saved = try await database.modifyRecordZones(saving: [zone], deleting: []).saveResults
+        _ = try saved[zone.zoneID]?.get()
+        state.transcriptZoneReady = true
+        saveState()
+    }
+
     private func ensureZone(_ database: CKDatabase) async throws {
         if !state.zoneReady {
             let zone = CKRecordZone(zoneID: zoneID)
@@ -334,6 +418,7 @@ public actor CloudLink {
             state.subscriptionReady = true
             saveState()
         }
+        try await ensureTranscriptZone(database)
     }
 
     private struct ZoneChanges: Sendable {

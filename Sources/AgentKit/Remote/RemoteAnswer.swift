@@ -7,6 +7,7 @@ public struct RemoteAnswer: Codable, Sendable, Equatable, Identifiable {
         case done
         case away
         case launch
+        case transcript
         case unknown
 
         public init(from decoder: any Decoder) throws {
@@ -87,6 +88,10 @@ public struct RemoteAnswer: Codable, Sendable, Equatable, Identifiable {
         RemoteAnswer(device: device, kind: .launch, text: prompt, agent: agent, projectID: projectID, session: session,
                      createdAt: time)
     }
+
+    public static func transcript(session: String, device: String, at time: Date = Date()) -> RemoteAnswer {
+        RemoteAnswer(device: device, kind: .transcript, session: session, createdAt: time)
+    }
 }
 
 public enum RemoteAction: Sendable, Equatable {
@@ -96,15 +101,30 @@ public enum RemoteAction: Sendable, Equatable {
     case setAway(Bool)
 }
 
+public struct RemoteTranscriptOrder: Sendable, Equatable {
+    public var answerID: String
+    public var session: String
+    public var createdAt: Date
+
+    public init(answerID: String, session: String, createdAt: Date) {
+        self.answerID = answerID
+        self.session = session
+        self.createdAt = createdAt
+    }
+}
+
 public struct RemoteResolution: Sendable, Equatable {
     public var actions: [RemoteAction]
     public var acknowledged: [String]
     public var launches: [RemoteLaunchDecision]
+    public var transcripts: [RemoteTranscriptOrder]
 
-    public init(actions: [RemoteAction] = [], acknowledged: [String] = [], launches: [RemoteLaunchDecision] = []) {
+    public init(actions: [RemoteAction] = [], acknowledged: [String] = [], launches: [RemoteLaunchDecision] = [],
+                transcripts: [RemoteTranscriptOrder] = []) {
         self.actions = actions
         self.acknowledged = acknowledged
         self.launches = launches
+        self.transcripts = transcripts
     }
 }
 
@@ -116,8 +136,8 @@ public enum RemoteAnswers {
 
     public static func resolve(_ answers: [RemoteAnswer], approvals: [ApprovalRequest], replies: [TurnReplyRequest],
                                device: String, handled: Set<String> = [], awaySetAt: Date? = nil,
-                               launch catalog: LaunchCatalog? = nil, edition: Edition = .current,
-                               now: Date) -> RemoteResolution {
+                               launch catalog: LaunchCatalog? = nil, conversations: Bool = false,
+                               edition: Edition = .current, now: Date) -> RemoteResolution {
         let catalog = edition.offersPhoneLaunch ? catalog : nil
         var openApprovals = Dictionary(approvals.map { ($0.id, $0.received) }, uniquingKeysWith: { first, _ in first })
         var openReplies = Dictionary(replies.map { ($0.id, $0.received) }, uniquingKeysWith: { first, _ in first })
@@ -161,6 +181,12 @@ public enum RemoteAnswers {
                 openReplies[id] = nil
             case .launch:
                 result.launches.append(launch(answer, catalog: catalog, resumed: &resumed, now: now))
+            case .transcript:
+                guard conversations, answer.device != nil, let session = answer.session, !session.isEmpty,
+                      now.timeIntervalSince(answer.createdAt) <= RemoteTranscriptPolicy.watchFor + clockTolerance
+                else { continue }
+                result.transcripts.append(RemoteTranscriptOrder(answerID: answer.id, session: session,
+                                                                createdAt: answer.createdAt))
             case .unknown:
                 continue
             }

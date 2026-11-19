@@ -1,0 +1,22 @@
+{"timestamp":"2026-11-19T11:00:00.000Z","type":"session_meta","payload":{"id":"019c0000-0000-7000-8000-00000000000a","timestamp":"2026-11-19T11:00:00.000Z","cwd":"/Users/x/Project/api","originator":"codex_cli_rs","cli_version":"0.130.0","source":"cli","model_provider":"openai"}}
+{"timestamp":"2026-11-19T11:00:00.100Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>x</permissions instructions>"}]}}
+{"timestamp":"2026-11-19T11:00:00.200Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}
+{"timestamp":"2026-11-19T11:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"Add pagination to the list endpoint","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-11-19T11:00:01.100Z","type":"turn_context","payload":{"cwd":"/Users/x/Project/api","approval_policy":"on-request","model":"gpt-6"}}
+{"timestamp":"2026-11-19T11:00:02.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"x"}}
+{"timestamp":"2026-11-19T11:00:02.100Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Thinking about it"}}
+{"timestamp":"2026-11-19T11:00:03.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"rg -n \\\"def list\\\" src\"],\"workdir\":\"/Users/x/Project/api\"}","call_id":"call_1"}}
+{"timestamp":"2026-11-19T11:00:03.500Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"src/routes.py:12:def list_items("}}
+{"timestamp":"2026-11-19T11:00:04.000Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_2","name":"apply_patch","input":"*** Begin Patch\n*** Update File: /Users/x/Project/api/src/routes.py\n@@\n-a\n+b\n*** Add File: src/pagination.py\n+x\n*** End Patch\n"}}
+{"timestamp":"2026-11-19T11:00:04.500Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":"Success"}}
+{"timestamp":"2026-11-19T11:00:05.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pytest -q\",\"workdir\":\"/Users/x/Project/api\"}","call_id":"call_3"}}
+{"timestamp":"2026-11-19T11:00:05.100Z","type":"response_item","payload":{"type":"function_call","name":"write_stdin","arguments":"{\"session_id\":1,\"chars\":\"\"}","call_id":"call_4"}}
+{"timestamp":"2026-11-19T11:00:05.200Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"x\",\"status\":\"completed\"}]}","call_id":"call_5"}}
+{"timestamp":"2026-11-19T11:00:05.300Z","type":"response_item","payload":{"type":"local_shell_call","call_id":"call_6","status":"completed","action":{"type":"exec","command":["ls","-la"]}}}
+{"timestamp":"2026-11-19T11:00:05.400Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"cursor pagination"}}}
+{"timestamp":"2026-11-19T11:00:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Added cursor pagination; the tests pass.","phase":"final_answer"}}
+{"timestamp":"2026-11-19T11:00:06.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Added cursor pagination; the tests pass."}]}}
+{"timestamp":"2026-11-19T11:00:06.100Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}
+{"timestamp":"2026-11-19T11:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"Search the issues too","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-11-19T11:01:01.000Z","type":"response_item","payload":{"type":"function_call","name":"github__search_issues","arguments":"{\"query\":\"pagination\",\"limit\":5}","call_id":"call_7"}}
+{"timestamp":"2026-11-19T11:01:02.000Z","type":"compacted","payload":{"message":"summary","replacement_history":[]}}
