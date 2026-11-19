@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import AgentKit
 
@@ -134,20 +135,38 @@ final class HubServerPortTests: XCTestCase {
         }
     }
 
-    func testASecondListenerOnTheSamePortReportsPortInUse() async {
-        let port = UInt16.random(in: 49_000...49_900)
+    func testASecondListenerOnTheSamePortReportsPortInUse() async throws {
         let first = HubServer()
         let second = HubServer()
-        let listening = expectation(description: "first listening")
-        let taken = expectation(description: "second refused")
-        first.onStatus = { status in if case .listening = status { listening.fulfill() } }
-        second.onStatus = { status in if status == .portInUse(port) { taken.fulfill() } }
-        first.start(port: port)
-        await fulfillment(of: [listening], timeout: 5)
-        second.start(port: port)
-        await fulfillment(of: [taken], timeout: 5)
-        first.stop()
-        second.stop()
+        defer {
+            first.stop()
+            second.stop()
+        }
+        var port: UInt16?
+        for _ in 0..<5 {
+            let candidate = UInt16.random(in: 42_000...44_999)
+            if await firstStatus(of: first, on: candidate) == .listening(candidate) {
+                port = candidate
+                break
+            }
+        }
+        let held = try XCTUnwrap(port, "the first listener found no free port")
+        let refused = await firstStatus(of: second, on: held)
+        XCTAssertEqual(refused, .portInUse(held))
+    }
+
+    private func firstStatus(of server: HubServer, on port: UInt16) async -> HubServer.Status? {
+        let reported = expectation(description: "status on \(port)")
+        reported.assertForOverFulfill = false
+        let first = OSAllocatedUnfairLock<HubServer.Status?>(initialState: nil)
+        server.onStatus = { status in
+            guard status != .stopped else { return }
+            first.withLock { if $0 == nil { $0 = status } }
+            reported.fulfill()
+        }
+        server.start(port: port)
+        await fulfillment(of: [reported], timeout: 5)
+        return first.withLock { $0 }
     }
 }
 #endif
