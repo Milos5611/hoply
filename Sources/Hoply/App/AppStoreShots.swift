@@ -87,6 +87,15 @@ enum AppStoreShots {
                     .padding(.top, 80)
             }
         }, model: search, to: file(5, "search"))
+
+        let macs = model(now: now)
+        macs.history.show(PreviewData.severalMacsHistory(now: now), page: .sessions)
+        try write(Composition(headline: "All your Macs in one Dashboard",
+                              subline: "Sessions and spend from every Mac on your Apple Account, "
+                                  + "or filter to one.",
+                              scale: 2, layout: .captionTop, fadesBottom: true) {
+            WindowFrame { DashboardView(plainSidebar: true).frame(width: 1_180, height: 700) }
+        }, model: macs, to: file(6, "macs"))
     }
 
     private static func model(now: Date) -> AppModel {
