@@ -19,6 +19,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         NSApp.activateOverOtherApps()
         model.history.setDashboardVisible(true)
         model.setDashboardOnScreen(true)
+        model.iCloudLink.historyWanted()
     }
 
     func windowWillClose(_ notification: Notification) {

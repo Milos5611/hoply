@@ -286,6 +286,8 @@ extension ButtonStyle where Self == RowButtonStyle {
 struct BreakdownList: View {
     enum Kind { case project, model }
 
+    @Environment(AppModel.self) private var model
+
     let slices: [SpendSlice]
     let kind: Kind
     var limit: Int?
@@ -337,8 +339,8 @@ struct BreakdownList: View {
     private func subtitle(_ slice: SpendSlice) -> String {
         let sessions = slice.sessionCount == 1 ? "1 session" : "\(slice.sessionCount) sessions"
         var parts = [sessions, "\(Format.tokens(slice.totals.tokens.total)) tokens"]
-        if kind == .project, let root = slice.project?.root {
-            parts.append(Format.path(root))
+        if kind == .project, let project = slice.project {
+            parts.append(model.history.location(of: project))
         }
         if kind == .model, slice.totals.apiEquivUSD > 0, slice.totals.costUSD == 0 {
             parts.append("local")
@@ -400,6 +402,28 @@ struct HistoryBanner: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+}
+
+struct MacFilter: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let history = model.history
+        if history.showsMacFilter {
+            Picker("Mac", selection: Binding(get: { history.macScope }, set: { history.setMacScope($0) })) {
+                Text("All Macs").tag(MacScope.all)
+                Divider()
+                Text(history.thisMacName ?? "This Mac").tag(MacScope.thisMac)
+                ForEach(history.remoteDevices) { device in
+                    Text(device.name ?? "Unnamed Mac").tag(MacScope.device(device.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+            .help("Show usage from all your Macs, or from one")
         }
     }
 }

@@ -16,7 +16,8 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(try db.userVersion(), Schema.migrations.count)
         XCTAssertEqual(try tables(db), ["projects", "path_map", "sessions", "usage", "ingest_cursors", "samples",
                                         "limit_samples", "state_spans", "subagents", "session_prompts",
-                                        "dismissed_suggestions"])
+                                        "dismissed_suggestions", "remote_devices", "remote_parts", "remote_projects",
+                                        "remote_sessions", "remote_usage", "remote_session_pins"])
         XCTAssertEqual(try db.queryOne("PRAGMA journal_mode") { $0.text(0) }, "wal")
         XCTAssertEqual(try db.queryOne("PRAGMA synchronous") { $0.int(0) }, 1, "NORMAL")
         XCTAssertEqual(try db.queryOne("PRAGMA busy_timeout") { $0.int(0) }, 2000)
@@ -138,6 +139,30 @@ final class SchemaTests: XCTestCase {
         }, "five_hour 40 true", "Claude rows keep their kind and gain no plan")
         let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
         XCTAssertEqual(try backup.userVersion(), 4, "the v4 ledger was backed up before migrating")
+    }
+
+    func testV7AddsOtherMacsTablesToAFilledV6Ledger() throws {
+        let directory = try TempDirectory()
+        let path = directory.path("hoply.sqlite")
+        let db = try SQLiteConnection(path: path)
+        try Schema.configure(db)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(6)))
+        try db.execute("""
+            INSERT INTO projects (root, name, kind) VALUES ('/p/hoply', 'hoply', 'repo');
+            INSERT INTO sessions (source, id, project_id, turns) VALUES ('claude-code', 'c1', 1, 2);
+            INSERT INTO usage (dedupe_key, source, session_id, project_id, ts, output, cost_usd)
+                VALUES ('cc:a:1', 'claude-code', 'c1', 1, 1, 10, 0.5);
+            """)
+        try Schema.migrate(db, databasePath: path, migrations: Array(Schema.migrations.prefix(7)))
+        XCTAssertEqual(try db.userVersion(), 7)
+        XCTAssertTrue(try tables(db).isSuperset(of: ["remote_devices", "remote_parts", "remote_projects",
+                                                     "remote_sessions", "remote_usage", "remote_session_pins"]))
+        XCTAssertEqual(try db.queryOne("SELECT COUNT(*), SUM(cost_usd) FROM usage") { "\($0.int(0)) \($0.double(1))" },
+                       "1 0.5", "this Mac's usage is untouched")
+        XCTAssertEqual(try db.queryOne("SELECT COUNT(*) FROM remote_usage") { $0.int(0) }, 0)
+        let backup = try SQLiteConnection(path: Backups.slot(1, databasePath: path).path, readOnly: true)
+        XCTAssertEqual(try backup.userVersion(), 6, "the v6 ledger was backed up before migrating")
+        XCTAssertFalse(try tables(backup).contains("remote_usage"))
     }
 
     func testV6DropsTheCleanupLogAndKeepsAFilledV5Ledger() throws {

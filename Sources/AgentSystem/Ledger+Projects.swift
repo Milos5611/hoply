@@ -30,12 +30,21 @@ extension Ledger {
         try await reader.mergedProjects()
     }
 
-    public func assign(session key: SessionKey, toProject projectID: Int64) async throws {
-        await ingest.noteChanged(try await store.assign(session: key, toProject: projectID))
+    public func assign(session key: SessionKey, device: String? = nil, toProject projectID: Int64) async throws {
+        await ingest.noteChanged(try await store.assign(session: key, device: device, toProject: projectID))
     }
 
-    public func unassign(session key: SessionKey) async throws {
-        await ingest.noteChanged(try await store.unassign(session: key))
+    public func unassign(session key: SessionKey, device: String? = nil) async throws {
+        await ingest.noteChanged(try await store.unassign(session: key, device: device))
+    }
+
+    public func remoteDevices() async throws -> [RemoteDevice] {
+        try await reader.remoteDevices()
+    }
+
+    @discardableResult
+    public func clearRemoteHistory() async throws -> Bool {
+        try await store.clearRemoteHistory()
     }
 
     public func sessionAssignments() async throws -> [SessionAssignment] {

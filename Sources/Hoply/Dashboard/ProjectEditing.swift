@@ -62,6 +62,7 @@ extension EditConfirmation where Extra == EmptyView {
 }
 
 struct ProjectMenu<MenuLabel: View>: View {
+    @Environment(AppModel.self) private var model
     let projects: [ProjectRef]
     let choose: (ProjectRef) -> Void
     @ViewBuilder var label: MenuLabel
@@ -70,7 +71,7 @@ struct ProjectMenu<MenuLabel: View>: View {
         Menu {
             ForEach(projects) { project in
                 Button { choose(project) } label: {
-                    Text("\(project.title)  –  \(Format.path(project.root))")
+                    Text("\(project.title)  –  \(model.history.location(of: project))")
                 }
             }
         } label: {
@@ -119,11 +120,11 @@ struct MergeSuggestionCard: View {
                             Text("Keep")
                                 .font(.system(size: 12.5, weight: .medium))
                             Picker("Keep", selection: Binding(get: { target.id }, set: { id in
-                                if let kept = suggestion.projects.first(where: { $0.id == id }) {
+                                if let kept = edits.keepChoices(of: suggestion).first(where: { $0.id == id }) {
                                     edits.beginMerge(suggestion, keeping: kept)
                                 }
                             })) {
-                                ForEach(suggestion.projects) { project in
+                                ForEach(edits.keepChoices(of: suggestion)) { project in
                                     Text(option(project)).tag(project.id)
                                 }
                             }
@@ -144,7 +145,7 @@ struct MergeSuggestionCard: View {
     }
 
     private func option(_ project: ProjectRef) -> String {
-        var parts = [project.title, Format.path(project.root)]
+        var parts = [project.title, model.history.location(of: project)]
         if let usage = model.projectEdits.usage[project.id] {
             parts.append(usage.sessions == 1 ? "1 session" : "\(Format.count(usage.sessions)) sessions")
             parts.append(Format.spend(usage.totals))
@@ -182,8 +183,9 @@ struct ProjectGroupingCard: View {
         let edits = model.projectEdits
         let merged = edits.merged(into: project)
         let folders = edits.folders(of: project)
-        DashboardCard(title: "Merges and folders", subtitle: "What counts as \(project.title)") {
-            ProjectMenu(projects: edits.targets(excluding: project), choose: { edits.beginMerge(project, into: $0) }) {
+        DashboardCard(title: project.isRemoteOnly ? "Merges" : "Merges and folders",
+                      subtitle: "What counts as \(project.title)") {
+            ProjectMenu(projects: edits.mergeTargets(for: project), choose: { edits.beginMerge(project, into: $0) }) {
                 Label("Merge into…", systemImage: "arrow.triangle.merge")
             }
             .fixedSize()
@@ -198,7 +200,7 @@ struct ProjectGroupingCard: View {
                     VStack(alignment: .leading, spacing: 8) {
                         SectionTitle("Merged into this project")
                         ForEach(merged) { entry in
-                            row(title: entry.project.title, detail: Format.path(entry.project.root), action: "Unmerge",
+                            row(title: entry.project.title, detail: model.history.location(of: entry.project), action: "Unmerge",
                                 help: "Give \(entry.project.title) its own project again") {
                                 edits.beginUnmerge(entry)
                             } icon: {
@@ -207,29 +209,38 @@ struct ProjectGroupingCard: View {
                         }
                     }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionTitle("Folders")
-                    row(title: Format.path(project.root), detail: "Project root", action: nil, help: "") {} icon: {
-                        IconTile(symbol: "folder.fill", tint: .blue, size: 24)
-                    }
-                    ForEach(folders) { folder in
-                        row(title: Format.path(folder.path), detail: "Added by you", action: "Remove",
-                            help: "Stop counting this folder under \(project.title)") {
-                            edits.beginRemoving(folder)
-                        } icon: {
-                            IconTile(symbol: "folder.badge.plus", tint: .teal, size: 24)
-                        }
-                    }
-                    HStack(spacing: 10) {
-                        Button { edits.addFolder(to: project) } label: {
-                            Label("Add folder…", systemImage: "plus")
-                        }
-                        .disabled(edits.isWorking)
-                        Hint("Sessions started in an added folder count under this project.")
-                    }
-                    .padding(.top, 2)
+                if project.isRemoteOnly {
+                    Hint("Hoply found no project on this Mac with the same git origin or folder name. Merge it into one to count them together.")
+                } else {
+                    folderList(folders)
                 }
             }
+        }
+    }
+
+    private func folderList(_ folders: [PathAssignment]) -> some View {
+        let edits = model.projectEdits
+        return VStack(alignment: .leading, spacing: 8) {
+            SectionTitle("Folders")
+            row(title: Format.path(project.root), detail: "Project root", action: nil, help: "") {} icon: {
+                IconTile(symbol: "folder.fill", tint: .blue, size: 24)
+            }
+            ForEach(folders) { folder in
+                row(title: Format.path(folder.path), detail: "Added by you", action: "Remove",
+                    help: "Stop counting this folder under \(project.title)") {
+                    edits.beginRemoving(folder)
+                } icon: {
+                    IconTile(symbol: "folder.badge.plus", tint: .teal, size: 24)
+                }
+            }
+            HStack(spacing: 10) {
+                Button { edits.addFolder(to: project) } label: {
+                    Label("Add folder…", systemImage: "plus")
+                }
+                .disabled(edits.isWorking)
+                Hint("Sessions started in an added folder count under this project.")
+            }
+            .padding(.top, 2)
         }
     }
 
@@ -277,18 +288,19 @@ struct SessionProjectControls: View {
 
     var body: some View {
         let edits = model.projectEdits
-        let assigned = edits.assignment(of: session.key) != nil
-        let targets = edits.targets(excluding: session.project)
+        let assigned = edits.assignment(of: session) != nil
+        let targets = edits.targets(for: session)
         if !targets.isEmpty || assigned {
             HStack(spacing: 8) {
-                ProjectMenu(projects: targets, choose: { edits.assign(session.key, to: $0) }) {
+                ProjectMenu(projects: targets, choose: { edits.assign(session, to: $0) }) {
                     Text(session.project == nil ? "Assign to project…" : "Move to project…")
                 }
                 .fixedSize()
                 .help("Count this session and its usage under another project")
                 if assigned {
-                    Button("Undo") { edits.unassign(session.key) }
-                        .help("You assigned this session. Undo puts it back in the project of its folder.")
+                    Button("Undo") { edits.unassign(session) }
+                        .help(session.isRemote ? "You assigned this session. Undo puts it back in the project Hoply matched."
+                                               : "You assigned this session. Undo puts it back in the project of its folder.")
                 }
                 Spacer(minLength: 0)
             }

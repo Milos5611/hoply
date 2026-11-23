@@ -71,11 +71,12 @@ entitlement, so Hoply never calls CloudKit there.
 **Deploy the CloudKit schema to Production before a release uses it.** The Development environment creates record
 types and fields the first time a development build saves them; Production never does, so a release build's first
 write fails until the schema is deployed. In CloudKit Console (https://icloud.developer.apple.com) → the container →
-Schema, Development: check the record types `Snapshot`, `Request`, `Answer` and `Transcript`, each with `payload`
-(encrypted bytes), `kind` (string; not on `Snapshot` or `Transcript`), `createdAt` (date) and `version` (int64), adding
-any a development build hasn't created yet (`Answer` is written by the phone; `Transcript` only once a phone has
-opened a conversation). Then Deploy Schema Changes to Production. Zones (`Hoply`, `HoplyTranscripts`) are created by
-the app and need no deploy. A field never moves between plain and encrypted; a change of meaning gets a new field name.
+Schema, Development: check the record types `Snapshot`, `Request`, `Answer`, `Transcript` and `HistoryDay`, each with
+`payload` (encrypted bytes), `kind` (string; not on `Snapshot`, `Transcript` or `HistoryDay`), `createdAt` (date) and
+`version` (int64), adding any a development build hasn't created yet (`Answer` is written by the phone; `Transcript`
+only once a phone has opened a conversation; `HistoryDay` once a Mac with usage history has run the link). Then Deploy
+Schema Changes to Production. Zones (`Hoply`, `HoplyTranscripts`, `HoplyHistory`) are created by the app and need no
+deploy. A field never moves between plain and encrypted; a change of meaning gets a new field name.
 
 To try the link on this Mac, create an Apple Development certificate and a macOS App Development profile for the same
 App ID that includes this Mac (Devices), then:

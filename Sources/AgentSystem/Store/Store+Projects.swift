@@ -9,6 +9,7 @@ extension Store {
         guard PathRules.isAssignable(real) else { throw ProjectEditError.invalidPath(path) }
         return try edit {
             let target = try existingProject(projectID)
+            try refuseRemoteOnly(target)
             try db.run("""
                 INSERT INTO path_map (cwd, project_id, worktree, origin) VALUES (?, ?, NULL, 'user')
                 ON CONFLICT(cwd) DO UPDATE SET project_id = excluded.project_id, worktree = NULL, origin = 'user'
@@ -34,6 +35,7 @@ extension Store {
             guard try projectExists(sourceID) else { throw ProjectEditError.unknownProject(sourceID) }
             let target = try existingProject(targetID)
             guard target != sourceID else { throw ProjectEditError.sameProject }
+            if try !isRemoteOnly(sourceID) { try refuseRemoteOnly(target) }
             let moved = try sessionKeys("project_id = ?", [sourceID])
             try db.run("UPDATE projects SET merged_into = ? WHERE id = ?", [target, sourceID])
             try db.run("UPDATE usage SET project_id = ? WHERE project_id = ?", [target, sourceID])
@@ -62,10 +64,12 @@ extension Store {
     }
 
     @discardableResult
-    public func assign(session key: SessionKey, toProject projectID: Int64) throws -> Set<SessionKey> {
-        try edit {
+    public func assign(session key: SessionKey, device: String? = nil, toProject projectID: Int64) throws -> Set<SessionKey> {
+        if let device { return try assignRemote(session: key, device: device, toProject: projectID) }
+        return try edit {
             let target = try existingProject(projectID)
             guard try sessionExists(key) else { throw ProjectEditError.unknownSession }
+            try refuseRemoteOnly(target)
             try db.run("UPDATE sessions SET project_id = ?, project_origin = 'user' WHERE source = ? AND id = ?",
                        [target, key.source.rawValue, key.id])
             try db.run("UPDATE usage SET project_id = ? WHERE source = ? AND session_id = ?",
@@ -76,8 +80,9 @@ extension Store {
     }
 
     @discardableResult
-    public func unassign(session key: SessionKey) throws -> Set<SessionKey> {
-        try edit {
+    public func unassign(session key: SessionKey, device: String? = nil) throws -> Set<SessionKey> {
+        if let device { return try unassignRemote(session: key, device: device) }
+        return try edit {
             guard let cwd = try db.queryOne("""
                 SELECT cwd FROM sessions WHERE source = ? AND id = ? AND project_origin = 'user'
                 """, [key.source.rawValue, key.id], { $0.optionalText(0) }) else { return [] }
@@ -90,6 +95,29 @@ extension Store {
             try db.run("UPDATE usage SET project_id = ? WHERE source = ? AND session_id = ?",
                        [automatic, key.source.rawValue, key.id])
             return [key]
+        }
+    }
+
+    private func assignRemote(session key: SessionKey, device: String, toProject projectID: Int64) throws -> Set<SessionKey> {
+        try edit {
+            let target = try existingProject(projectID)
+            guard try db.queryOne("SELECT 1 FROM remote_sessions WHERE device = ? AND source = ? AND id = ? LIMIT 1",
+                                  [device, key.source.rawValue, key.id], { _ in true }) == true else {
+                throw ProjectEditError.unknownSession
+            }
+            try db.run("""
+                INSERT INTO remote_session_pins (device, source, id, project_id) VALUES (?, ?, ?, ?)
+                ON CONFLICT(device, source, id) DO UPDATE SET project_id = excluded.project_id
+                """, [device, key.source.rawValue, key.id, target])
+            return [key]
+        }
+    }
+
+    private func unassignRemote(session key: SessionKey, device: String) throws -> Set<SessionKey> {
+        try edit {
+            try db.run("DELETE FROM remote_session_pins WHERE device = ? AND source = ? AND id = ?",
+                       [device, key.source.rawValue, key.id])
+            return db.changes > 0 ? [key] : []
         }
     }
 
@@ -135,11 +163,29 @@ extension Store {
     // A failed edit may leave the registry holding rules that were rolled back.
     private func edit<T>(_ body: () throws -> T) throws -> T {
         do {
-            return try db.transaction(body)
+            let result = try db.transaction {
+                let result = try body()
+                registry.invalidate()
+                try reattributeRemote()
+                return result
+            }
+            historyChanges = .all
+            return result
         } catch {
             registry.invalidate()
             throw error
         }
+    }
+
+    // A remote-only project has no folder on this Mac: holding this Mac's sessions would put a `hoply-remote://` root
+    // in the palette and in Resume.
+    private func refuseRemoteOnly(_ target: Int64) throws {
+        if try isRemoteOnly(target) { throw RemoteProjectEditError.localIntoRemoteOnly }
+    }
+
+    private func isRemoteOnly(_ id: Int64) throws -> Bool {
+        try db.queryOne("SELECT root FROM projects WHERE id = ?", [id]) { $0.text(0) }
+            .map { $0.hasPrefix(ProjectRef.remoteRootPrefix) } ?? false
     }
 
     private func projectExists(_ id: Int64) throws -> Bool {

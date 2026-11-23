@@ -9,6 +9,7 @@ struct SessionsPage: View {
         let list = history.sessionList
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "Sessions", subtitle: subtitle(list)) {
+                MacFilter()
                 Picker("Range", selection: Binding(get: { history.sessionsRange },
                                                    set: { history.setSessionsRange($0) })) {
                     ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
@@ -59,11 +60,14 @@ struct SessionTable: View {
                         Text(session.displayTitle)
                             .font(.system(size: 12.5, weight: .medium))
                             .lineLimit(1)
-                        Text(place(session))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        HStack(spacing: 5) {
+                            if session.isRemote { MacTag(name: session.deviceName) }
+                            Text(place(session))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
                 .padding(.vertical, 3)
@@ -115,12 +119,12 @@ struct SessionTable: View {
         .contextMenu(forSelectionType: SessionSummary.ID.self) { ids in
             if ids.count == 1, let session = sessions.first(where: { ids.contains($0.id) }) {
                 let edits = model.projectEdits
-                ProjectMenu(projects: edits.targets(excluding: session.project),
-                            choose: { edits.assign(session.key, to: $0) }) {
+                ProjectMenu(projects: edits.targets(for: session),
+                            choose: { edits.assign(session, to: $0) }) {
                     Text(session.project == nil ? "Assign to Project" : "Move to Project")
                 }
-                if edits.assignment(of: session.key) != nil {
-                    Button("Undo Project Assignment") { edits.unassign(session.key) }
+                if edits.assignment(of: session) != nil {
+                    Button("Undo Project Assignment") { edits.unassign(session) }
                 }
             }
         }
@@ -196,11 +200,13 @@ struct SessionDetail: View {
                 VStack(alignment: .leading, spacing: 12) {
                     header(session)
                     cost(session)
-                    SessionTimelineCard(spans: model.history.insights[session.key]?.spans ?? [])
-                    insight(session)
+                    if !session.isRemote {
+                        SessionTimelineCard(spans: model.history.insights[session.key]?.spans ?? [])
+                        insight(session)
+                    }
                     if !session.models.isEmpty { models(session) }
                     changes(session)
-                    actions(session)
+                    if !session.isRemote { actions(session) }
                 }
             }
             .scrollIndicators(.never)
@@ -219,13 +225,17 @@ struct SessionDetail: View {
                     Text(session.key.source.displayName)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                    if session.isRemote {
+                        Spacer(minLength: 4)
+                        MacTag(name: session.deviceName)
+                    }
                 }
                 Text(session.displayTitle)
                     .font(.system(size: 15, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 3) {
                     if let project = session.project?.title ?? session.cwd.map({ ($0 as NSString).lastPathComponent }) {
-                        Label(model.projectEdits.assignment(of: session.key) == nil ? project : "\(project) · assigned by you",
+                        Label(model.projectEdits.assignment(of: session) == nil ? project : "\(project) · assigned by you",
                               systemImage: "folder")
                     } else {
                         Label("Unassigned", systemImage: "questionmark.folder")
@@ -240,6 +250,12 @@ struct SessionDetail: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 if model.history.isReady { SessionProjectControls(session: session) }
+                if session.isRemote {
+                    Button { WorkspaceActions.copy(session.key.id) } label: {
+                        Label("Copy Session ID", systemImage: "number")
+                    }
+                    .controlSize(.small)
+                }
             }
         }
     }
@@ -373,7 +389,9 @@ struct SessionDetail: View {
     }
 
     private func canResume(_ session: SessionSummary) -> Bool {
-        guard ResumeScript.isSupported(session.key.source), session.cwd?.isEmpty == false else { return false }
+        guard !session.isRemote, ResumeScript.isSupported(session.key.source), session.cwd?.isEmpty == false else {
+            return false
+        }
         return model.session(session.key).map { $0.state == .ended } ?? true
     }
 
@@ -402,15 +420,15 @@ struct SessionDetail: View {
                 } label: { Image(systemName: "play.fill") }
                     .tooltip("Resume this session in Terminal")
             }
-            if let cwd = session.cwd, let editor = model.defaultEditor {
+            if !session.isRemote, let cwd = session.cwd, let editor = model.defaultEditor {
                 Button { model.openInEditor(cwd) } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
                     .tooltip("Open the session's folder in \(editor.name)")
             }
-            if let path = session.transcriptPath {
+            if !session.isRemote, let path = session.transcriptPath {
                 Button { WorkspaceActions.revealInFinder(path) } label: { Image(systemName: "doc.text.magnifyingglass") }
                     .tooltip("Show the transcript file in Finder")
             }
-            if let cwd = session.cwd {
+            if !session.isRemote, let cwd = session.cwd {
                 Button { WorkspaceActions.openInTerminal(cwd) } label: { Image(systemName: "apple.terminal") }
                     .tooltip("Open Terminal in the session's folder")
             }

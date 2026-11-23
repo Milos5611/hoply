@@ -38,6 +38,14 @@ final class CloudLinkTests: XCTestCase {
         await assertUnavailable({ try await link.publish(transcript) }, "publish transcript")
         await assertUnavailable({ try await link.deleteTranscripts(["transcript-x"]) }, "deleteTranscripts")
         await assertUnavailable({ try await link.deleteTranscripts([]) }, "deleteTranscripts nothing")
+        let day = RemoteHistoryDay(device: link.device, day: "2027-01-15", updatedAt: t0)
+        await assertUnavailable({ try await link.publishHistory([day]) }, "publishHistory")
+        await assertUnavailable({ try await link.deleteHistory(days: ["2027-01-15"]) }, "deleteHistory")
+        await assertUnavailable({ _ = try await link.fetchHistory() }, "fetchHistory")
+        await link.acknowledgeHistory()
+        await link.restartHistoryFetch()
+        let history = await link.historyDays
+        XCTAssertEqual(history, [:], "a failed publish is not remembered")
         let open = await link.openRequestIDs
         XCTAssertEqual(open, [], "a failed open is not remembered")
         let transcripts = await link.transcriptRecords
@@ -144,6 +152,94 @@ final class CloudLinkTests: XCTestCase {
         XCTAssertNil(plainPayload)
         XCTAssertEqual(record.encryptedValues[RemoteSchema.Field.payload] as Data?, image.payload)
         XCTAssertEqual(RemoteSchema.transcript(from: CloudLink.image(of: record)), transcript)
+    }
+
+    func testHistoryGoesToItsOwnZoneWithContentEncrypted() throws {
+        let zone = CKRecordZone.ID(zoneName: RemoteSchema.historyZoneName, ownerName: CKCurrentUserDefaultName)
+        let usage = RemoteHistoryDay.Usage(model: "claude-opus-5-5", at: t0, last: t0, tokens: TokenCounts(output: 1),
+                                           calls: 1)
+        let day = RemoteHistoryDay(device: "mac-1", deviceName: "Studio", day: "2027-01-15", updatedAt: t0,
+                                   sessions: [RemoteHistoryDay.Session(key: "claude-code:s1", agent: "claude-code",
+                                                                       title: "secret plan", start: t0, end: t0,
+                                                                       usage: [usage])])
+        let image = try RemoteSchema.record(day)
+        let record = CloudLink.record(from: image, zone: zone)
+        XCTAssertEqual(record.recordType, "HistoryDay")
+        XCTAssertEqual(record.recordID.zoneID.zoneName, "HoplyHistory")
+        XCTAssertEqual(record.recordID.recordName, "history-mac-1-20270115-0")
+        let plainPayload: Data? = record[RemoteSchema.Field.payload]
+        XCTAssertNil(plainPayload)
+        XCTAssertEqual(record.allKeys().sorted(), ["createdAt", "payload", "version"],
+                       "the title and the Mac's name are only in the encrypted payload")
+        XCTAssertEqual(record.encryptedValues[RemoteSchema.Field.payload] as Data?, image.payload)
+        XCTAssertEqual(RemoteSchema.historyDay(from: CloudLink.image(of: record)), day)
+    }
+
+    func testStateKeepsPublishedHistoryAcrossLaunches() async throws {
+        let directory = try TempDirectory()
+        let url = directory.url.appendingPathComponent("Hoply/icloud-link.json")
+        let state = CloudLinkState(device: "mac-1", historyZoneReady: true, historyToken: Data([3]),
+                                   history: ["2027-01-15": RemoteHistoryPublished(fingerprint: "f", parts: 2, at: t0),
+                                             "2027-01-14": RemoteHistoryPublished(fingerprint: nil, parts: 1, at: t0)])
+        try state.save(to: url)
+        XCTAssertEqual(CloudLinkState.load(from: url), state)
+        let days = await CloudLink(stateURL: url).historyDays
+        XCTAssertEqual(days, state.history, "withdraw still finds every part after a relaunch")
+        try directory.write("Hoply/icloud-link.json", #"{"device": "mac-1", "transcriptZoneReady": true}"#)
+        let older = CloudLinkState.load(from: url)
+        XCTAssertTrue(older.transcriptZoneReady)
+        XCTAssertFalse(older.historyZoneReady)
+        XCTAssertNil(older.historyToken)
+        XCTAssertEqual(older.history, [:])
+    }
+
+    func testAStateFileFromAnotherMacNeverActsForThatMac() async throws {
+        let directory = try TempDirectory()
+        let url = directory.url.appendingPathComponent("Hoply/icloud-link.json")
+        let old = CloudLinkState(device: "mac-1", machine: "m-old", zoneReady: true, subscriptionReady: true,
+                                 changeToken: Data([1]), openRequests: ["re-1"], launches: ["a-1": t0],
+                                 transcriptZoneReady: true, transcripts: ["transcript-mac-1-a": t0],
+                                 historyZoneReady: true, historyToken: Data([2]),
+                                 history: ["2027-01-15": RemoteHistoryPublished(fingerprint: "f", parts: 1, at: t0)])
+        try old.save(to: url)
+
+        let same = CloudLink(stateURL: url, machine: "m-old")
+        XCTAssertEqual(same.device, "mac-1", "the same Mac keeps its id")
+        let kept = await same.historyDays
+        XCTAssertEqual(kept, old.history)
+
+        let migrated = CloudLink(stateURL: url, machine: "m-new")
+        XCTAssertNotEqual(migrated.device, "mac-1", "a copied state file gets a new device id")
+        XCTAssertEqual(migrated.machine, "m-new")
+        let requests = await migrated.openRequestIDs
+        let transcripts = await migrated.transcriptRecords
+        let history = await migrated.historyDays
+        XCTAssertEqual(requests, [], "the old Mac's held requests are never deleted from here")
+        XCTAssertEqual(transcripts, [:])
+        XCTAssertEqual(history, [:], "nor its history records")
+        let claimed = await migrated.claimLaunch("a-1", createdAt: t0, now: t0)
+        XCTAssertTrue(claimed, "nor its launch claims")
+        let saved = CloudLinkState.load(from: url)
+        XCTAssertEqual(saved.device, migrated.device)
+        XCTAssertEqual(saved.machine, "m-new")
+        XCTAssertNil(saved.changeToken)
+        XCTAssertNil(saved.historyToken)
+        XCTAssertTrue(saved.zoneReady && saved.subscriptionReady && saved.transcriptZoneReady && saved.historyZoneReady,
+                      "zones belong to the account and stay")
+
+        try directory.write("Hoply/icloud-link.json", #"{"device": "mac-2", "transcripts": {"transcript-mac-2-a": 1}}"#)
+        let older = CloudLink(stateURL: url, machine: "m-2")
+        XCTAssertEqual(older.device, "mac-2", "a state from before fingerprints adopts this Mac's and keeps its id")
+        let olderTranscripts = await older.transcriptRecords
+        XCTAssertEqual(olderTranscripts.count, 1)
+        XCTAssertEqual(CloudLinkState.load(from: url).machine, "m-2")
+    }
+
+    func testTheMachineFingerprintComesFromThisMacsHardware() throws {
+        let id = try XCTUnwrap(MachineID.hardwareID(), "IOPlatformUUID is readable")
+        XCTAssertEqual(MachineID.hardwareID(), id)
+        XCTAssertEqual(MachineID.current, RemoteMachine.fingerprint(hardwareID: id))
+        XCTAssertEqual(MachineID.current?.count, 32)
     }
 
     func testStateKeepsTranscriptRecordsAcrossLaunches() async throws {

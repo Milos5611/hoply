@@ -76,14 +76,27 @@ public struct SessionAssignment: Sendable, Equatable, Identifiable {
     public var key: SessionKey
     public var title: String?
     public var project: ProjectRef
+    public var device: String?
 
-    public init(key: SessionKey, title: String? = nil, project: ProjectRef) {
+    public init(key: SessionKey, title: String? = nil, project: ProjectRef, device: String? = nil) {
         self.key = key
         self.title = title
         self.project = project
+        self.device = device
     }
 
-    public var id: String { "\(key.source.rawValue):\(key.id)" }
+    public var id: String {
+        let local = "\(key.source.rawValue):\(key.id)"
+        return device.map { "\($0)/\(local)" } ?? local
+    }
+}
+
+public enum RemoteProjectEditError: Error, Equatable, Sendable, LocalizedError {
+    case localIntoRemoteOnly
+
+    public var errorDescription: String? {
+        "A project from another Mac can't hold this Mac's sessions or projects. Nothing was changed."
+    }
 }
 
 public enum ProjectEditError: Error, Equatable, Sendable {

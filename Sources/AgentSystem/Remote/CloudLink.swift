@@ -55,8 +55,20 @@ public enum CloudLinkError: Error, Equatable, Sendable {
     }
 }
 
+public protocol HistoryCloud: Sendable {
+    var device: String { get }
+    var machine: String? { get }
+    var historyDays: [String: RemoteHistoryPublished] { get async }
+    func publishHistory(_ parts: [RemoteHistoryDay]) async throws
+    func deleteHistory(days: [String]) async throws
+    func fetchHistory() async throws -> RemoteHistoryPage
+    func acknowledgeHistory() async
+    func restartHistoryFetch() async
+}
+
 struct CloudLinkState: Codable, Equatable {
     var device: String
+    var machine: String?
     var zoneReady: Bool
     var subscriptionReady: Bool
     var changeToken: Data?
@@ -64,11 +76,17 @@ struct CloudLinkState: Codable, Equatable {
     var launches: [String: Date]
     var transcriptZoneReady: Bool
     var transcripts: [String: Date]
+    var historyZoneReady: Bool
+    var historyToken: Data?
+    var history: [String: RemoteHistoryPublished]
 
-    init(device: String = UUID().uuidString, zoneReady: Bool = false, subscriptionReady: Bool = false,
+    init(device: String = UUID().uuidString, machine: String? = nil, zoneReady: Bool = false,
+         subscriptionReady: Bool = false,
          changeToken: Data? = nil, openRequests: [String] = [], launches: [String: Date] = [:],
-         transcriptZoneReady: Bool = false, transcripts: [String: Date] = [:]) {
+         transcriptZoneReady: Bool = false, transcripts: [String: Date] = [:], historyZoneReady: Bool = false,
+         historyToken: Data? = nil, history: [String: RemoteHistoryPublished] = [:]) {
         self.device = device
+        self.machine = machine
         self.zoneReady = zoneReady
         self.subscriptionReady = subscriptionReady
         self.changeToken = changeToken
@@ -76,12 +94,16 @@ struct CloudLinkState: Codable, Equatable {
         self.launches = launches
         self.transcriptZoneReady = transcriptZoneReady
         self.transcripts = transcripts
+        self.historyZoneReady = historyZoneReady
+        self.historyToken = historyToken
+        self.history = history
     }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         device = (try? container.decode(String.self, forKey: .device)).flatMap { $0.isEmpty ? nil : $0 }
             ?? UUID().uuidString
+        machine = try? container.decode(String.self, forKey: .machine)
         zoneReady = (try? container.decode(Bool.self, forKey: .zoneReady)) ?? false
         subscriptionReady = (try? container.decode(Bool.self, forKey: .subscriptionReady)) ?? false
         changeToken = try? container.decode(Data.self, forKey: .changeToken)
@@ -89,12 +111,29 @@ struct CloudLinkState: Codable, Equatable {
         launches = (try? container.decode([String: Date].self, forKey: .launches)) ?? [:]
         transcriptZoneReady = (try? container.decode(Bool.self, forKey: .transcriptZoneReady)) ?? false
         transcripts = (try? container.decode([String: Date].self, forKey: .transcripts)) ?? [:]
+        historyZoneReady = (try? container.decode(Bool.self, forKey: .historyZoneReady)) ?? false
+        historyToken = try? container.decode(Data.self, forKey: .historyToken)
+        history = (try? container.decode([String: RemoteHistoryPublished].self, forKey: .history)) ?? [:]
     }
 
     mutating func claimLaunch(_ answerID: String, createdAt: Date, now: Date) -> Bool {
         launches = launches.filter { now.timeIntervalSince($0.value) <= RemoteAnswers.launchLifetime }
         guard launches[answerID] == nil else { return false }
         launches[answerID] = max(now, createdAt)
+        return true
+    }
+
+    // A state file from another Mac (Migration Assistant copies it) must not let this Mac delete, overwrite or claim
+    // that Mac's records: a new device id, and nothing it wrote is remembered. Zones belong to the account, so they stay.
+    @discardableResult
+    mutating func adopt(machine: String?) -> Bool {
+        guard let machine, self.machine != machine else { return false }
+        guard self.machine != nil else {
+            self.machine = machine
+            return true
+        }
+        self = CloudLinkState(machine: machine, zoneReady: zoneReady, subscriptionReady: subscriptionReady,
+                              transcriptZoneReady: transcriptZoneReady, historyZoneReady: historyZoneReady)
         return true
     }
 
@@ -143,14 +182,20 @@ public actor CloudLink {
     }
 
     public nonisolated let device: String
+    public nonisolated let machine: String?
     private let stateURL: URL
     private var state: CloudLinkState
     private var leftovers: [String]
     private var fetchedToken: Data?
+    private var historyCursor: Data?
     private var container: CKContainer?
 
-    public init(stateURL: URL = CloudLink.defaultStateURL) {
-        let state = CloudLinkState.load(from: stateURL)
+    public init(stateURL: URL = CloudLink.defaultStateURL, machine: String? = MachineID.current) {
+        var state = CloudLinkState.load(from: stateURL)
+        if state.adopt(machine: machine), FileManager.default.fileExists(atPath: stateURL.path) {
+            try? state.save(to: stateURL)
+        }
+        self.machine = machine
         self.stateURL = stateURL
         self.state = state
         device = state.device
@@ -159,6 +204,7 @@ public actor CloudLink {
 
     public var openRequestIDs: [String] { state.openRequests }
     public var transcriptRecords: [String: Date] { state.transcripts }
+    public var historyDays: [String: RemoteHistoryPublished] { state.history }
 
     public func claimLaunch(_ answerID: String, createdAt: Date, now: Date = Date()) -> Bool {
         let before = state
@@ -237,6 +283,93 @@ public actor CloudLink {
         saveState()
     }
 
+    public func publishHistory(_ parts: [RemoteHistoryDay]) async throws {
+        _ = try cloudContainer()
+        guard let first = parts.first else { return }
+        let day = first.day
+        let images: [RemoteRecord]
+        do {
+            images = try parts.map { try RemoteSchema.record($0) }
+        } catch {
+            throw CloudLinkError(error)
+        }
+        let previous = state.history[day]
+        let extra = RemoteHistoryOutbox.extraParts(device: device, day: day, previous: previous, parts: parts.count)
+        // Remembered before the save without a fingerprint: a crash mid-save republishes, a withdraw finds every part.
+        state.history[day] = RemoteHistoryPublished(fingerprint: nil, parts: max(previous?.parts ?? 0, parts.count),
+                                                    at: first.updatedAt)
+        saveState()
+        try await runHistory { link, database in
+            for image in images {
+                let record = Self.record(from: image, zone: link.historyZoneID)
+                let saved = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys,
+                                                             atomically: true).saveResults
+                _ = try saved[record.recordID]?.get()
+            }
+            try await Self.delete(extra.map { link.historyRecordID($0) }, in: database)
+        }
+        state.history[day] = RemoteHistoryPublished(fingerprint: RemoteHistoryDay.fingerprint(parts),
+                                                    parts: parts.count, at: first.updatedAt)
+        saveState()
+    }
+
+    public func deleteHistory(days: [String]) async throws {
+        let database = try cloudContainer().privateCloudDatabase
+        let known = days.filter { state.history[$0] != nil }
+        guard !known.isEmpty else { return }
+        let names = known.flatMap { day in
+            state.history[day].map { RemoteHistoryOutbox.recordNames(device: device, day: day, published: $0) } ?? []
+        }
+        do {
+            try await Self.delete(names.map { historyRecordID($0) }, in: database)
+        } catch where Self.zoneMissing(error) {
+        } catch {
+            throw CloudLinkError(error)
+        }
+        for day in known { state.history[day] = nil }
+        saveState()
+    }
+
+    // The page's token is kept only by `acknowledgeHistory`, once the caller has applied the page.
+    public func fetchHistory() async throws -> RemoteHistoryPage {
+        try await runHistory { link, database in
+            var token = (link.historyCursor ?? link.state.historyToken).flatMap(Self.token(from:))
+            var fromStart = token == nil
+            let changes: HistoryChanges
+            do {
+                changes = try await Self.historyChanges(database, zone: link.historyZoneID, since: token)
+            } catch let error as CKError where error.code == .changeTokenExpired {
+                token = nil
+                fromStart = true
+                changes = try await Self.historyChanges(database, zone: link.historyZoneID, since: nil)
+            }
+            // A record CloudKit failed to return still exists: the page fails, so the token never moves past it and a
+            // fetch from the start never drops its stored copy.
+            if let failure = changes.failure { throw failure }
+            link.historyCursor = Self.data(from: changes.token)
+            var page = RemoteHistoryPage(fromStart: fromStart, more: changes.more)
+            page.seen = changes.names.compactMap { RemoteSchema.historyPart(fromRecordName: $0) }
+            for record in changes.records {
+                if let day = RemoteSchema.historyDay(from: Self.image(of: record)) { page.days.append(day) }
+            }
+            page.deleted = changes.deleted.compactMap { RemoteSchema.historyPart(fromRecordName: $0) }
+            return page
+        }
+    }
+
+    public func acknowledgeHistory() {
+        guard Self.isAvailable, let historyCursor else { return }
+        state.historyToken = historyCursor
+        saveState()
+    }
+
+    public func restartHistoryFetch() {
+        guard Self.isAvailable else { return }
+        historyCursor = nil
+        state.historyToken = nil
+        saveState()
+    }
+
     public func open(_ request: RemoteRequest) async throws {
         try await save { try RemoteSchema.record(request) }
         guard !state.openRequests.contains(request.id) else { return }
@@ -290,9 +423,13 @@ public actor CloudLink {
     public func withdraw() async throws {
         let database = try cloudContainer().privateCloudDatabase
         let names = [RemoteSchema.snapshotRecordName(device: device)] + state.openRequests + leftovers
-        // Only this Mac's transcripts: another Mac on the same Apple ID shares the zone.
+        // Only this Mac's transcripts and history: another Mac on the same Apple ID shares the zones.
         let transcripts = state.transcripts.keys.sorted()
-        for ids in [names.map { recordID($0) }, transcripts.map { transcriptRecordID($0) }] where !ids.isEmpty {
+        let history = state.history.keys.sorted().flatMap { day in
+            state.history[day].map { RemoteHistoryOutbox.recordNames(device: device, day: day, published: $0) } ?? []
+        }
+        for ids in [names.map { recordID($0) }, transcripts.map { transcriptRecordID($0) },
+                    history.map { historyRecordID($0) }] where !ids.isEmpty {
             do {
                 try await Self.delete(ids, in: database)
             } catch where Self.zoneMissing(error) {
@@ -302,6 +439,9 @@ public actor CloudLink {
         }
         state.openRequests = []
         state.transcripts = [:]
+        state.history = [:]
+        state.historyToken = nil
+        historyCursor = nil
         leftovers = []
         saveState()
     }
@@ -312,6 +452,14 @@ public actor CloudLink {
 
     private nonisolated var transcriptZoneID: CKRecordZone.ID {
         CKRecordZone.ID(zoneName: RemoteSchema.transcriptZoneName, ownerName: CKCurrentUserDefaultName)
+    }
+
+    private nonisolated var historyZoneID: CKRecordZone.ID {
+        CKRecordZone.ID(zoneName: RemoteSchema.historyZoneName, ownerName: CKCurrentUserDefaultName)
+    }
+
+    private nonisolated func historyRecordID(_ name: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: name, zoneID: historyZoneID)
     }
 
     private nonisolated func recordID(_ name: String) -> CKRecord.ID {
@@ -389,6 +537,36 @@ public actor CloudLink {
         }
     }
 
+    private func runHistory<T: Sendable>(_ body: (isolated CloudLink, CKDatabase) async throws -> T) async throws -> T {
+        let database = try cloudContainer().privateCloudDatabase
+        do {
+            try await ensureHistoryZone(database)
+            return try await body(self, database)
+        } catch where Self.zoneMissing(error) {
+            state.historyZoneReady = false
+            state.historyToken = nil
+            historyCursor = nil
+            saveState()
+            do {
+                try await ensureHistoryZone(database)
+                return try await body(self, database)
+            } catch {
+                throw CloudLinkError(error)
+            }
+        } catch {
+            throw CloudLinkError(error)
+        }
+    }
+
+    private func ensureHistoryZone(_ database: CKDatabase) async throws {
+        guard !state.historyZoneReady else { return }
+        let zone = CKRecordZone(zoneID: historyZoneID)
+        let saved = try await database.modifyRecordZones(saving: [zone], deleting: []).saveResults
+        _ = try saved[zone.zoneID]?.get()
+        state.historyZoneReady = true
+        saveState()
+    }
+
     private func ensureTranscriptZone(_ database: CKDatabase) async throws {
         guard !state.transcriptZoneReady else { return }
         let zone = CKRecordZone(zoneID: transcriptZoneID)
@@ -432,6 +610,31 @@ public actor CloudLink {
         let changes = try await database.recordZoneChanges(inZoneWith: zone, since: token)
         return ZoneChanges(records: changes.modificationResultsByID.values.compactMap { try? $0.get().record },
                            token: changes.changeToken, more: changes.moreComing)
+    }
+
+    private struct HistoryChanges: Sendable {
+        var records: [CKRecord]
+        var names: [String]
+        var failure: CloudLinkError?
+        var deleted: [String]
+        var token: CKServerChangeToken
+        var more: Bool
+    }
+
+    private static func historyChanges(_ database: CKDatabase, zone: CKRecordZone.ID,
+                                       since token: CKServerChangeToken?) async throws -> HistoryChanges {
+        let changes = try await database.recordZoneChanges(inZoneWith: zone, since: token, resultsLimit: 100)
+        var records: [CKRecord] = []
+        var failure: CloudLinkError?
+        for result in changes.modificationResultsByID.values {
+            switch result {
+            case .success(let modification): records.append(modification.record)
+            case .failure(let error): failure = failure ?? CloudLinkError(error)
+            }
+        }
+        return HistoryChanges(records: records, names: changes.modificationResultsByID.keys.map(\.recordName),
+                              failure: failure, deleted: changes.deletions.map(\.recordID.recordName),
+                              token: changes.changeToken, more: changes.moreComing)
     }
 
     private static func delete(_ ids: [CKRecord.ID], in database: CKDatabase) async throws {
@@ -487,3 +690,5 @@ public actor CloudLink {
         try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true)
     }
 }
+
+extension CloudLink: HistoryCloud {}

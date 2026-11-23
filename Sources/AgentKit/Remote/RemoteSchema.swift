@@ -4,6 +4,7 @@ public enum RemoteSchema {
     public static let containerID = "iCloud.com.coolcraftcoders.hoply"
     public static let zoneName = "Hoply"
     public static let transcriptZoneName = "HoplyTranscripts"
+    public static let historyZoneName = "HoplyHistory"
     public static let answerSubscriptionID = "hoply-answers"
     public static let version = 1
 
@@ -12,6 +13,7 @@ public enum RemoteSchema {
         public static let request = "Request"
         public static let answer = "Answer"
         public static let transcript = "Transcript"
+        public static let historyDay = "HistoryDay"
     }
 
     // CloudKit never lets a field change between plain and encrypted: a new meaning needs a new field name.
@@ -27,6 +29,23 @@ public enum RemoteSchema {
 
     public static func transcriptRecordName(device: String, session: String) -> String {
         "transcript-" + device + "-" + sessionHash(session)
+    }
+
+    public static func historyRecordName(device: String, day: String, part: Int) -> String {
+        "history-" + device + "-" + day.replacingOccurrences(of: "-", with: "") + "-" + String(part)
+    }
+
+    // Parsed from the end: device ids are UUIDs and hold dashes themselves.
+    public static func historyPart(fromRecordName name: String) -> RemoteHistoryPartKey? {
+        guard name.hasPrefix("history-") else { return nil }
+        let fields = name.dropFirst("history-".count).split(separator: "-", omittingEmptySubsequences: false)
+        guard fields.count >= 3, let part = Int(fields[fields.count - 1]), part >= 0 else { return nil }
+        let digits = fields[fields.count - 2]
+        guard digits.count == 8, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else { return nil }
+        let device = fields[..<(fields.count - 2)].joined(separator: "-")
+        guard !device.isEmpty else { return nil }
+        let day = "\(digits.prefix(4))-\(digits.dropFirst(4).prefix(2))-\(digits.suffix(2))"
+        return RemoteHistoryPartKey(device: device, day: day, part: part)
     }
 
     // FNV-1a 64 of the UTF-8 bytes, 16 hex digits: the phone computes the same name, so never a per-launch hash.
@@ -68,6 +87,19 @@ public enum RemoteSchema {
         RemoteRecord(type: RecordType.transcript,
                      name: transcriptRecordName(device: transcript.device, session: transcript.session), kind: nil,
                      createdAt: transcript.updatedAt, payload: try encode(transcript))
+    }
+
+    public static func record(_ day: RemoteHistoryDay) throws -> RemoteRecord {
+        RemoteRecord(type: RecordType.historyDay,
+                     name: historyRecordName(device: day.device, day: day.day, part: day.part), kind: nil,
+                     createdAt: day.updatedAt, payload: try encode(day))
+    }
+
+    public static func historyDay(from record: RemoteRecord) -> RemoteHistoryDay? {
+        guard record.type == RecordType.historyDay,
+              let day = try? decode(RemoteHistoryDay.self, from: record.payload),
+              historyPart(fromRecordName: record.name) == day.key else { return nil }
+        return day
     }
 
     public static func snapshot(from record: RemoteRecord) -> RemoteSnapshot? {

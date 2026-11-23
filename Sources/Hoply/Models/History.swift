@@ -113,6 +113,9 @@ final class History {
     private(set) var localModel: LocalModelData?
     private(set) var localModelRange: LocalModelRange = .day
     private(set) var localModelServerID: String?
+    private(set) var macScope: MacScope = .all
+    private(set) var remoteDevices: [RemoteDevice] = []
+    private(set) var thisMacName: String?
 
     static let pageSize = 50
     static let limitDayChoices = [7, 30]
@@ -137,6 +140,7 @@ final class History {
     @ObservationIgnored private var spanTask: Task<Void, Never>?
     @ObservationIgnored private var isQuitting = false
     @ObservationIgnored var onLoaded: ((DashboardPage) -> Void)?
+    @ObservationIgnored var onOpened: (() -> Void)?
     @ObservationIgnored private(set) var liveModels: [SessionKey: String] = [:]
     @ObservationIgnored var onLiveModels: (() -> Void)?
     @ObservationIgnored private(set) var liveTitles: [SessionKey: String] = [:]
@@ -156,6 +160,7 @@ final class History {
     @ObservationIgnored private var preview: HistoryPreview?
 
     var todayTotal: LedgerTotals { today.values.reduce(.zero, +) }
+    var showsMacFilter: Bool { !remoteDevices.isEmpty }
     var isReady: Bool { status == .ready }
     var unavailableReason: String? {
         if case .unavailable(let reason) = status { return reason }
@@ -205,6 +210,7 @@ final class History {
         ledger = nil
         progress = IngestProgress()
         week = nil
+        remoteDevices = []
         codexLimitsGeneration += 1
         showCodexLimits([:])
         open(configuration)
@@ -233,6 +239,7 @@ final class History {
         writeSpans(on: ledger, touching: Set(sessions.map(\.key))) { try await ledger.trackStateSpans(of: sessions) }
         refreshCodexLimits()
         scheduleRefresh(after: .zero)
+        onOpened?()
     }
 
     private func receive(_ update: IngestUpdate) {
@@ -474,7 +481,47 @@ final class History {
 
     func setDashboardVisible(_ visible: Bool) {
         isDashboardVisible = visible
-        if visible { reload(page) }
+        if visible {
+            reload(page)
+        } else if macScope != .all {
+            setMacScope(.all)
+        }
+    }
+
+    func setThisMacName(_ name: String?) {
+        thisMacName = name
+    }
+
+    func setMacScope(_ scope: MacScope) {
+        guard scope != macScope else { return }
+        macScope = scope
+        sessionsOffset = 0
+        autoSelect = true
+        projectSessionsOffset = 0
+        projectAutoSelect = true
+        if isDashboardVisible, Self.macScopedPages.contains(page) { reload(page) }
+    }
+
+    func remoteHistoryChanged() {
+        if isDashboardVisible { reload(page) }
+    }
+
+    func macName(of device: String) -> String? {
+        remoteDevices.first { $0.id == device }?.name ?? nil
+    }
+
+    func location(of project: ProjectRef) -> String {
+        guard project.isRemoteOnly else { return Format.path(project.root) }
+        let rest = project.root.dropFirst(ProjectRef.remoteRootPrefix.count)
+        let device = rest.lastIndex(of: "/").map { String(rest[..<$0]) } ?? String(rest)
+        return macName(of: device).map { "Only on \($0)" } ?? "Only on another Mac"
+    }
+
+    private static let macScopedPages: Set<DashboardPage> = [.overview, .spending, .sessions, .projects]
+
+    private var shownScope: MacScope {
+        if case .device(let id) = macScope, !remoteDevices.contains(where: { $0.id == id }) { return .all }
+        return macScope
     }
 
     func select(_ page: DashboardPage) {
@@ -579,8 +626,9 @@ final class History {
         Task { await refreshInsights() }
     }
 
+    // Another Mac's session has no live state, spans, subagents or context here; its key may also match a local one.
     private var shownSessions: Set<SessionKey> {
-        Set([selectedSession?.key, selectedProjectSession?.key].compactMap { $0 })
+        Set([selectedSession, selectedProjectSession].compactMap { $0 }.filter { !$0.isRemote }.map(\.key))
     }
 
     private func refreshInsights() async {
@@ -665,44 +713,48 @@ final class History {
         pageGeneration[page] = generation
         let now = Date()
         do {
+            var scope = MacScope.thisMac
+            if Self.macScopedPages.contains(page) {
+                let devices = try await ledger.remoteDevices()
+                if devices != remoteDevices { remoteDevices = devices }
+                scope = shownScope
+            }
             switch page {
             case .overview:
                 let month = StoreReader.days(30, endingAt: now)
-                let data = OverviewData(totals: try await reader.overview(now: now),
-                                        daily: try await reader.dailySpend(days: 30, split: .source, now: now),
-                                        projects: Array(try await reader.spendByProject(in: month).prefix(5)),
-                                        models: Array(try await reader.spendByModel(in: month).prefix(5)))
+                let data = OverviewData(totals: try await reader.overview(now: now, scope: scope),
+                                        daily: try await reader.dailySpend(days: 30, split: .source, now: now,
+                                                                           scope: scope),
+                                        projects: Array(try await reader.spendByProject(in: month, scope: scope).prefix(5)),
+                                        models: Array(try await reader.spendByModel(in: month, scope: scope).prefix(5)))
                 guard generation == pageGeneration[page] else { return }
                 if data != overview { overview = data }
             case .spending:
                 let range = spendingRange, split = spendingSplit
                 let interval = range.interval(now: now)
                 let data = SpendingData(range: range, split: split,
-                                        daily: try await reader.dailySpend(days: range.days ?? 30, split: split, now: now),
-                                        projects: try await reader.spendByProject(in: interval),
-                                        models: try await reader.spendByModel(in: interval),
-                                        efficiency: try await ledger.modelEfficiency(in: interval))
+                                        daily: try await reader.dailySpend(days: range.days ?? 30, split: split, now: now,
+                                                                           scope: scope),
+                                        projects: try await reader.spendByProject(in: interval, scope: scope),
+                                        models: try await reader.spendByModel(in: interval, scope: scope),
+                                        efficiency: try await ledger.modelEfficiency(in: interval, scope: scope))
                 guard generation == pageGeneration[page] else { return }
                 if data != spending { spending = data }
             case .sessions:
                 let requested = requestedSession
                 let list = try await reader.sessions(in: sessionsRange.interval(now: now),
-                                                     limit: Self.pageSize, offset: sessionsOffset)
+                                                     limit: Self.pageSize, offset: sessionsOffset, scope: scope)
                 var selected = selectedSession
                 if let requested {
-                    if let found = list.sessions.first(where: { $0.key == requested }) {
+                    if let found = list.sessions.first(where: { $0.key == requested && !$0.isRemote }) {
                         selected = found
                     } else {
                         selected = try await reader.session(requested) ?? selected ?? list.sessions.first
                     }
                 } else if autoSelect {
                     selected = list.sessions.first
-                } else if let key = selected?.key {
-                    if let fresh = list.sessions.first(where: { $0.key == key }) {
-                        selected = fresh
-                    } else {
-                        selected = try await reader.session(key)
-                    }
+                } else if let current = selected {
+                    selected = try await Self.fresh(current, in: list, reader: reader)
                 }
                 guard generation == pageGeneration[page] else { return }
                 autoSelect = false
@@ -713,26 +765,24 @@ final class History {
             case .projects:
                 let range = projectsRange, opened = openedProject
                 let interval = range.interval(now: now)
-                let projects = try await reader.projects(in: interval, topModels: 8)
+                let projects = try await reader.projects(in: interval, topModels: 8, scope: scope)
                 var detail: ProjectDetailData?
                 var selected = selectedProjectSession
                 if let opened {
                     let summary = projects.first { $0.filter == opened.filter } ?? ProjectSummary(project: opened.project)
                     let days = range.days ?? Self.dayCount(since: summary.firstActive, now: now)
                     let sessions = try await reader.sessions(in: interval, project: opened.filter,
-                                                             limit: Self.pageSize, offset: projectSessionsOffset)
+                                                             limit: Self.pageSize, offset: projectSessionsOffset,
+                                                             scope: scope)
                     detail = ProjectDetailData(
                         range: range, summary: summary,
-                        daily: try await reader.dailySpend(days: days, split: .model, project: opened.filter, now: now),
+                        daily: try await reader.dailySpend(days: days, split: .model, project: opened.filter, now: now,
+                                                           scope: scope),
                         sessions: sessions)
                     if projectAutoSelect {
                         selected = sessions.sessions.first
-                    } else if let key = selected?.key {
-                        if let fresh = sessions.sessions.first(where: { $0.key == key }) {
-                            selected = fresh
-                        } else {
-                            selected = try await reader.session(key)
-                        }
+                    } else if let current = selected {
+                        selected = try await Self.fresh(current, in: sessions, reader: reader)
                     }
                 }
                 guard generation == pageGeneration[page] else { return }
@@ -789,6 +839,12 @@ final class History {
         if page == .projects || page == .sessions { onLoaded?(page) }
     }
 
+    private static func fresh(_ session: SessionSummary, in page: SessionPage,
+                              reader: StoreReader) async throws -> SessionSummary? {
+        if let found = page.sessions.first(where: { $0.id == session.id }) { return found }
+        return try await reader.session(session.key, device: session.device)
+    }
+
     private static func dayCount(since first: Date?, now: Date) -> Int {
         guard let first else { return 30 }
         let calendar = Calendar.current
@@ -821,6 +877,8 @@ struct HistoryPreview {
     var unpricedModels: [UnpricedModel] = []
     var pricedModels: [String] = []
     var codexLimits: [LimitKind: LimitSample] = [:]
+    var remoteDevices: [RemoteDevice] = []
+    var thisMacName: String?
 }
 
 extension History {
@@ -853,6 +911,9 @@ extension History {
         unpricedModels = preview.unpricedModels
         pricedModels = preview.pricedModels
         codexLimits = preview.codexLimits
+        remoteDevices = preview.remoteDevices
+        thisMacName = preview.thisMacName
+        macScope = .all
         self.page = page
     }
 

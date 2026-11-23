@@ -8,7 +8,9 @@ struct OverviewPage: View {
         let overview = model.history.overview
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PageHeader(title: "Overview", subtitle: "API-equivalent cost of your agents' usage, from the usage ledger")
+                PageHeader(title: "Overview", subtitle: "API-equivalent cost of your agents' usage, from the usage ledger") {
+                    MacFilter()
+                }
                 HistoryBanner()
                 HStack(spacing: 12) {
                     HeadlineTile(label: "Today", totals: overview?.totals.today ?? .zero, symbol: "sun.max.fill", tint: .orange)

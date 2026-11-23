@@ -26,6 +26,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var iCloudLink = false
     public var iPhoneLaunch = false
     public var iPhoneConversations = true
+    public var iCloudHistory = true
     public var turnNotificationDelay: Double = 10
 
     public static let turnNotificationDelays: [Double] = [0, 10, 30, 60, 120]
@@ -74,6 +75,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         iCloudLink = container.lenient(Bool.self, .iCloudLink) ?? defaults.iCloudLink
         iPhoneLaunch = container.lenient(Bool.self, .iPhoneLaunch) ?? defaults.iPhoneLaunch
         iPhoneConversations = container.lenient(Bool.self, .iPhoneConversations) ?? defaults.iPhoneConversations
+        iCloudHistory = container.lenient(Bool.self, .iCloudHistory) ?? defaults.iCloudHistory
         turnNotificationDelay = container.lenient(Double.self, .turnNotificationDelay)
             .flatMap { Self.turnNotificationDelays.contains($0) ? $0 : nil } ?? defaults.turnNotificationDelay
     }
@@ -81,6 +83,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey {
         case vllmBaseURL, vllmName
     }
+
+    public var sharesHistory: Bool { iCloudLink && iCloudHistory }
 
     public var legacyModelServer: ModelServer? { modelServers.first { $0.isLegacy } }
     public var activeModelServers: [ModelServer] { modelServers.filter(\.isActive) }

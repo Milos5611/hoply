@@ -39,12 +39,13 @@ public actor StoreReader {
         return result
     }
 
-    public func totalsBySource(in range: DateInterval) throws -> [AgentSource: LedgerTotals] {
-        let rows = try db.query("""
-            SELECT source, \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ? GROUP BY source
-            """, Self.bounds(range)) { row in (AgentSource(rawValue: row.text(0)), Self.totals(row, from: 1)) }
+    public func totalsBySource(in range: DateInterval, scope: MacScope = .thisMac) throws -> [AgentSource: LedgerTotals] {
+        let rows = Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds(range))
+        let found = try db.query("""
+            SELECT source, \(Self.totals(scoped: true)) FROM (\(rows.sql)) GROUP BY source
+            """, rows.values) { row in (AgentSource(rawValue: row.text(0)), Self.totals(row, from: 1)) }
         var result: [AgentSource: LedgerTotals] = [:]
-        for case let (source?, totals) in rows { result[source] = totals }
+        for case let (source?, totals) in found { result[source] = totals }
         return result
     }
 
@@ -53,7 +54,7 @@ public actor StoreReader {
     }
 
     public func sessions(in range: DateInterval, source: AgentSource? = nil, project: ProjectFilter? = nil,
-                         limit: Int = 50, offset: Int = 0) throws -> SessionPage {
+                         limit: Int = 50, offset: Int = 0, scope: MacScope = .thisMac) throws -> SessionPage {
         var filter = "s.last_at >= ? AND s.first_at < ?"
         var values: [any SQLiteBindable] = Self.bounds(range)
         if let source {
@@ -61,30 +62,74 @@ public actor StoreReader {
             values.append(source.rawValue)
         }
         Self.append(project, column: "s.project_id", to: &filter, values: &values)
-        let total = try db.queryOne("SELECT COUNT(*) FROM sessions s WHERE \(filter)", values) { $0.int(0) } ?? 0
+        var arms: [String] = []
+        var armValues: [any SQLiteBindable] = []
+        var total = 0
+        if scope.includesThisMac {
+            total += try db.queryOne("SELECT COUNT(*) FROM sessions s WHERE \(filter)", values) { $0.int(0) } ?? 0
+            arms.append("""
+                SELECT NULL AS device, \(Self.sessionColumns), \(Self.totals(prefix: "u."))
+                FROM sessions s
+                LEFT JOIN projects p ON p.id = s.project_id
+                LEFT JOIN usage u ON u.source = s.source AND u.session_id = s.id
+                WHERE \(filter)
+                GROUP BY s.source, s.id
+                """)
+            armValues += values
+        }
+        if scope.includesOtherMacs {
+            let remote = Self.remoteSessions(scope)
+            total += try db.queryOne("""
+                WITH s AS (\(remote.sql)) SELECT COUNT(*) FROM s WHERE \(filter)
+                """, remote.values + values) { $0.int(0) } ?? 0
+            arms.append("""
+                SELECT * FROM (WITH s AS (\(remote.sql))
+                SELECT s.device, \(Self.remoteSessionColumns), \(Self.totals(prefix: "u.", scoped: true))
+                FROM s
+                LEFT JOIN projects p ON p.id = s.project_id
+                LEFT JOIN remote_usage u ON u.device = s.device AND u.source = s.source AND u.session_id = s.id
+                    AND \(Self.counted("u"))
+                WHERE \(filter)
+                GROUP BY s.device, s.source, s.id)
+                """)
+            armValues += remote.values + values
+        }
+        guard !arms.isEmpty else { return SessionPage(sessions: [], totalCount: 0) }
         var summaries = try db.query("""
-            SELECT \(Self.sessionColumns), \(Self.totals(prefix: "u."))
-            FROM sessions s
-            LEFT JOIN projects p ON p.id = s.project_id
-            LEFT JOIN usage u ON u.source = s.source AND u.session_id = s.id
-            WHERE \(filter)
-            GROUP BY s.source, s.id
-            ORDER BY s.last_at DESC
+            \(arms.joined(separator: "\nUNION ALL\n"))
+            ORDER BY 7 DESC, 2, 3, 1
             LIMIT ? OFFSET ?
-            """, values + [limit, offset]) { row in Self.session(row) }.compactMap { $0 }
+            """, armValues + [limit, offset]) { row in Self.session(row, from: 1) }.compactMap { $0 }
         try attachModels(&summaries)
+        try attachDeviceNames(&summaries)
         return SessionPage(sessions: summaries, totalCount: total)
     }
 
-    public func session(_ key: SessionKey) throws -> SessionSummary? {
+    public func session(_ key: SessionKey, device: String? = nil) throws -> SessionSummary? {
+        if let device {
+            let remote = Self.remoteSessions(.device(device))
+            var found = try db.query("""
+                WITH s AS (\(remote.sql))
+                SELECT s.device, \(Self.remoteSessionColumns), \(Self.totals(prefix: "u.", scoped: true))
+                FROM s
+                LEFT JOIN projects p ON p.id = s.project_id
+                LEFT JOIN remote_usage u ON u.device = s.device AND u.source = s.source AND u.session_id = s.id
+                    AND \(Self.counted("u"))
+                WHERE s.source = ? AND s.id = ?
+                GROUP BY s.device, s.source, s.id
+                """, remote.values + [key.source.rawValue, key.id]) { row in Self.session(row, from: 1) }.compactMap { $0 }
+            try attachModels(&found)
+            try attachDeviceNames(&found)
+            return found.first
+        }
         var found = try db.query("""
-            SELECT \(Self.sessionColumns), \(Self.totals(prefix: "u."))
+            SELECT NULL, \(Self.sessionColumns), \(Self.totals(prefix: "u."))
             FROM sessions s
             LEFT JOIN projects p ON p.id = s.project_id
             LEFT JOIN usage u ON u.source = s.source AND u.session_id = s.id
             WHERE s.source = ? AND s.id = ?
             GROUP BY s.source, s.id
-            """, [key.source.rawValue, key.id]) { row in Self.session(row) }.compactMap { $0 }
+            """, [key.source.rawValue, key.id]) { row in Self.session(row, from: 1) }.compactMap { $0 }
         try attachModels(&found)
         return found.first
     }
@@ -127,7 +172,8 @@ public actor StoreReader {
     }
 
     public func dailySpend(days: Int, split: SpendSeriesSplit, project: ProjectFilter? = nil, localOnly: Bool = false,
-                           now: Date = Date(), calendar: Calendar = .current) throws -> DailySpendSeries {
+                           now: Date = Date(), calendar: Calendar = .current,
+                           scope: MacScope = .thisMac) throws -> DailySpendSeries {
         let count = max(days, 1)
         let start = calendar.startOfDay(for: now)
         let dayStarts = (0...count).compactMap { calendar.date(byAdding: .day, value: $0 - count + 1, to: start) }
@@ -135,34 +181,34 @@ public actor StoreReader {
         let ranges = (0..<count).map { [dayStarts[$0].timeIntervalSince1970, dayStarts[$0 + 1].timeIntervalSince1970] }
         let rangesJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: ranges)) ?? Data("[]".utf8),
                                 as: UTF8.self)
-        let series = split == .model ? "COALESCE(model, '')" : "source"
-        var filter = localOnly ? "usage.is_local = 1" : "1"
-        var values: [any SQLiteBindable] = [rangesJSON]
-        Self.append(project, column: "usage.project_id", to: &filter, values: &values)
+        let series = split == .model ? "COALESCE(u.model, '')" : "u.source"
+        var filter = "ts >= ? AND ts < ?" + (localOnly ? " AND is_local = 1" : "")
+        var values: [any SQLiteBindable] = [dayStarts[0].timeIntervalSince1970, dayStarts[count].timeIntervalSince1970]
+        Self.append(project, column: "project_id", to: &filter, values: &values)
+        let rows = Self.rows(scope, where: filter, values)
         let points = try db.query("""
             WITH days(idx, start_ts, end_ts) AS (
                 SELECT CAST(key AS INTEGER), json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
             )
-            SELECT days.idx, \(series), \(Self.totals())
-            FROM days JOIN usage ON usage.ts >= days.start_ts AND usage.ts < days.end_ts
-            WHERE \(filter)
+            SELECT days.idx, \(series), \(Self.totals(prefix: "u.", scoped: true))
+            FROM days JOIN (\(rows.sql)) u ON u.ts >= days.start_ts AND u.ts < days.end_ts
             GROUP BY days.idx, 2
             ORDER BY days.idx, 2
-            """, values) { row in
+            """, [rangesJSON] + rows.values) { row in
             DailySpendPoint(day: dayStarts[row.int(0)], series: row.text(1), totals: Self.totals(row, from: 2))
         }
         return DailySpendSeries(days: Array(dayStarts.dropLast()), points: points)
     }
 
-    public func spendByProject(in range: DateInterval) throws -> [SpendSlice] {
-        try db.query("""
-            SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.")),
-                   COUNT(DISTINCT u.source || ':' || u.session_id)
-            FROM usage u LEFT JOIN projects p ON p.id = u.project_id
-            WHERE u.ts >= ? AND u.ts < ?
+    public func spendByProject(in range: DateInterval, scope: MacScope = .thisMac) throws -> [SpendSlice] {
+        let rows = Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds(range))
+        return try db.query("""
+            SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.", scoped: true)),
+                   COUNT(DISTINCT \(Self.sessionIdentity("u.")))
+            FROM (\(rows.sql)) u LEFT JOIN projects p ON p.id = u.project_id
             GROUP BY u.project_id
             ORDER BY COALESCE(SUM(u.api_equiv_usd), 0) DESC
-            """, Self.bounds(range)) { row in
+            """, rows.values) { row in
             let project = Self.project(row, from: 0)
             return SpendSlice(id: project.map { String($0.id) } ?? "", label: project?.title ?? "Unassigned",
                               project: project, totals: Self.totals(row, from: 5),
@@ -170,16 +216,16 @@ public actor StoreReader {
         }
     }
 
-    public func projects(in range: DateInterval, topModels: Int = 3) throws -> [ProjectSummary] {
-        let bounds = Self.bounds(range)
+    public func projects(in range: DateInterval, topModels: Int = 3,
+                         scope: MacScope = .thisMac) throws -> [ProjectSummary] {
+        let rows = Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds(range))
         var summaries = try db.query("""
-            SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.")),
-                   COUNT(DISTINCT u.source || ':' || u.session_id), MAX(u.ts), MIN(u.ts)
-            FROM usage u LEFT JOIN projects p ON p.id = u.project_id
-            WHERE u.ts >= ? AND u.ts < ?
+            SELECT u.project_id, p.root, p.name, p.display_name, p.kind, \(Self.totals(prefix: "u.", scoped: true)),
+                   COUNT(DISTINCT \(Self.sessionIdentity("u."))), MAX(u.ts), MIN(u.ts)
+            FROM (\(rows.sql)) u LEFT JOIN projects p ON p.id = u.project_id
             GROUP BY u.project_id
             ORDER BY COALESCE(SUM(u.api_equiv_usd), 0) DESC, MAX(u.ts) DESC
-            """, bounds) { row in
+            """, rows.values) { row in
             ProjectSummary(project: Self.project(row, from: 0), totals: Self.totals(row, from: 5),
                            sessionCount: row.int(5 + Self.totalsColumnCount),
                            firstActive: row.optionalDouble(7 + Self.totalsColumnCount).map(Date.init(timeIntervalSince1970:)),
@@ -189,15 +235,15 @@ public actor StoreReader {
 
         var bySource: [Int64?: [AgentSource: LedgerTotals]] = [:]
         for (projectID, source, totals) in try db.query("""
-            SELECT project_id, source, \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ? GROUP BY project_id, source
-            """, bounds, { row in (row.optionalInt64(0), AgentSource(rawValue: row.text(1)), Self.totals(row, from: 2)) }) {
+            SELECT project_id, source, \(Self.totals(scoped: true)) FROM (\(rows.sql)) GROUP BY project_id, source
+            """, rows.values, { row in (row.optionalInt64(0), AgentSource(rawValue: row.text(1)), Self.totals(row, from: 2)) }) {
             if let source { bySource[projectID, default: [:]][source] = totals }
         }
         var models: [Int64?: [ModelShare]] = [:]
         for (projectID, share) in try db.query("""
-            SELECT project_id, COALESCE(model, ''), \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ?
+            SELECT project_id, COALESCE(model, ''), \(Self.totals(scoped: true)) FROM (\(rows.sql))
             GROUP BY project_id, model
-            """, bounds, { row in (row.optionalInt64(0), ModelShare(model: row.text(1), totals: Self.totals(row, from: 2))) }) {
+            """, rows.values, { row in (row.optionalInt64(0), ModelShare(model: row.text(1), totals: Self.totals(row, from: 2))) }) {
             models[projectID, default: []].append(share)
         }
         for index in summaries.indices {
@@ -208,26 +254,28 @@ public actor StoreReader {
         return summaries
     }
 
-    public func spendByModel(in range: DateInterval) throws -> [SpendSlice] {
-        try db.query("""
-            SELECT COALESCE(model, ''), \(Self.totals()), COUNT(DISTINCT source || ':' || session_id)
-            FROM usage WHERE ts >= ? AND ts < ?
+    public func spendByModel(in range: DateInterval, scope: MacScope = .thisMac) throws -> [SpendSlice] {
+        let rows = Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds(range))
+        return try db.query("""
+            SELECT COALESCE(model, ''), \(Self.totals(scoped: true)), COUNT(DISTINCT \(Self.sessionIdentity()))
+            FROM (\(rows.sql))
             GROUP BY 1
             ORDER BY COALESCE(SUM(api_equiv_usd), 0) DESC
-            """, Self.bounds(range)) { row in
+            """, rows.values) { row in
             let model = row.text(0)
             return SpendSlice(id: model, label: model.isEmpty ? "Unknown model" : model,
                               totals: Self.totals(row, from: 1), sessionCount: row.int(1 + Self.totalsColumnCount))
         }
     }
 
-    public func overview(now: Date = Date(), calendar: Calendar = .current) throws -> SpendOverview {
+    public func overview(now: Date = Date(), calendar: Calendar = .current,
+                         scope: MacScope = .thisMac) throws -> SpendOverview {
         func sum(_ range: DateInterval?) throws -> LedgerTotals {
-            if let range {
-                return try db.queryOne("SELECT \(Self.totals()) FROM usage WHERE ts >= ? AND ts < ?",
-                                       Self.bounds(range)) { Self.totals($0, from: 0) } ?? .zero
-            }
-            return try db.queryOne("SELECT \(Self.totals()) FROM usage") { Self.totals($0, from: 0) } ?? .zero
+            let rows = range.map { Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds($0)) }
+                ?? Self.rows(scope, where: "1", [])
+            return try db.queryOne("SELECT \(Self.totals(scoped: true)) FROM (\(rows.sql))", rows.values) {
+                Self.totals($0, from: 0)
+            } ?? .zero
         }
         return SpendOverview(today: try sum(Self.days(1, endingAt: now, calendar: calendar)),
                              last7Days: try sum(Self.days(7, endingAt: now, calendar: calendar)),
@@ -312,31 +360,33 @@ public actor StoreReader {
         "\(p)sidechain = 1 AND \(p)agent_id IS NOT NULL AND \(p)agent_id != ''"
     }
 
-    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil,
-                                pricing: PricingTable) throws -> [ModelEfficiency] {
+    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil, pricing: PricingTable,
+                                scope: MacScope = .thisMac) throws -> [ModelEfficiency] {
         var filter = "ts >= ? AND ts < ?"
         var values: [any SQLiteBindable] = Self.bounds(range)
         Self.append(project, column: "project_id", to: &filter, values: &values)
+        let rows = Self.rows(scope, where: filter, values)
         var models = try db.query("""
-            SELECT COALESCE(model, ''), \(Self.totals()) FROM usage WHERE \(filter)
+            SELECT COALESCE(model, ''), \(Self.totals(scoped: true)) FROM (\(rows.sql))
             GROUP BY 1 ORDER BY COALESCE(SUM(api_equiv_usd), 0) DESC, 1
-            """, values) { row in ModelEfficiency(model: row.text(0), totals: Self.totals(row, from: 1)) }
+            """, rows.values) { row in ModelEfficiency(model: row.text(0), totals: Self.totals(row, from: 1)) }
         let fast = try db.query("""
             SELECT COALESCE(model, ''), input, output, reasoning, cache_read, cache_write_5m, cache_write_1h,
-                   api_equiv_usd, native_usd
-            FROM usage WHERE \(filter) AND lower(speed) = 'fast'
-            """, values) { row in
+                   api_equiv_usd, native_usd, calls, prompt
+            FROM (\(rows.sql)) WHERE lower(speed) = 'fast'
+            """, rows.values) { row in
             (model: row.text(0),
              tokens: TokenCounts(input: row.int(1), output: row.int(2), reasoning: row.int(3), cacheRead: row.int(4),
                                  cacheWrite5m: row.int(5), cacheWrite1h: row.int(6)),
-             usd: row.optionalDouble(7), native: !row.isNull(8))
+             usd: row.optionalDouble(7), native: !row.isNull(8), calls: row.int(9), prompt: row.int(10))
         }
         for call in fast {
             guard let index = models.firstIndex(where: { $0.model == call.model }) else { continue }
-            models[index].fastCalls += 1
+            models[index].fastCalls += call.calls
             models[index].fastUSD += call.usd ?? 0
             if !call.native, let usd = call.usd,
-               let standard = pricing.price(model: call.model, tokens: call.tokens, speed: nil).apiEquivUSD {
+               let standard = pricing.price(model: call.model, tokens: call.tokens, speed: nil,
+                                            promptTokens: call.prompt).apiEquivUSD {
                 models[index].fastPremiumUSD += usd - standard
             }
         }
@@ -468,11 +518,13 @@ public actor StoreReader {
 
     private static let totalsColumnCount: Int32 = 12
 
-    private static func totals(prefix p: String = "") -> String {
+    // `scoped` reads `rows(_:where:)` or `remote_usage`, where one row can stand for several calls.
+    private static func totals(prefix p: String = "", scoped: Bool = false) -> String {
         """
         COALESCE(SUM(\(p)cost_usd), 0), COALESCE(SUM(\(p)api_equiv_usd), 0), COALESCE(SUM(\(p)input), 0),
         COALESCE(SUM(\(p)output), 0), COALESCE(SUM(\(p)reasoning), 0), COALESCE(SUM(\(p)cache_read), 0),
-        COALESCE(SUM(\(p)cache_write_5m), 0), COALESCE(SUM(\(p)cache_write_1h), 0), COUNT(\(p)id),
+        COALESCE(SUM(\(p)cache_write_5m), 0), COALESCE(SUM(\(p)cache_write_1h), 0),
+        \(scoped ? "COALESCE(SUM(\(p)calls), 0)" : "COUNT(\(p)id)"),
         COALESCE(MAX(\(p)cost_usd IS NULL AND \(p)is_local = 0), 0),
         COALESCE(SUM(CASE WHEN \(p)source = 'copilot-cli' THEN \(p)native_cost END), 0),
         COALESCE(SUM(\(p)premium_requests), 0)
@@ -493,15 +545,103 @@ public actor StoreReader {
         s.lines_added, s.lines_removed, s.pr_url, s.transcript_path, p.id, p.root, p.name, p.display_name, p.kind
         """
 
-    private static func session(_ row: SQLiteRow) -> SessionSummary? {
-        guard let source = AgentSource(rawValue: row.text(0)) else { return nil }
+    private static let remoteSessionColumns = """
+        s.source, s.id, s.title, NULL, s.first_at, s.last_at, 0, NULL,
+        NULL, NULL, NULL, NULL, p.id, p.root, p.name, p.display_name, p.kind
+        """
+
+    private static func session(_ row: SQLiteRow, from start: Int32) -> SessionSummary? {
+        guard let source = AgentSource(rawValue: row.text(start)) else { return nil }
         return SessionSummary(
-            key: SessionKey(source: source, id: row.text(1)), project: project(row, from: 12),
-            title: row.optionalText(2), cwd: row.optionalText(3),
-            firstAt: row.optionalDouble(4).map(Date.init(timeIntervalSince1970:)),
-            lastAt: row.optionalDouble(5).map(Date.init(timeIntervalSince1970:)), turns: row.int(6),
-            totals: totals(row, from: 17), nativeCostUSD: row.optionalDouble(7), linesAdded: row.optionalInt(8),
-            linesRemoved: row.optionalInt(9), prURL: row.optionalText(10), transcriptPath: row.optionalText(11))
+            key: SessionKey(source: source, id: row.text(start + 1)), project: project(row, from: start + 12),
+            title: row.optionalText(start + 2), cwd: row.optionalText(start + 3),
+            firstAt: row.optionalDouble(start + 4).map(Date.init(timeIntervalSince1970:)),
+            lastAt: row.optionalDouble(start + 5).map(Date.init(timeIntervalSince1970:)), turns: row.int(start + 6),
+            totals: totals(row, from: start + 17), nativeCostUSD: row.optionalDouble(start + 7),
+            linesAdded: row.optionalInt(start + 8), linesRemoved: row.optionalInt(start + 9),
+            prURL: row.optionalText(start + 10), transcriptPath: row.optionalText(start + 11),
+            device: start > 0 ? row.optionalText(0) : nil)
+    }
+
+    private static let rowColumns = """
+        source, session_id, project_id, ts, model, speed, is_local, input, output, reasoning, cache_read,
+        cache_write_5m, cache_write_1h, cost_usd, api_equiv_usd, native_cost, native_usd, premium_requests
+        """
+
+    // `filter` goes into each arm, not around the UNION, so the ts index still serves it.
+    static func rows(_ scope: MacScope, where filter: String,
+                     _ values: [any SQLiteBindable]) -> (sql: String, values: [any SQLiteBindable]) {
+        var arms: [String] = []
+        var bound: [any SQLiteBindable] = []
+        if scope.includesThisMac {
+            arms.append("""
+                SELECT NULL AS device, \(rowColumns), 1 AS calls,
+                       input + cache_read + cache_write_5m + cache_write_1h AS prompt
+                FROM usage WHERE \(filter)
+                """)
+            bound += values
+        }
+        if scope.includesOtherMacs {
+            var remoteFilter = "(\(filter)) AND \(counted("remote_usage"))"
+            var remoteValues = values
+            if case .device(let device) = scope {
+                remoteFilter += " AND device = ?"
+                remoteValues.append(device)
+            }
+            arms.append("""
+                SELECT device, \(rowColumns), calls,
+                       CASE WHEN prompt > 0 THEN prompt ELSE input + cache_read + cache_write_5m + cache_write_1h END
+                FROM remote_usage WHERE \(remoteFilter)
+                """)
+            bound += remoteValues
+        }
+        return (arms.joined(separator: "\nUNION ALL\n"), bound)
+    }
+
+    // A session id seen twice is a copied ledger or the other edition: this Mac's rows win, a remote row counts only
+    // past this Mac's last call, then the latest `last_at` among other Macs. Per row, so every scope sums to All Macs.
+    static func counted(_ u: String) -> String {
+        """
+        COALESCE((SELECT MAX(l.ts) FROM usage l WHERE l.source = \(u).source AND l.session_id = \(u).session_id), -1)
+            < \(u).ts
+        AND NOT EXISTS (SELECT 1 FROM remote_sessions o
+            WHERE o.source = \(u).source AND o.id = \(u).session_id AND o.device <> \(u).device
+            AND (o.last_at > (SELECT MAX(m.last_at) FROM remote_sessions m WHERE m.device = \(u).device
+                              AND m.source = \(u).source AND m.id = \(u).session_id)
+                 OR (o.last_at = (SELECT MAX(m.last_at) FROM remote_sessions m WHERE m.device = \(u).device
+                                  AND m.source = \(u).source AND m.id = \(u).session_id)
+                     AND o.device > \(u).device)))
+        """
+    }
+
+    static func hasCountedUsage(_ r: String) -> String {
+        """
+        EXISTS (SELECT 1 FROM remote_usage cu WHERE cu.device = \(r).device AND cu.source = \(r).source
+                AND cu.session_id = \(r).id AND \(counted("cu")))
+        """
+    }
+
+    private static func sessionIdentity(_ p: String = "") -> String {
+        "COALESCE(\(p)device, '') || ':' || \(p)source || ':' || \(p)session_id"
+    }
+
+    static func remoteSessions(_ scope: MacScope) -> (sql: String, values: [any SQLiteBindable]) {
+        var filter = hasCountedUsage("r")
+        var values: [any SQLiteBindable] = []
+        if case .device(let device) = scope {
+            filter += " AND r.device = ?"
+            values.append(device)
+        }
+        return ("""
+            SELECT r.device AS device, r.source AS source, r.id AS id, MIN(r.first_at) AS first_at,
+                   MAX(r.last_at) AS last_at,
+                   (SELECT t.title FROM remote_sessions t WHERE t.device = r.device AND t.source = r.source
+                        AND t.id = r.id AND t.title IS NOT NULL ORDER BY t.day DESC, t.part LIMIT 1) AS title,
+                   (SELECT t.project_id FROM remote_sessions t WHERE t.device = r.device AND t.source = r.source
+                        AND t.id = r.id ORDER BY t.day DESC, t.part LIMIT 1) AS project_id
+            FROM remote_sessions r WHERE \(filter)
+            GROUP BY r.device, r.source, r.id
+            """, values)
     }
 
     static func project(_ row: SQLiteRow, from start: Int32) -> ProjectRef? {
@@ -514,7 +654,23 @@ public actor StoreReader {
     private func attachModels(_ summaries: inout [SessionSummary]) throws {
         guard !summaries.isEmpty else { return }
         var shares: [SessionKey: [ModelShare]] = [:]
-        for (source, items) in Dictionary(grouping: summaries.map(\.key), by: \.source) {
+        var remoteShares: [String: [ModelShare]] = [:]
+        for (device, items) in Dictionary(grouping: summaries.filter(\.isRemote), by: { $0.device ?? "" }) {
+            for (source, keys) in Dictionary(grouping: items.map(\.key), by: \.source) {
+                let rows = try db.query("""
+                    SELECT session_id, COALESCE(model, ''), \(Self.totals(scoped: true))
+                    FROM remote_usage WHERE device = ? AND source = ? AND session_id IN (SELECT value FROM json_each(?))
+                          AND \(Self.counted("remote_usage"))
+                    GROUP BY session_id, model
+                    """, [device, source.rawValue, Self.jsonArray(keys.map(\.id))]) { row in
+                    (row.text(0), ModelShare(model: row.text(1), totals: Self.totals(row, from: 2)))
+                }
+                for (id, share) in rows {
+                    remoteShares["\(device)/\(source.rawValue):\(id)", default: []].append(share)
+                }
+            }
+        }
+        for (source, items) in Dictionary(grouping: summaries.filter { !$0.isRemote }.map(\.key), by: \.source) {
             let rows = try db.query("""
                 SELECT session_id, COALESCE(model, ''), \(Self.totals())
                 FROM usage WHERE source = ? AND session_id IN (SELECT value FROM json_each(?))
@@ -525,7 +681,17 @@ public actor StoreReader {
             for (key, share) in rows { shares[key, default: []].append(share) }
         }
         for index in summaries.indices {
-            summaries[index].models = Self.largestFirst(shares[summaries[index].key] ?? [])
+            let summary = summaries[index]
+            summaries[index].models = Self.largestFirst(summary.isRemote ? remoteShares[summary.id] ?? []
+                                                                         : shares[summary.key] ?? [])
+        }
+    }
+
+    private func attachDeviceNames(_ summaries: inout [SessionSummary]) throws {
+        guard summaries.contains(where: \.isRemote) else { return }
+        let names = Dictionary(try remoteDevices().map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        for index in summaries.indices {
+            if let device = summaries[index].device { summaries[index].deviceName = names[device] ?? nil }
         }
     }
 
@@ -552,7 +718,7 @@ public actor StoreReader {
         [range.start.timeIntervalSince1970, range.end.timeIntervalSince1970]
     }
 
-    private static func jsonArray(_ values: [String]) -> String {
+    static func jsonArray(_ values: [String]) -> String {
         String(decoding: (try? JSONSerialization.data(withJSONObject: values)) ?? Data("[]".utf8), as: UTF8.self)
     }
 }

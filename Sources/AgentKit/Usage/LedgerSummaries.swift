@@ -46,6 +46,12 @@ public struct ProjectRef: Sendable, Equatable, Hashable, Identifiable {
     }
 
     public var title: String { displayName ?? name }
+
+    public static let remoteRootPrefix = "hoply-remote://"
+
+    public var isRemoteOnly: Bool { root.hasPrefix(Self.remoteRootPrefix) }
+
+    public var acceptsLocalSessions: Bool { !isRemoteOnly }
 }
 
 public enum ProjectFilter: Sendable, Equatable, Hashable {
@@ -106,11 +112,14 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var linesRemoved: Int?
     public var prURL: String?
     public var transcriptPath: String?
+    public var device: String?
+    public var deviceName: String?
 
     public init(key: SessionKey, project: ProjectRef? = nil, title: String? = nil, cwd: String? = nil,
                 firstAt: Date? = nil, lastAt: Date? = nil, turns: Int = 0, totals: LedgerTotals = .zero,
                 models: [ModelShare] = [], nativeCostUSD: Double? = nil, linesAdded: Int? = nil,
-                linesRemoved: Int? = nil, prURL: String? = nil, transcriptPath: String? = nil) {
+                linesRemoved: Int? = nil, prURL: String? = nil, transcriptPath: String? = nil,
+                device: String? = nil, deviceName: String? = nil) {
         self.key = key
         self.project = project
         self.title = title
@@ -125,9 +134,38 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
         self.linesRemoved = linesRemoved
         self.prURL = prURL
         self.transcriptPath = transcriptPath
+        self.device = device
+        self.deviceName = deviceName
     }
 
-    public var id: String { "\(key.source.rawValue):\(key.id)" }
+    public var isRemote: Bool { device != nil }
+
+    public var id: String {
+        let local = "\(key.source.rawValue):\(key.id)"
+        return device.map { "\($0)/\(local)" } ?? local
+    }
+}
+
+public enum MacScope: Sendable, Equatable, Hashable {
+    case all
+    case thisMac
+    case device(String)
+
+    public var includesThisMac: Bool { self == .all || self == .thisMac }
+
+    public var includesOtherMacs: Bool { self != .thisMac }
+}
+
+public struct RemoteDevice: Sendable, Equatable, Hashable, Identifiable {
+    public var id: String
+    public var name: String?
+    public var updatedAt: Date?
+
+    public init(id: String, name: String? = nil, updatedAt: Date? = nil) {
+        self.id = id
+        self.name = name
+        self.updatedAt = updatedAt
+    }
 }
 
 public struct RecentSession: Sendable, Equatable, Identifiable {

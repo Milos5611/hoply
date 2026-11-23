@@ -10,6 +10,7 @@ struct SpendingPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeader(title: "Spending", subtitle: "What your agents' tokens would cost on the API") {
+                    MacFilter()
                     Picker("Split", selection: Binding(get: { history.spendingSplit },
                                                        set: { history.setSpending(split: $0) })) {
                         Text("By model").tag(SpendSeriesSplit.model)

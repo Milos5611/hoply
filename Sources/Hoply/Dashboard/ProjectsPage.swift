@@ -43,6 +43,7 @@ struct ProjectListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeader(title: "Projects", subtitle: subtitle(named.count, total)) {
+                    MacFilter()
                     ProjectRangePicker()
                 }
                 HistoryBanner()
@@ -128,7 +129,7 @@ struct ProjectTile: View {
                 Text(summary.title)
                     .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
-                Text(summary.root.map(Format.path) ?? "")
+                Text(summary.project.map(model.history.location(of:)) ?? "")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -330,7 +331,10 @@ struct ProjectDetailView: View {
                     }
                     .tooltip("Back to all projects")
                 }
-                ToolbarItem(placement: .primaryAction) { ProjectRangePicker() }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    MacFilter()
+                    ProjectRangePicker()
+                }
             }
         }
     }
@@ -345,6 +349,7 @@ struct ProjectDetailView: View {
                     }
                     .buttonStyle(.borderless)
                     Spacer()
+                    MacFilter()
                     ProjectRangePicker()
                 }
             }
@@ -361,7 +366,8 @@ struct ProjectDetailView: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 12)
-                if let root = summary.root {
+                if let project = summary.project, !project.isRemoteOnly {
+                    let root = project.root
                     HStack(spacing: 8) {
                         EditorButton(path: root)
                         Button { WorkspaceActions.revealInFinder(root) } label: {
@@ -381,10 +387,10 @@ struct ProjectDetailView: View {
     }
 
     private func caption(_ summary: ProjectSummary) -> String {
-        guard let root = summary.root else {
+        guard let project = summary.project else {
             return "Usage without a project: telemetry with no hoply.cwd and no readable process cwd. Assign a session from its details."
         }
-        return "\(Format.path(root)) · \(Self.kindName(summary.kind))"
+        return "\(model.history.location(of: project)) · \(Self.kindName(summary.kind))"
     }
 
     private static func kindName(_ kind: ProjectKind?) -> String {

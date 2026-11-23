@@ -53,12 +53,21 @@ final class ProjectEdits {
         folders.filter { $0.project.id == project.id }
     }
 
-    func assignment(of key: SessionKey) -> SessionAssignment? {
-        sessions.first { $0.key == key }
+    func assignment(of session: SessionSummary) -> SessionAssignment? {
+        sessions.first { $0.key == session.key && $0.device == session.device }
     }
 
-    func targets(excluding project: ProjectRef?) -> [ProjectRef] {
-        projects.filter { $0.id != project?.id }
+    func targets(for session: SessionSummary) -> [ProjectRef] {
+        projects.filter { $0.id != session.project?.id && (session.isRemote || $0.acceptsLocalSessions) }
+    }
+
+    func mergeTargets(for project: ProjectRef) -> [ProjectRef] {
+        projects.filter { $0.id != project.id && (project.isRemoteOnly || $0.acceptsLocalSessions) }
+    }
+
+    func keepChoices(of suggestion: MergeSuggestion) -> [ProjectRef] {
+        let allRemote = suggestion.projects.allSatisfy(\.isRemoteOnly)
+        return suggestion.projects.filter { allRemote || $0.acceptsLocalSessions }
     }
 
     // MARK: - Loading
@@ -96,7 +105,7 @@ final class ProjectEdits {
 
     private static func usage(_ ledger: Ledger) async throws -> [Int64: Usage] {
         var usage: [Int64: Usage] = [:]
-        for summary in try await ledger.reader.projects(in: HistoryRange.all.interval(), topModels: 0) {
+        for summary in try await ledger.reader.projects(in: HistoryRange.all.interval(), topModels: 0, scope: .all) {
             guard let project = summary.project else { continue }
             usage[project.id] = Usage(sessions: summary.sessionCount, totals: summary.totals,
                                       firstActive: summary.firstActive)
@@ -107,7 +116,7 @@ final class ProjectEdits {
     // MARK: - Confirmations
 
     func survivor(of suggestion: MergeSuggestion) -> ProjectRef? {
-        suggestion.projects.enumerated().min { a, b in
+        keepChoices(of: suggestion).enumerated().min { a, b in
             let (first, second) = (usage[a.element.id], usage[b.element.id])
             let (spendA, spendB) = (first?.totals.apiEquivUSD ?? 0, second?.totals.apiEquivUSD ?? 0)
             if spendA != spendB { return spendA > spendB }
@@ -189,12 +198,14 @@ final class ProjectEdits {
         }
     }
 
-    func assign(_ key: SessionKey, to project: ProjectRef) {
-        edit { try await $0.assign(session: key, toProject: project.id) }
+    func assign(_ session: SessionSummary, to project: ProjectRef) {
+        let key = session.key, device = session.device
+        edit { try await $0.assign(session: key, device: device, toProject: project.id) }
     }
 
-    func unassign(_ key: SessionKey) {
-        edit { try await $0.unassign(session: key) }
+    func unassign(_ session: SessionSummary) {
+        let key = session.key, device = session.device
+        edit { try await $0.unassign(session: key, device: device) }
     }
 
     func dismiss(_ suggestion: MergeSuggestion) {
@@ -257,6 +268,9 @@ final class ProjectEdits {
 
 enum ProjectEditText {
     static func describe(_ error: any Error) -> String {
+        if case .localIntoRemoteOnly? = error as? RemoteProjectEditError {
+            return "A project that's only on another Mac can't hold this Mac's sessions, folders or projects. Nothing was changed."
+        }
         switch error as? ProjectEditError {
         case .unknownProject: return "That project is no longer in the ledger. Nothing was changed."
         case .unknownSession: return "That session is no longer in the ledger. Nothing was changed."
@@ -277,6 +291,8 @@ enum ProjectEditText {
             case nil: moved = "Moves the sessions and usage of \(names(sources))"
             }
             return "\(moved) to \(target.title). You can unmerge later; sessions that changed folders may not return exactly."
+        case .unmerge(let merged) where merged.project.isRemoteOnly:
+            return "Sessions from another Mac go back to \(merged.project.title)."
         case .unmerge(let merged):
             return "Sessions started in \(Format.path(merged.project.root)) go back to \(merged.project.title). "
                 + "This goes by each session's folder, so sessions that changed folders may stay in \(merged.into.title)."

@@ -224,13 +224,19 @@ public struct PricingTable: Sendable, Equatable {
         return best
     }
 
-    public func price(model: String?, tokens: TokenCounts, speed: String?) -> PricedUsage {
+    public var contextThresholds: [Int] {
+        Set(models.values.compactMap { $0.longContext?.above }).sorted()
+    }
+
+    // `promptTokens` prices a sum of several calls at the tier of one of them: the tier is decided per call.
+    public func price(model: String?, tokens: TokenCounts, speed: String?, promptTokens: Int? = nil) -> PricedUsage {
         let isFast = speed?.lowercased() == "fast"
+        let prompt = promptTokens ?? tokens.promptTokens
         if isLocal(model) {
-            let reference = models[referenceModel].flatMap { $0.rates(promptTokens: tokens.promptTokens, fast: false) }
+            let reference = models[referenceModel].flatMap { $0.rates(promptTokens: prompt, fast: false) }
             return PricedUsage(costUSD: 0, apiEquivUSD: reference?.cost(tokens), isLocal: true)
         }
-        guard let model, let rates = match(model)?.price.rates(promptTokens: tokens.promptTokens, fast: isFast) else {
+        guard let model, let rates = match(model)?.price.rates(promptTokens: prompt, fast: isFast) else {
             return PricedUsage(costUSD: nil, apiEquivUSD: nil, isLocal: false)
         }
         let cost = rates.cost(tokens)

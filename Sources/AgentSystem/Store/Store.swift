@@ -14,6 +14,9 @@ public actor Store {
     private var aggregator = SampleAggregator()
     private var seededCounters: Set<String> = []
     private var lastRollup: Date
+    var historyChanges = RemoteHistoryChanges.all
+    var localOrigins: [Int64: String?] = [:]
+    var knownProjectMax: Int64 = 0
 
     public init(path: String = Store.defaultDatabaseURL.path, pricing: PricingTable = .bundled(),
                 resolver: ProjectResolver = ProjectResolver(home: UserHome.path),
@@ -33,6 +36,7 @@ public actor Store {
         let opened = Date()
         _ = try Self.rollUpSamples(db, now: opened)
         self.lastRollup = opened
+        self.knownProjectMax = try db.queryOne("SELECT COALESCE(MAX(id), 0) FROM projects") { $0.int64(0) } ?? 0
         self.db = db
         self.databasePath = path
         self.pricing = pricing
@@ -79,6 +83,8 @@ public actor Store {
             try record(batch.prompts, touched: &touched)
             let previous = batch.limits.isEmpty ? [:] : try insertLimitSamples(batch.limits)
             if let cursor { try save(cursor) }
+            try noteHistory(batch, skipping: foreign)
+            try rematchIfProjectsGrew()
             return Applied(sessions: touched, previousLimits: previous)
         }
     }
@@ -96,6 +102,7 @@ public actor Store {
                     """, [source.rawValue, id, title, rank])
                 if db.changes > 0 { touched.insert(SessionKey(source: source, id: id)) }
             }
+            for key in touched { try noteHistorySpan(of: key) }
             return touched
         }
     }
@@ -115,7 +122,11 @@ public actor Store {
         guard !wanted.isEmpty else { return [:] }
         let ids = wanted.allSatisfy { registry.cachedEntry(for: $0) != nil }
             ? try projectIDs(wanted)
-            : try db.transaction { try projectIDs(wanted) }
+            : try db.transaction {
+                let ids = try projectIDs(wanted)
+                try rematchIfProjectsGrew()
+                return ids
+            }
         let rows = try db.query("""
             SELECT id, root, name, display_name, kind FROM projects WHERE id IN (SELECT value FROM json_each(?))
             """, [Self.jsonArray(Set(ids.values).map { $0 })]) { row in
@@ -426,6 +437,10 @@ public actor Store {
     }
 
     private static func reprice(_ db: SQLiteConnection, _ pricing: PricingTable) throws -> Int {
+        try repriceLocal(db, pricing) + repriceRemote(db, pricing)
+    }
+
+    private static func repriceLocal(_ db: SQLiteConnection, _ pricing: PricingTable) throws -> Int {
         let stale = try db.queryOne("SELECT 1 FROM usage WHERE pricing_rev IS NOT ? AND native_usd IS NULL LIMIT 1",
                                     [pricing.revision]) { _ in true }
         guard stale == true else { return 0 }

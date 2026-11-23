@@ -54,6 +54,13 @@ struct PhoneSettings: View {
                     .disabled(!link.isAvailable || !model.settings.iCloudLink)
                     Hint("New and continued sessions open in Terminal on this Mac, only in projects Hoply already knows, and still ask for approvals.")
                 }
+                Divider()
+                SwitchRow("Share history with your other Macs", isOn: Binding(
+                    get: { link.isAvailable && model.settings.iCloudLink && model.settings.iCloudHistory },
+                    set: { on in model.update { $0.iCloudHistory = on } }
+                ))
+                .disabled(!link.isAvailable || !model.settings.iCloudLink)
+                Hint("Each day's sessions, project names and tokens go to your own iCloud, encrypted, for your other Macs with Hoply. Never paths or prompts. Turning this off removes them from iCloud.")
             }
         }
     }

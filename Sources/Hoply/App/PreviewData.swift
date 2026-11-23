@@ -964,6 +964,87 @@ enum PreviewData {
     }
 }
 
+extension PreviewData {
+    static let studio = RemoteDevice(id: "5F3A90C2-studio", name: "Mac Studio")
+    static let mini = RemoteDevice(id: "91C2D7E4-mini", name: "Mac mini")
+    static let brandSite = ProjectRef(id: 9, root: "\(ProjectRef.remoteRootPrefix)\(studio.id)/7c41e2a9", name: "brand-site",
+                                      kind: .repo)
+
+    private struct RemoteSeed {
+        let device: RemoteDevice
+        let title: String
+        var source: AgentSource = .claudeCode
+        let project: ProjectRef
+        let minutesAgo: Double
+        let hours: Double
+        let usd: Double
+        let model: String
+    }
+
+    static func severalMacsHistory(now: Date) -> HistoryPreview {
+        var preview = history(now: now)
+        let refs = projectRefs
+        let seeds = [
+            RemoteSeed(device: studio, title: "Tune the ranking query for the draw", project: refs[0], minutesAgo: 2,
+                       hours: 1.1, usd: 6.40, model: "claude-opus-5"),
+            RemoteSeed(device: studio, title: "Rework the pricing page layout", source: .codexCLI, project: brandSite,
+                       minutesAgo: 35, hours: 0.6, usd: 3.10, model: "gpt-6.1-sol"),
+            RemoteSeed(device: mini, title: "Nightly dependency upgrade", project: refs[1], minutesAgo: 300, hours: 0.4,
+                       usd: 1.22, model: "claude-sonnet-5"),
+            RemoteSeed(device: studio, title: "Accessibility pass on the navigation", project: brandSite,
+                       minutesAgo: 1_500, hours: 1.6, usd: 8.75, model: "claude-opus-5"),
+        ]
+        let remote = seeds.enumerated().map { index, seed in
+            let last = now.addingTimeInterval(-seed.minutesAgo * 60)
+            let spent = totals(usd: seed.usd, local: false, source: seed.source)
+            let id = String(format: "%08x-remote-%02d", 0x7a11_2000 + index * 4_721, index)
+            return SessionSummary(key: SessionKey(source: seed.source, id: id), project: seed.project, title: seed.title,
+                                  firstAt: last.addingTimeInterval(-seed.hours * 3_600), lastAt: last, totals: spent,
+                                  models: [ModelShare(model: seed.model, totals: spent)], device: seed.device.id,
+                                  deviceName: seed.device.name)
+        }
+        let sessions = (preview.sessions.sessions + remote)
+            .sorted { ($0.lastAt ?? .distantPast) > ($1.lastAt ?? .distantPast) }
+        preview.sessions = SessionPage(sessions: sessions, totalCount: preview.sessions.totalCount + 31)
+        preview.selectedSession = remote.first
+
+        let brandSessions = remote.filter { $0.project == brandSite }
+        let brandTotals = brandSessions.reduce(LedgerTotals.zero) { $0 + $1.totals }
+        let brand = ProjectSummary(project: brandSite, totals: brandTotals, sessionCount: 9,
+                                   bySource: Dictionary(grouping: brandSessions, by: \.key.source)
+                                       .mapValues { $0.reduce(LedgerTotals.zero) { $0 + $1.totals } },
+                                   topModels: brandSessions.flatMap(\.models),
+                                   firstActive: now.addingTimeInterval(-12 * 86_400),
+                                   lastActive: now.addingTimeInterval(-35 * 60))
+        let remoteTotals = remote.reduce(LedgerTotals.zero) { $0 + $1.totals }
+        let today = remote.filter { ($0.lastAt ?? .distantPast) > Calendar.current.startOfDay(for: now) }
+            .reduce(LedgerTotals.zero) { $0 + $1.totals }
+        preview.overview.totals.today = preview.overview.totals.today + today
+        preview.overview.totals.last7Days = preview.overview.totals.last7Days + remoteTotals
+        preview.overview.totals.last30Days = preview.overview.totals.last30Days + remoteTotals
+        preview.overview.totals.allTime = preview.overview.totals.allTime + remoteTotals
+        let slice = SpendSlice(id: String(brandSite.id), label: brandSite.title, project: brandSite, totals: brandTotals,
+                               sessionCount: brand.sessionCount)
+        func ranked(_ slices: [SpendSlice]) -> [SpendSlice] {
+            slices.sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD }
+        }
+        preview.overview.projects = Array(ranked(preview.overview.projects + [slice]).prefix(5))
+        preview.spending.projects = ranked(preview.spending.projects + [slice])
+        preview.projects.projects = (preview.projects.projects + [brand])
+            .sorted { $0.totals.apiEquivUSD > $1.totals.apiEquivUSD }
+        preview.projectDetail = ProjectDetailData(
+            range: .month, summary: brand,
+            daily: DailySpendSeries(days: preview.overview.daily.days, points: brandSessions.compactMap { session in
+                session.lastAt.map { DailySpendPoint(day: Calendar.current.startOfDay(for: $0),
+                                                     series: session.models.first?.model ?? "", totals: session.totals) }
+            }),
+            sessions: SessionPage(sessions: brandSessions, totalCount: brand.sessionCount))
+        preview.remoteDevices = [studio, mini]
+        preview.thisMacName = "MacBook Pro"
+        return preview
+    }
+}
+
 private extension LedgerTotals {
     static func += (lhs: inout LedgerTotals, rhs: LedgerTotals) { lhs = lhs + rhs }
 }

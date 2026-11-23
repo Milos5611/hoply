@@ -1,7 +1,7 @@
 import Foundation
 
 public enum Schema {
-    public static let migrations: [String] = [v1, v2, v3, v4, v5, v6]
+    public static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7]
 
     static let v1 = """
     CREATE TABLE projects (
@@ -157,6 +157,89 @@ public enum Schema {
 
     static let v6 = """
     DROP TABLE IF EXISTS cleanup_log;
+    """
+
+    static let v7 = """
+    ALTER TABLE projects ADD COLUMN remote_origin TEXT;
+    CREATE TABLE remote_devices (
+        device TEXT PRIMARY KEY,
+        name TEXT,
+        updated_at REAL
+    );
+    CREATE TABLE remote_parts (
+        device TEXT NOT NULL,
+        day TEXT NOT NULL,
+        part INTEGER NOT NULL,
+        parts INTEGER NOT NULL,
+        built_at REAL NOT NULL,
+        PRIMARY KEY (device, day, part)
+    );
+    CREATE TABLE remote_projects (
+        device TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        title TEXT,
+        origin TEXT,
+        kind TEXT NOT NULL,
+        project_id INTEGER REFERENCES projects(id),
+        PRIMARY KEY (device, remote_id)
+    );
+    CREATE TABLE remote_sessions (
+        device TEXT NOT NULL,
+        day TEXT NOT NULL,
+        part INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        id TEXT NOT NULL,
+        remote_project TEXT,
+        project_id INTEGER REFERENCES projects(id),
+        title TEXT,
+        first_at REAL NOT NULL,
+        last_at REAL NOT NULL,
+        PRIMARY KEY (device, day, part, source, id)
+    );
+    CREATE INDEX remote_sessions_key ON remote_sessions(device, source, id);
+    CREATE INDEX remote_sessions_project ON remote_sessions(device, remote_project);
+    CREATE INDEX remote_sessions_session ON remote_sessions(source, id);
+    CREATE TABLE remote_usage (
+        id INTEGER PRIMARY KEY,
+        device TEXT NOT NULL,
+        day TEXT NOT NULL,
+        part INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        remote_project TEXT,
+        project_id INTEGER REFERENCES projects(id),
+        ts REAL NOT NULL,
+        last_ts REAL NOT NULL,
+        model TEXT,
+        speed TEXT,
+        prompt INTEGER NOT NULL DEFAULT 0,
+        is_local INTEGER NOT NULL DEFAULT 0,
+        input INTEGER NOT NULL DEFAULT 0,
+        output INTEGER NOT NULL DEFAULT 0,
+        reasoning INTEGER NOT NULL DEFAULT 0,
+        cache_read INTEGER NOT NULL DEFAULT 0,
+        cache_write_5m INTEGER NOT NULL DEFAULT 0,
+        cache_write_1h INTEGER NOT NULL DEFAULT 0,
+        calls INTEGER NOT NULL DEFAULT 1,
+        native_usd REAL,
+        native_cost REAL,
+        premium_requests REAL NOT NULL DEFAULT 0,
+        cost_usd REAL,
+        api_equiv_usd REAL,
+        pricing_rev TEXT
+    );
+    CREATE INDEX remote_usage_ts ON remote_usage(ts);
+    CREATE INDEX remote_usage_part ON remote_usage(device, day, part);
+    CREATE INDEX remote_usage_session ON remote_usage(device, source, session_id);
+    CREATE INDEX remote_usage_project ON remote_usage(device, remote_project);
+    CREATE TABLE remote_session_pins (
+        device TEXT NOT NULL,
+        source TEXT NOT NULL,
+        id TEXT NOT NULL,
+        project_id INTEGER NOT NULL REFERENCES projects(id),
+        PRIMARY KEY (device, source, id)
+    );
     """
 
     public static func configure(_ db: SQLiteConnection, readOnly: Bool = false) throws {

@@ -21,6 +21,7 @@ final class ICloudLink {
     }
 
     static let withdrawPendingKey = "HoplyICloudWithdrawPending"
+    static let historyClearPendingKey = "HoplyHistoryClearPending"
     private static let accountRetry: TimeInterval = 600
     private static let storageRetry: TimeInterval = 900
     private static let coalesce: Duration = .milliseconds(250)
@@ -58,6 +59,10 @@ final class ICloudLink {
     @ObservationIgnored private var transcripts = TranscriptWatches()
     @ObservationIgnored private var transcriptRetry = RemoteRetry()
     @ObservationIgnored private var conversations: Conversations?
+    @ObservationIgnored private var historySync: HistorySync?
+    @ObservationIgnored private var historyDueAt: Date?
+    @ObservationIgnored private var historyFetchRequested = false
+    @ObservationIgnored private var clearing: Task<Void, Never>?
 
     private struct AccountRestricted: Error {}
 
@@ -109,10 +114,28 @@ final class ICloudLink {
         changed()
     }
 
+    // With the link off nothing else runs, so the clear runs here; while a withdraw runs, its loop clears instead.
+    func ledgerOpened() {
+        changed()
+        guard isLive, isAvailable, !isRunning, withdrawal == nil, clearing == nil,
+              UserDefaults.standard.bool(forKey: Self.historyClearPendingKey) else { return }
+        clearing = Task { [weak self] in
+            await self?.clearReceivedHistory()
+            self?.clearing = nil
+        }
+    }
+
+    func historyWanted() {
+        guard isRunning else { return }
+        historyFetchRequested = true
+        changed()
+    }
+
     private func link() -> CloudLink {
         if let cloud { return cloud }
         let made = CloudLink()
         cloud = made
+        historySync = HistorySync(cloud: made)
         deviceName = CloudLink.deviceName
         return made
     }
@@ -123,7 +146,9 @@ final class ICloudLink {
         let previous = withdrawal
         previous?.cancel()
         withdrawal = nil
+        let clearing = clearing
         UserDefaults.standard.removeObject(forKey: Self.withdrawPendingKey)
+        UserDefaults.standard.removeObject(forKey: Self.historyClearPendingKey)
         needsPrepare = true
         fetchRequested = true
         failures = 0
@@ -132,6 +157,9 @@ final class ICloudLink {
         fetchedAt = nil
         transcripts = TranscriptWatches()
         transcriptRetry = RemoteRetry()
+        historyDueAt = nil
+        historyFetchRequested = false
+        let historySync = historySync
         // Away answers the phone wrote before this run started would undo the Mac's current setting.
         awaySetAt = Date()
         status = .connecting
@@ -141,6 +169,8 @@ final class ICloudLink {
         }
         runner = Task { [weak self] in
             await previous?.value
+            await clearing?.value
+            await historySync?.reset()
             await self?.run(cloud)
         }
     }
@@ -158,6 +188,7 @@ final class ICloudLink {
         transcripts = TranscriptWatches()
         conversations = nil
         UserDefaults.standard.set(true, forKey: Self.withdrawPendingKey)
+        UserDefaults.standard.set(true, forKey: Self.historyClearPendingKey)
         status = .removing
         // The withdraw waits for the runner, so a save still in flight can't land after the records are removed.
         withdrawal = Task { [weak self] in
@@ -184,8 +215,9 @@ final class ICloudLink {
                 if status != .running { status = .running }
                 if talked { lastSync = Date() }
                 let untilPoll = pollInterval - Date().timeIntervalSince(fetchedAt ?? .distantPast)
-                wait = RemoteTranscriptPolicy.wait(untilPoll: untilPoll, watching: !transcripts.isEmpty,
-                                                   retry: transcriptRetry, now: Date())
+                let untilHistory = historyDueAt.map { $0.timeIntervalSinceNow } ?? .infinity
+                wait = min(RemoteTranscriptPolicy.wait(untilPoll: untilPoll, watching: !transcripts.isEmpty,
+                                                       retry: transcriptRetry, now: Date()), untilHistory)
             } catch {
                 guard !Task.isCancelled else { return }
                 guard let delay = failed(error) else { return }
@@ -260,7 +292,22 @@ final class ICloudLink {
         }
         // Transcript errors back off only transcripts: the link stays On and approvals and replies keep their pace.
         if try await serveTranscripts(cloud, model: model, device: device) { talked = true }
+        if try await syncHistory(model: model) { talked = true }
         return talked
+    }
+
+    private func syncHistory(model: AppModel) async throws -> Bool {
+        guard let historySync else { return false }
+        if historyFetchRequested {
+            historyFetchRequested = false
+            await historySync.fetchSoon()
+        }
+        let result = try await historySync.sync(ledger: model.history.ledger, sharing: model.settings.sharesHistory,
+                                                deviceName: deviceName)
+        try Task.checkCancellation()
+        historyDueAt = Date() + result.wait
+        if result.applied { model.history.remoteHistoryChanged() }
+        return result.talked
     }
 
     private var pollInterval: TimeInterval {
@@ -473,13 +520,31 @@ final class ICloudLink {
         pending = false
     }
 
+    private func clearReceivedHistory() async {
+        _ = link()
+        guard UserDefaults.standard.bool(forKey: Self.historyClearPendingKey), let historySync, let model,
+              let ledger = model.history.ledger else { return }
+        do {
+            try await historySync.clearReceived(from: ledger)
+        } catch {
+            return
+        }
+        guard UserDefaults.standard.bool(forKey: Self.historyClearPendingKey),
+              ledger.store === model.history.ledger?.store else { return }
+        UserDefaults.standard.removeObject(forKey: Self.historyClearPendingKey)
+        model.history.remoteHistoryChanged()
+    }
+
     private func withdraw(_ cloud: CloudLink) async {
         var failures = 0
         while !Task.isCancelled {
+            await clearReceivedHistory()
             do {
                 try await cloud.withdraw()
                 guard !Task.isCancelled else { return }
                 UserDefaults.standard.removeObject(forKey: Self.withdrawPendingKey)
+                await clearReceivedHistory()
+                guard !Task.isCancelled else { return }
                 status = .off
                 lastSync = nil
                 withdrawal = nil
@@ -490,6 +555,8 @@ final class ICloudLink {
                 let delay: TimeInterval
                 switch CloudLinkError(error) {
                 case .unavailable, .noAccount:
+                    await clearReceivedHistory()
+                    guard !Task.isCancelled else { return }
                     status = .off
                     withdrawal = nil
                     return

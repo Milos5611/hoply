@@ -172,8 +172,9 @@ public struct Ledger: Sendable {
         try await reader.subagentCounts(for: keys)
     }
 
-    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil) async throws -> [ModelEfficiency] {
-        try await reader.modelEfficiency(in: range, project: project, pricing: await store.pricing)
+    public func modelEfficiency(in range: DateInterval, project: ProjectFilter? = nil,
+                                scope: MacScope = .thisMac) async throws -> [ModelEfficiency] {
+        try await reader.modelEfficiency(in: range, project: project, pricing: await store.pricing, scope: scope)
     }
 
     public func unpricedModels() async throws -> [UnpricedModel] {

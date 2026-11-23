@@ -117,10 +117,17 @@ Anything else that talks to your model server, such as a chat app, shows up in t
     waiting requests go to your own private iCloud database, end-to-end encrypted, for Hoply for iPhone. When you
     open a session's conversation on the iPhone (on by default; Settings → iPhone turns it off), its prompts, replies
     and one line per tool call (no tool output or file contents) go the same way, kept fresh while it is open and
-    deleted after a day.
+    deleted after a day. For your other Macs on the same Apple ID, each Mac also sends a summary of its usage history
+    per day (each session's id, title, agent and times; project names, a hash of each project's folder and of its git
+    remote; a hash of this Mac's hardware id, so one Mac is never counted twice; never paths, prompts or replies;
+    tokens per model, with the cost Copilot reports itself where it has one, priced on the receiving Mac with its own
+    price table) the same way, so the Dashboard can show all of them. It is on by default while the iCloud link is
+    on; turning off "Share history with your other Macs" deletes this Mac's summaries from iCloud, and turning the
+    link off removes the summaries other Macs sent from this Mac.
 - Agent records (transcripts, Codex session files, Copilot's database and session files) are read, never changed.
   The one exception is something you ask for: Connect writes the hook config above.
-- Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`. Model-server tokens and passwords live in
+- Usage history lives in `~/Library/Application Support/Hoply/hoply.sqlite`, with the summaries from your other Macs
+  kept apart from this Mac's own. Model-server tokens and passwords live in
   your Keychain, never in settings, URLs or logs.
 
 More detail in the [privacy policy](https://hoply.dev/privacy).

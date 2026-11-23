@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum GitRemote {
@@ -70,6 +71,15 @@ public enum GitRemote {
         path = trimmed(path)
         guard !host.isEmpty, !path.isEmpty else { return nil }
         return (host + "/" + path).lowercased()
+    }
+
+    public static func originHash(_ url: String) -> String? {
+        guard let identity = identity(url), !identity.hasPrefix("file:") else { return nil }
+        return SHA256.hash(data: Data(identity.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func originHash(ofRepoAt root: String, fileSystem fs: some ProjectFileSystem) -> String? {
+        originURL(ofRepoAt: root, fileSystem: fs).flatMap(originHash)
     }
 
     private static func local(_ path: String) -> String? {

@@ -238,7 +238,7 @@ Sources/AgentKit/          platform-neutral core
   Pricing/                 price table (bundled as a string literal), cost-state calibration
   Projects/                cwd → project resolver (repo, worktree, folder, home, scratch), session grouping
   ModelServers/            servers, engines, per-engine metric names, detection
-  Remote/                  model server endpoints; the iCloud link's records, schema, answer and transcript rules (no CloudKit)
+  Remote/                  model server endpoints; the iCloud link's records, schema, answer, transcript and history rules (no CloudKit)
   Conversation/            transcript lines → a session's conversation for the iPhone (prompts, replies, one line per tool)
   Git/ Metrics/ Notifications/ Palette/ Support/ Updates/
 Sources/AgentSystem/       macOS I/O adapters
@@ -247,7 +247,7 @@ Sources/AgentSystem/       macOS I/O adapters
   Connect/                 AgentConnector (writes agent config) and the --connect CLI
   Folders/                 the real home folder, security-scoped folder grants (store edition)
   Processes/               a process's cwd through libproc (the OTel `process.pid` fallback)
-  Remote/                  Keychain, model server client, CloudLink (the iCloud link through CloudKit), ConversationReader
+  Remote/                  Keychain, model server client, CloudLink (the iCloud link through CloudKit), HistorySync, ConversationReader
   Power/                   keeps the Mac awake while Away
   Pricing/ Projects/
   Ledger.swift             store, reader and coordinator bundled for the app

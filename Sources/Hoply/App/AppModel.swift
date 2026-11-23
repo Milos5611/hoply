@@ -171,6 +171,8 @@ final class AppModel {
         followAwayMode()
         server.start(port: UInt16(clamping: settings.port))
         history.onLoaded = { [weak self] _ in self?.projectEdits.reload() }
+        history.onOpened = { [weak self] in self?.iCloudLink.ledgerOpened() }
+        history.setThisMacName(CloudLink.deviceName)
         history.onLiveModels = { [weak self] in self?.applyLiveModels() }
         history.onLiveTitles = { [weak self] in self?.applyLiveTitles() }
         history.onLimits = { [weak self] samples, previous in self?.codexLimitsRead(samples, previous: previous) }
@@ -625,7 +627,8 @@ final class AppModel {
         if updated.iCloudLink != old.iCloudLink {
             iCloudLink.follow(updated.iCloudLink)
         }
-        if updated.iPhoneLaunch != old.iPhoneLaunch || updated.iPhoneConversations != old.iPhoneConversations {
+        if updated.iPhoneLaunch != old.iPhoneLaunch || updated.iPhoneConversations != old.iPhoneConversations
+            || updated.iCloudHistory != old.iCloudHistory {
             iCloudLink.changed()
         }
         if updated.modelServers != old.modelServers {

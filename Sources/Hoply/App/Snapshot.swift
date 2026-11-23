@@ -113,6 +113,21 @@ enum Snapshot {
                                model: model, appearance: looks,
                                to: directory.appendingPathComponent("dashboard-\(page.rawValue)-\(name).png"))
                 }
+                for page in [DashboardPage.overview, .spending, .sessions, .projects] {
+                    model.history.show(PreviewData.severalMacsHistory(now: now), page: page)
+                    let height: CGFloat = switch page {
+                    case .projects: 1_120
+                    case .sessions: 900
+                    case .spending: 1_420
+                    default: 760
+                    }
+                    try render(DashboardView(plainSidebar: true).frame(width: 1180, height: height),
+                               model: model, appearance: looks,
+                               to: directory.appendingPathComponent("dashboard-\(page.rawValue)-macs-\(name).png"))
+                }
+                model.history.showProjectDetail(PreviewData.severalMacsHistory(now: now))
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_400), model: model,
+                           appearance: looks, to: directory.appendingPathComponent("dashboard-project-remote-\(name).png"))
                 var disconnected = PreviewData.settings
                 disconnected.claudeLimitsEnabled = false
                 disconnected.copilotMonthlyAllowance = 0
