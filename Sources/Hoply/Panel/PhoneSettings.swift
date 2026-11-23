@@ -5,11 +5,23 @@ struct PhoneSettings: View {
     @Environment(AppModel.self) private var model
     @Environment(\.edition) private var edition
 
+    static let appStoreURL = URL(string: "https://apps.apple.com/app/id6835517348")!
+
+    private var appStoreLine: AttributedString {
+        var name = AttributedString("Hoply for iPhone")
+        name.link = Self.appStoreURL
+        return name + AttributedString(" on the App Store: approve and reply from your phone.")
+    }
+
     var body: some View {
         let link = model.iCloudLink
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 SectionTitle("iPhone")
+                Text(appStoreLine)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 SwitchRow("Reach Hoply from your iPhone through iCloud", isOn: Binding(
                     get: { link.isAvailable && model.settings.iCloudLink },
                     set: { on in model.update { $0.iCloudLink = on } }
