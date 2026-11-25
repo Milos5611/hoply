@@ -96,6 +96,9 @@ final class History {
     private(set) var insights: [SessionKey: SessionInsight] = [:]
     private(set) var unpricedModels: [UnpricedModel] = []
     private(set) var pricedModels: [String] = []
+    private(set) var referenceModelHasPrice = true
+    private(set) var customPricesInTable: Set<String> = []
+    private(set) var priceAliasesInTable: Set<String> = []
     private(set) var codexLimits: [LimitKind: LimitSample] = [:]
     private(set) var note: String?
     private(set) var isEmpty: Bool?
@@ -460,12 +463,13 @@ final class History {
         Task { await ingest.reindex() }
     }
 
-    func updatePricing(localModelPatterns: [String], referenceModel: String, priceAliases: [String: String]) {
+    func updatePricing(localModelPatterns: [String], referenceModel: String, priceAliases: [String: String],
+                       customPrices: [String: CustomModelPrice]) {
         guard let ledger else { return }
         Task {
             do {
                 try await ledger.updatePricing(localModelPatterns: localModelPatterns, referenceModel: referenceModel,
-                                               priceAliases: priceAliases)
+                                               priceAliases: priceAliases, customPrices: customPrices)
                 note = nil
             } catch {
                 note = "Pricing update failed: \(Self.describe(error))"
@@ -479,8 +483,14 @@ final class History {
         guard let ledger else { return }
         Task {
             let priced = await ledger.pricedModels()
+            let referenced = await ledger.referenceModelHasPrice()
+            let shadowed = await ledger.customPricesInTable()
+            let shadowedAliases = await ledger.priceAliasesInTable()
             guard let unpriced = try? await ledger.unpricedModels(), ledger.store === self.ledger?.store else { return }
             if priced != pricedModels { pricedModels = priced }
+            if referenced != referenceModelHasPrice { referenceModelHasPrice = referenced }
+            if shadowed != customPricesInTable { customPricesInTable = shadowed }
+            if shadowedAliases != priceAliasesInTable { priceAliasesInTable = shadowedAliases }
             if unpriced != unpricedModels { unpricedModels = unpriced }
         }
     }
@@ -890,6 +900,9 @@ struct HistoryPreview {
     var insights: [SessionKey: SessionInsight] = [:]
     var unpricedModels: [UnpricedModel] = []
     var pricedModels: [String] = []
+    var referenceModelHasPrice = true
+    var customPricesInTable: Set<String> = []
+    var priceAliasesInTable: Set<String> = []
     var codexLimits: [LimitKind: LimitSample] = [:]
     var remoteDevices: [RemoteDevice] = []
     var thisMacName: String?
@@ -924,6 +937,9 @@ extension History {
         insights = preview.insights
         unpricedModels = preview.unpricedModels
         pricedModels = preview.pricedModels
+        referenceModelHasPrice = preview.referenceModelHasPrice
+        customPricesInTable = preview.customPricesInTable
+        priceAliasesInTable = preview.priceAliasesInTable
         codexLimits = preview.codexLimits
         remoteDevices = preview.remoteDevices
         thisMacName = preview.thisMacName

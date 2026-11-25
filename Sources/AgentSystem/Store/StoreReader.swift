@@ -448,18 +448,39 @@ public actor StoreReader {
     }
 
     public func unpricedModels() throws -> [UnpricedModel] {
-        try db.query("""
-            SELECT COALESCE(model, ''), COUNT(*), SUM(input), SUM(output), SUM(reasoning), SUM(cache_read),
-                   SUM(cache_write_5m), SUM(cache_write_1h), MIN(ts), MAX(ts)
-            FROM usage WHERE cost_usd IS NULL AND is_local = 0 AND native_usd IS NULL
-            GROUP BY 1 ORDER BY COUNT(*) DESC, 1
-            """) { row in
+        func fold(_ row: SQLiteRow) -> UnpricedModel {
             UnpricedModel(model: row.text(0), calls: row.int(1),
                           tokens: TokenCounts(input: row.int(2), output: row.int(3), reasoning: row.int(4),
                                               cacheRead: row.int(5), cacheWrite5m: row.int(6), cacheWrite1h: row.int(7)),
                           firstSeen: Date(timeIntervalSince1970: row.double(8)),
                           lastSeen: Date(timeIntervalSince1970: row.double(9)))
         }
+        let own = try db.query("""
+            SELECT COALESCE(model, ''), COUNT(*), SUM(input), SUM(output), SUM(reasoning), SUM(cache_read),
+                   SUM(cache_write_5m), SUM(cache_write_1h), MIN(ts), MAX(ts)
+            FROM usage WHERE cost_usd IS NULL AND is_local = 0 AND native_usd IS NULL
+            GROUP BY 1
+            """) { fold($0) }
+        let others = try db.query("""
+            SELECT COALESCE(model, ''), SUM(calls), SUM(input), SUM(output), SUM(reasoning), SUM(cache_read),
+                   SUM(cache_write_5m), SUM(cache_write_1h), MIN(ts), MAX(last_ts)
+            FROM remote_usage
+            WHERE cost_usd IS NULL AND is_local = 0 AND native_usd IS NULL AND \(Self.counted("remote_usage"))
+            GROUP BY 1
+            """) { fold($0) }
+        var merged: [String: UnpricedModel] = [:]
+        for entry in own + others {
+            guard var total = merged[entry.model] else {
+                merged[entry.model] = entry
+                continue
+            }
+            total.calls += entry.calls
+            total.tokens = total.tokens + entry.tokens
+            total.firstSeen = [total.firstSeen, entry.firstSeen].compactMap { $0 }.min()
+            total.lastSeen = [total.lastSeen, entry.lastSeen].compactMap { $0 }.max()
+            merged[entry.model] = total
+        }
+        return merged.values.sorted { ($1.calls, $0.model) < ($0.calls, $1.model) }
     }
 
     // MARK: - Limit samples

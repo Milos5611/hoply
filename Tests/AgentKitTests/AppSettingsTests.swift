@@ -130,6 +130,26 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(wrong.port, 5000)
     }
 
+    func testCustomPricesDecodeLeniently() throws {
+        var settings = AppSettings()
+        XCTAssertEqual(settings.customPrices, [:])
+        settings.customPrices = ["claude-nova-1": CustomModelPrice(input: 2, output: 8)]
+        XCTAssertEqual(AppSettings.decode(settings.encoded()).customPrices, settings.customPrices)
+        XCTAssertEqual(AppSettings.decode(Data(#"{"port": 5000}"#.utf8)).customPrices, [:])
+        let json = #"""
+            {"port": 5000, "customPrices": {
+              " Nova-1 ": {"input": 2, "output": 8}, "zero": {"input": 0, "output": 8}, "negative": {"input": 1, "output": -2},
+              "text": {"input": "x", "output": 8}, "missing": {"input": 1}, "list": [1, 2], " ": {"input": 1, "output": 1}}}
+            """#
+        let decoded = AppSettings.decode(Data(json.utf8))
+        XCTAssertEqual(decoded.customPrices, ["nova-1": CustomModelPrice(input: 2, output: 8)],
+                       "keys are trimmed and lowercased, a bad entry never costs the rest")
+        XCTAssertEqual(decoded.port, 5000)
+        let wrong = AppSettings.decode(Data(#"{"port": 5000, "customPrices": ["a", "b"]}"#.utf8))
+        XCTAssertEqual(wrong.customPrices, [:])
+        XCTAssertEqual(wrong.port, 5000)
+    }
+
     func testAwayModeIsOffByDefaultAndDecodesLeniently() {
         XCTAssertFalse(AppSettings().awayMode)
         let older = AppSettings.decode(Data(v1JSON.utf8))

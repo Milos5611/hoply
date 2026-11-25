@@ -66,12 +66,39 @@ enum Snapshot {
                 model.updates.showPreview(enabled: true)
                 #endif
                 model.showingSettings = true
+                try render(PricingSettings().font(.system(size: 12.5)).padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-pricing-\(name).png"))
+                var typo = PreviewData.settings
+                typo.referenceModel = "claude-sonet-5"
+                var noReference = PreviewData.history(now: now)
+                noReference.referenceModelHasPrice = false
+                if let saved = noReference.localModel?.saved {
+                    let unpriced = saved.points.map { point -> DailySpendPoint in
+                        var totals = point.totals
+                        totals.apiEquivUSD = 0
+                        return DailySpendPoint(day: point.day, series: point.series, totals: totals)
+                    }
+                    noReference.localModel?.saved = DailySpendSeries(days: saved.days, points: unpriced)
+                }
+                model.showPreview(settings: typo)
+                model.history.show(noReference)
+                try render(PricingSettings().font(.system(size: 12.5)).padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-pricing-reference-\(name).png"))
+                model.history.show(noReference, page: .localModel)
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_560), model: model,
+                           appearance: looks,
+                           to: directory.appendingPathComponent("dashboard-local-model-unpriced-reference-\(name).png"))
+                model.showPreview(settings: PreviewData.settings)
                 var allPriced = PreviewData.history(now: now)
                 allPriced.unpricedModels = []
+                model.showPreview(settings: AppSettings())
                 model.history.show(allPriced)
-                try render(PricingSettings(aliases: .constant([:])).font(.system(size: 12.5)).padding(12).frame(width: 448),
+                try render(PricingSettings().font(.system(size: 12.5)).padding(12).frame(width: 448),
                            model: model, appearance: looks, surface: popover,
                            to: directory.appendingPathComponent("panel-settings-pricing-empty-\(name).png"))
+                model.showPreview(settings: PreviewData.settings)
 
                 try render(PaletteSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
                                .padding(12).frame(width: 448),

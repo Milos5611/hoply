@@ -47,7 +47,7 @@ struct SettingsView: View {
 
                 HistorySettings()
 
-                PricingSettings(aliases: live.priceAliases)
+                PricingSettings()
 
                 CopilotPlanSettings()
 
@@ -313,21 +313,6 @@ struct HistorySettings: View {
                     }
                     .help(copilot.detail ?? "Copilot CLI's session-store.db, read every 10 seconds")
                 }
-                LabeledRow("Local models") {
-                    CommitField("qwen, llama", value: model.settings.localModelPatterns.joined(separator: ", ")) { text in
-                        let patterns = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                            .filter { !$0.isEmpty }
-                        model.update { $0.localModelPatterns = patterns }
-                        return model.settings.localModelPatterns.joined(separator: ", ")
-                    }
-                }
-                LabeledRow("Priced as") {
-                    CommitField(PricingTable.defaultReferenceModel, value: model.settings.referenceModel) { text in
-                        let reference = text.trimmingCharacters(in: .whitespaces)
-                        model.update { $0.referenceModel = reference.isEmpty ? PricingTable.defaultReferenceModel : reference }
-                        return model.settings.referenceModel
-                    }
-                }
                 LabeledRow("Claude dir") {
                     CommitField("~/.claude", value: model.settings.claudeConfigDir) { text in
                         model.update { $0.claudeConfigDir = text.trimmingCharacters(in: .whitespaces) }
@@ -346,7 +331,7 @@ struct HistorySettings: View {
                         return model.settings.codexHome
                     }
                 }
-                Hint("Usage comes from Claude Code's transcripts, Codex CLI's session files, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Models whose name contains a local pattern cost $0 and are priced as the reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds. Reindex re-reads the transcripts, Codex sessions and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
+                Hint("Usage comes from Claude Code's transcripts, Codex CLI's session files, Copilot CLI's session store, and the OpenTelemetry of Copilot IDE and Qwen Code. Reindex re-reads the transcripts, Codex sessions and the Copilot store without deleting history; sessions indexed by an earlier version get their subagent names that way.")
             }
         }
     }
@@ -387,52 +372,136 @@ struct HistorySettings: View {
 
 struct PricingSettings: View {
     @Environment(AppModel.self) private var model
-    @Binding var aliases: [String: String]
+
+    private struct Entry: Identifiable {
+        let name: String
+        let detail: String?
+        let offersPrice: Bool
+        var id: String { PricingSettings.key(name) }
+    }
 
     var body: some View {
-        let history = model.history
-        let unpriced = history.unpricedModels.filter { !$0.model.isEmpty }
-        let listed = Set(unpriced.map { Self.key($0.model) })
-        let aliased = aliases.keys.filter { !listed.contains($0) }.sorted()
+        let entries = entries()
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 SectionTitle("Pricing")
-                if unpriced.isEmpty, aliased.isEmpty {
-                    Hint("Every model in the ledger has a price. A model Hoply has no price for is listed here, so you can price it as a similar one.")
+                LabeledRow("Local models") {
+                    CommitField("qwen, llama", value: model.settings.localModelPatterns.joined(separator: ", ")) { text in
+                        let patterns = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        model.update { $0.localModelPatterns = patterns }
+                        return model.settings.localModelPatterns.joined(separator: ", ")
+                    }
+                }
+                referenceRow
+                Hint("Models whose name contains a local pattern cost $0 and are priced as the one reference model to show their API-equivalent; =name matches one model exactly, which is what \"Treat as local\" on the Local model page adds.")
+                if entries.isEmpty {
+                    Hint("Every model in the ledger has a price. A model Hoply has no price for is listed here, so you can price it as a similar one or enter its price.")
                 } else {
-                    ForEach(unpriced) { entry in
-                        row(entry.model, detail: "\(Format.count(entry.calls)) \(entry.calls == 1 ? "call" : "calls") · \(Format.tokens(entry.tokens.total)) tokens unpriced")
+                    Divider()
+                    ForEach(entries) { entry in
+                        row(entry)
                     }
-                    ForEach(aliased, id: \.self) { name in
-                        row(name, detail: nil)
-                    }
-                    Hint("Price as charges a model at another model's list price and re-prices its history as soon as you pick one. Spend stays \"unpriced\" until then, never $0.")
+                    Hint("Price as charges another model's list price; the fields charge your own input and output price per million tokens, fast mode too. Either re-prices its history at once, and a price Hoply's table gets later takes over. Spend stays \"unpriced\" until you set one, never $0.")
                 }
             }
         }
     }
 
-    private func row(_ name: String, detail: String?) -> some View {
-        let key = Self.key(name)
-        let target = aliases[key] ?? ""
-        return HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(detail ?? "Priced as \(Format.model(target))")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(detail != nil && target.isEmpty ? Color.orange : Color.secondary)
-                    .lineLimit(1)
+    private func entries() -> [Entry] {
+        let settings = model.settings
+        let unpriced = model.history.unpricedModels.filter { !$0.model.isEmpty }
+        var result = unpriced.map { entry in
+            Entry(name: entry.model,
+                  detail: "\(Format.count(entry.calls)) \(entry.calls == 1 ? "call" : "calls") · \(Format.tokens(entry.tokens.total)) tokens unpriced",
+                  offersPrice: true)
+        }
+        var seen = Set(result.map(\.id))
+        for name in settings.customPrices.keys.sorted() where seen.insert(name).inserted {
+            result.append(Entry(name: name, detail: nil, offersPrice: true))
+        }
+        for name in settings.priceAliases.keys.sorted() where seen.insert(name).inserted {
+            result.append(Entry(name: name, detail: nil, offersPrice: false))
+        }
+        return result
+    }
+
+    private var referenceRow: some View {
+        let saved = model.settings.referenceModel
+        let priced = model.history.pricedModels
+        let options = ReferenceModelOption.options(priced: priced, saved: saved,
+                                                   savedHasPrice: model.history.referenceModelHasPrice)
+        let warn = !model.history.referenceModelHasPrice
+        return VStack(alignment: .leading, spacing: 4) {
+            LabeledRow("Priced as") {
+                Picker("Priced as", selection: Binding(get: { saved }, set: { choice in
+                    model.update { $0.referenceModel = choice }
+                })) {
+                    ForEach(options) { option in
+                        Text(option.hasNoPrice ? "\(option.id) (no price)" : option.id).tag(option.id)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Spacer(minLength: 0)
             }
-            .help(name)
-            Spacer(minLength: 8)
-            Picker("Price as", selection: Binding(get: { target }, set: { aliases[key] = $0.isEmpty ? nil : $0 })) {
-                Text("Price as…").tag("")
-                ForEach(choices(including: target), id: \.self) { Text($0).tag($0) }
+            if warn {
+                Label("Hoply has no price for \"\(saved)\". Local models read as unpriced, not $0, until you pick a model from the list.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .labelsHidden()
-            .frame(width: 170)
+        }
+    }
+
+    private func row(_ entry: Entry) -> some View {
+        let key = entry.id
+        let name = entry.name
+        let settings = model.settings
+        let target = settings.priceAliases[key] ?? ""
+        let custom = settings.customPrices[key]
+        let detail: String
+        if custom != nil, model.history.customPricesInTable.contains(key) {
+            detail = "Hoply's price applies · yours unused"
+        } else if let custom {
+            detail = "Your price · $\(PriceInput.format(custom.input)) in · $\(PriceInput.format(custom.output)) out"
+        } else if !target.isEmpty, model.history.priceAliasesInTable.contains(key) {
+            detail = "Hoply's price applies · Price as unused"
+        } else if !target.isEmpty {
+            detail = "Priced as \(Format.model(target))"
+        } else {
+            detail = entry.detail ?? "No price"
+        }
+        let unresolved = custom == nil && target.isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(detail)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(unresolved ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                }
+                .help(name)
+                Spacer(minLength: 8)
+                Picker("Price as", selection: Binding(get: { target }, set: { choice in
+                    model.update {
+                        $0.priceAliases[key] = choice.isEmpty ? nil : choice
+                        if !choice.isEmpty { $0.customPrices[key] = nil }
+                    }
+                })) {
+                    Text("Price as…").tag("")
+                    ForEach(choices(including: target), id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 170)
+            }
+            if entry.offersPrice {
+                PriceFields(key: key, saved: custom)
+            }
         }
     }
 
@@ -441,8 +510,69 @@ struct PricingSettings: View {
         return target.isEmpty || priced.contains(target) ? priced : priced + [target]
     }
 
-    private static func key(_ model: String) -> String {
+    fileprivate static func key(_ model: String) -> String {
         model.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+}
+
+private struct PriceFields: View {
+    @Environment(AppModel.self) private var model
+    let key: String
+    let saved: CustomModelPrice?
+
+    @State private var input: String
+    @State private var output: String
+
+    init(key: String, saved: CustomModelPrice?) {
+        self.key = key
+        self.saved = saved
+        _input = State(initialValue: saved.map { PriceInput.format($0.input) } ?? "")
+        _output = State(initialValue: saved.map { PriceInput.format($0.output) } ?? "")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("or $ per M tokens")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            CommitField("input", value: input) { text in
+                if let value = PriceInput.parse(text) { input = PriceInput.format(value) }
+                save()
+                return input
+            }
+            .frame(width: 74)
+            CommitField("output", value: output) { text in
+                if let value = PriceInput.parse(text) { output = PriceInput.format(value) }
+                save()
+                return output
+            }
+            .frame(width: 74)
+            Button {
+                model.update { $0.customPrices[key] = nil }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .opacity(saved == nil ? 0 : 1)
+            .disabled(saved == nil)
+            .tooltip("Remove this price")
+        }
+        .onChange(of: saved) { _, new in
+            input = new.map { PriceInput.format($0.input) } ?? ""
+            output = new.map { PriceInput.format($0.output) } ?? ""
+        }
+    }
+
+    private func save() {
+        guard let input = PriceInput.parse(input), let output = PriceInput.parse(output) else { return }
+        let price = CustomModelPrice(input: input, output: output)
+        guard price.isValid, price != saved else { return }
+        model.update {
+            $0.customPrices[key] = price
+            $0.priceAliases[key] = nil
+        }
     }
 }
 

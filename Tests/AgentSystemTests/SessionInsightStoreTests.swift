@@ -215,6 +215,81 @@ final class SessionInsightStoreTests: XCTestCase {
 
         var settings = AppSettings()
         settings.priceAliases = ["claude-sonnet-4-5": "claude-sonnet-4-6"]
+        settings.customPrices = ["claude-nova-1": CustomModelPrice(input: 2, output: 8)]
         XCTAssertEqual(LedgerConfiguration(settings: settings).priceAliases, settings.priceAliases)
+        XCTAssertEqual(LedgerConfiguration(settings: settings).customPrices, settings.customPrices)
+    }
+
+    func testAnAliasedModelRepricesToTheTablesPriceOnceTheTableKnowsIt() async throws {
+        let directory = try TempDirectory()
+        let overridesURL = directory.url.appendingPathComponent("pricing.json")
+        let path = directory.path("hoply.sqlite")
+        let aliases = ["claude-nova-1": "claude-opus-4-6"]
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000)
+        let first = try Store(path: path, pricing: PricingOverrides.table(overridesURL: overridesURL,
+                                                                          localModelPatterns: ["qwen"],
+                                                                          referenceModel: PricingTable.defaultReferenceModel,
+                                                                          aliases: aliases))
+        try await first.apply(LedgerBatch(usage: [call("cc:1", at: 0, model: "claude-nova-1", tokens: tokens)]))
+        let reader = try StoreReader(path: path)
+        var totals = try await reader.sessionTotals(for: [key])[key]
+        XCTAssertEqual(try XCTUnwrap(totals?.apiEquivUSD), 7.5, accuracy: 1e-9, "priced as claude-opus-4-6: 5 + 2.5")
+
+        try Data(#"{"models": {"claude-nova-1": {"input": 1, "output": 2}}}"#.utf8).write(to: overridesURL)
+        let changed = try await first.setPricing(PricingOverrides.table(overridesURL: overridesURL,
+                                                                        localModelPatterns: ["qwen"],
+                                                                        referenceModel: PricingTable.defaultReferenceModel,
+                                                                        aliases: aliases))
+        XCTAssertEqual(changed, 1, "the table's new price is a new pricing_rev")
+        totals = try await reader.sessionTotals(for: [key])[key]
+        XCTAssertEqual(try XCTUnwrap(totals?.apiEquivUSD), 1.2, accuracy: 1e-9, "the table's 1/2, not the alias target's 5/25")
+    }
+
+    func testACustomPriceRepricesTheUnpricedModelsRows() async throws {
+        let directory = try TempDirectory()
+        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
+                                                                   claudeConfigDirectory: directory.path("claude"),
+                                                                   copilotHome: directory.path("copilot"),
+                                                                   pricingOverridesURL: nil, watchForChanges: false))
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000)
+        try await ledger.store.apply(LedgerBatch(usage: [
+            call("cc:1", at: 0, model: "claude-nova-1-20260101", tokens: tokens),
+            call("cc:2", at: 10, model: "claude-nova-1", tokens: tokens),
+        ]))
+        var unpriced = try await ledger.unpricedModels()
+        XCTAssertEqual(unpriced.count, 2)
+
+        let changed = try await ledger.updatePricing(localModelPatterns: ["qwen"],
+                                                     referenceModel: PricingTable.defaultReferenceModel,
+                                                     customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        XCTAssertEqual(changed, 2)
+        unpriced = try await ledger.unpricedModels()
+        XCTAssertEqual(unpriced, [])
+        let totals = try await ledger.reader.sessionTotals(for: [key])[key]
+        XCTAssertEqual(try XCTUnwrap(totals?.apiEquivUSD), 2 * (2 + 0.8), accuracy: 1e-9)
+        XCTAssertEqual(totals?.hasUnpriced, false)
+
+        let kept = try await ledger.updatePricing(localModelPatterns: ["qwen"],
+                                                  referenceModel: PricingTable.defaultReferenceModel)
+        XCTAssertEqual(kept, 0, "without new custom prices the ones in use stay")
+        let removed = try await ledger.updatePricing(localModelPatterns: ["qwen"],
+                                                     referenceModel: PricingTable.defaultReferenceModel, customPrices: [:])
+        XCTAssertEqual(removed, 2)
+        unpriced = try await ledger.unpricedModels()
+        XCTAssertEqual(unpriced.count, 2)
+    }
+
+    func testTheReferenceModelHasNoPriceUntilItNamesOne() async throws {
+        let directory = try TempDirectory()
+        let ledger = try Ledger(configuration: LedgerConfiguration(databasePath: directory.path("hoply.sqlite"),
+                                                                   claudeConfigDirectory: directory.path("claude"),
+                                                                   copilotHome: directory.path("copilot"),
+                                                                   pricingOverridesURL: nil, referenceModel: "claude-sonet-5-5",
+                                                                   watchForChanges: false))
+        let before = await ledger.referenceModelHasPrice()
+        XCTAssertFalse(before)
+        try await ledger.updatePricing(localModelPatterns: ["qwen"], referenceModel: "claude-sonnet-5-5-20260101")
+        let after = await ledger.referenceModelHasPrice()
+        XCTAssertTrue(after)
     }
 }

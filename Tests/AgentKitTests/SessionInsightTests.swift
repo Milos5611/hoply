@@ -281,6 +281,24 @@ final class StatusPriorityTests: XCTestCase {
         XCTAssertEqual(grouping.waiting.map { grouping.status(of: $0).label }, ["Permission", "Input", "Limited", "Your turn"])
         XCTAssertEqual(grouping.limitedUntil.count, 1)
     }
+
+    func testGroupingFollowsTheInstantItIsGivenNotTheWallClock() {
+        let past = Date(timeIntervalSince1970: 1_000_000_000)
+        let key = SessionKey(source: .claudeCode, id: "limited")
+        for kind in [AgentEvent.Kind.promptSubmitted("a"), .turnFinished(nil)] {
+            board.apply(AgentEvent(key: key, kind: kind, time: past, cwd: "/r/limited", fromHook: true))
+        }
+        let limit = LimitSample(kind: .fiveHour, ts: past, utilization: 100, resetsAt: past.addingTimeInterval(3600))
+        func grouping(at seconds: TimeInterval) -> SessionGrouping {
+            SessionGrouping(sessions: board.ordered, limits: [limit], now: past.addingTimeInterval(seconds))
+        }
+
+        XCTAssertEqual(grouping(at: 70).limitedUntil[key], past.addingTimeInterval(3600))
+        XCTAssertEqual(grouping(at: 70), grouping(at: 70), "the same instant gives the same grouping")
+        XCTAssertNil(grouping(at: 3601).limitedUntil[key], "after the reset the session is not limited")
+        XCTAssertTrue(SessionGrouping(sessions: board.ordered, limits: [limit]).limitedUntil.isEmpty,
+                      "the default reads the wall clock, long past that reset, so only the given instant held the session")
+    }
 }
 
 final class ContextWindowTests: XCTestCase {

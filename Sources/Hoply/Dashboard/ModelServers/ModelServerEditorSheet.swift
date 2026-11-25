@@ -557,7 +557,7 @@ struct ServedModelRow: View {
                 .controlSize(.small)
                 .disabled(viaPattern)
                 .help(viaPattern
-                      ? "Local because its name contains \"\(match ?? "")\", a pattern in Settings → History → Local models"
+                      ? "Local because its name contains \"\(match ?? "")\", a pattern in Settings → Pricing → Local models"
                       : "A local model costs $0 and is priced at the reference model to show what it saved vs the API")
         }
     }

@@ -805,9 +805,9 @@ private struct SavedVsAPICard: View {
         let reference = Format.model(model.settings.referenceModel)
         let total = data?.savedTotal ?? .zero
         // Local rows have no API-equivalent while the reference model has no price; that must not read as $0.
-        let unpriced = total.calls > 0 && total.apiEquivUSD <= 0
+        let unpriced = total.calls > 0 && (!model.history.referenceModelHasPrice || total.apiEquivUSD <= 0)
         let usage = "\(Format.tokens(total.tokens.total)) tokens · \(Format.count(total.calls)) calls"
-        DashboardCard(title: "Saved vs API", subtitle: "Last \(data?.range.dailyDays ?? 7) days · priced at \(reference)") {
+        DashboardCard(title: "Saved vs API", subtitle: "Last \(data?.range.dailyDays ?? 7) days · priced at \(reference)\(model.history.referenceModelHasPrice ? "" : " (no price)")") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
                     Text(unpriced ? "unpriced" : Format.spend(total))
@@ -818,12 +818,17 @@ private struct SavedVsAPICard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                SpendChart(series: data?.saved ?? DailySpendSeries(days: [], points: []), split: .source)
-                    .frame(height: 214)
+                if total.calls > 0, !model.history.referenceModelHasPrice {
+                    EmptyNote(text: "Nothing to chart until \(reference) has a price.")
+                        .frame(height: 214)
+                } else {
+                    SpendChart(series: data?.saved ?? DailySpendSeries(days: [], points: []), split: .source)
+                        .frame(height: 214)
+                }
             }
         }
         .help(unpriced
-              ? "Hoply has no price for \(reference), so it can't say what these calls would cost at the API. Set a priced reference model in Settings → History (\"Priced as\")."
-              : "Your agents' calls to local models cost $0. This is what the same tokens would cost at \(reference)'s API prices; change the reference model in Settings → History.")
+              ? "Hoply has no price for \(reference), so it can't say what these calls would cost at the API. Pick a priced reference model in Settings → Pricing (\"Priced as\")."
+              : "Your agents' calls to local models cost $0. This is what the same tokens would cost at \(reference)'s API prices; change the reference model in Settings → Pricing.")
     }
 }

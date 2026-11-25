@@ -109,8 +109,135 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(plain.pricedModelIDs, plain.pricedModelIDs.sorted())
     }
 
+    func testFableAndMythos52AreBundledAtTheirListPrice() {
+        let tokens = TokenCounts(input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000,
+                                 cacheWrite5m: 1_000_000, cacheWrite1h: 1_000_000)
+        for model in ["claude-fable-5-2", "claude-mythos-5-2", "claude-fable-5-2-20260901", "claude-mythos-5-2[1m]"] {
+            XCTAssertEqual(table.price(model: model, tokens: tokens, speed: "standard").costUSD ?? 0, 74.2, accuracy: 1e-9,
+                           model)
+            XCTAssertEqual(table.price(model: model, tokens: tokens, speed: "fast").costUSD ?? 0, 16 + 80 + 0.4 + 20 + 32,
+                           accuracy: 1e-9, model)
+        }
+        XCTAssertEqual(table.match("claude-fable-5-2")?.id, "claude-fable-5-2")
+        XCTAssertEqual(table.match("claude-fable-5")?.id, "claude-fable-5", "the older ids keep their own price")
+        XCTAssertNil(table.match("claude-fable-5-3"), "a newer minor version is still not priced as an older one")
+        XCTAssertEqual(table.price(model: "claude-sonnet-5-5", tokens: TokenCounts(cacheRead: 1_000_000), speed: nil)
+            .costUSD ?? 0, 0.1, accuracy: 1e-9)
+    }
+
+    func testReferenceModelResolvesThroughMatchAndAnUnpricedOneIsNeverFree() {
+        let tokens = TokenCounts(input: 1_000_000, output: 1_000_000)
+        for reference in ["claude-opus-5-5-20260101", "Claude-Opus-5-5[1m]", " claude-opus-5-5 ", "anthropic.claude-opus-5-5"] {
+            let custom = PricingTable.bundled(referenceModel: reference)
+            XCTAssertTrue(custom.referenceModelHasPrice, reference)
+            XCTAssertEqual(custom.price(model: "qwen3", tokens: tokens, speed: nil).apiEquivUSD ?? 0, 24, accuracy: 1e-9,
+                           reference)
+        }
+        let typo = PricingTable.bundled(referenceModel: "claude-sonet-5-5")
+        XCTAssertFalse(typo.referenceModelHasPrice)
+        let local = typo.price(model: "qwen3", tokens: tokens, speed: nil)
+        XCTAssertTrue(local.isLocal)
+        XCTAssertEqual(local.costUSD, 0)
+        XCTAssertNil(local.apiEquivUSD, "a reference with no price leaves the API equivalent unpriced, never $0")
+        XCTAssertTrue(table.referenceModelHasPrice)
+        XCTAssertTrue(table.hasPrice(for: "claude-haiku-4-5-20251001"))
+        XCTAssertFalse(table.hasPrice(for: "claude-opus-5-6"))
+    }
+
+    func testCustomPricePricesAnUnknownModelOnlyWhenTheTableHasNone() {
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000, cacheRead: 1_000_000, cacheWrite5m: 1_000_000)
+        let plain = PricingTable.bundled()
+        let custom = PricingTable.bundled(customPrices: [" Claude-Nova-1 ": CustomModelPrice(input: 2, output: 8),
+                                                        "claude-opus-5-5": CustomModelPrice(input: 99, output: 99)])
+        XCTAssertNil(plain.price(model: "claude-nova-1-20260101", tokens: tokens, speed: nil).costUSD)
+        let expected = 2 + 0.8 + 0.2 + 2.5
+        for speed in [nil, "fast"] {
+            XCTAssertEqual(custom.price(model: "claude-nova-1-20260101", tokens: tokens, speed: speed).costUSD ?? 0, expected,
+                           accuracy: 1e-9)
+        }
+        XCTAssertEqual(custom.price(model: "claude-nova-1", tokens: tokens, speed: nil).apiEquivUSD ?? 0, expected,
+                       accuracy: 1e-9)
+        XCTAssertEqual(Set(custom.customPrices.keys), ["claude-nova-1", "claude-opus-5-5"])
+        XCTAssertEqual(custom.price(model: "claude-opus-5-5", tokens: tokens, speed: nil),
+                       plain.price(model: "claude-opus-5-5", tokens: tokens, speed: nil),
+                       "a price in the table wins over a custom one")
+        XCTAssertNil(custom.price(model: "claude-nova-2", tokens: tokens, speed: nil).costUSD)
+        XCTAssertFalse(custom.pricedModelIDs.contains("claude-nova-1"), "custom prices are not in the Price as list")
+        XCTAssertTrue(custom.hasPrice(for: "claude-nova-1"))
+
+        let both = PricingTable.bundled(aliases: ["claude-nova-1": "claude-opus-4-6"],
+                                        customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        XCTAssertEqual(both.match("claude-nova-1")?.id, "claude-opus-4-6", "an alias that resolves wins over a custom price")
+        let dangling = PricingTable.bundled(aliases: ["claude-nova-1": "no-such-model"],
+                                            customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        XCTAssertEqual(dangling.price(model: "claude-nova-1", tokens: tokens, speed: nil).costUSD ?? 0, expected,
+                       accuracy: 1e-9, "an alias to nothing falls through to the custom price")
+
+        XCTAssertNotEqual(custom.revision, plain.revision)
+        XCTAssertEqual(PricingTable.bundled(customPrices: [:]).revision, plain.revision)
+        XCTAssertNotEqual(PricingTable.bundled(customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 9)]).revision,
+                          PricingTable.bundled(customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)]).revision)
+    }
+
+    func testTheTableBeatsAPriceAsAliasForAModelItPrices() {
+        let tokens = TokenCounts(input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000)
+        let plain = PricingTable.bundled()
+        let aliased = PricingTable.bundled(aliases: ["claude-mythos-5-2": "claude-mythos-5-1",
+                                                     "claude-mythos-5-2-20260901": "claude-mythos-5-1"])
+        for model in ["claude-mythos-5-2", "claude-mythos-5-2-20260901"] {
+            XCTAssertEqual(aliased.match(model)?.id, "claude-mythos-5-2", model)
+            XCTAssertEqual(aliased.price(model: model, tokens: tokens, speed: nil).costUSD ?? 0, 8 + 40 + 0.2,
+                           accuracy: 1e-9, "the table's 8/40, not the alias target's 10/50")
+        }
+        XCTAssertEqual(aliased.price(model: "claude-mythos-5-2", tokens: tokens, speed: nil),
+                       plain.price(model: "claude-mythos-5-2", tokens: tokens, speed: nil))
+        XCTAssertNotEqual(aliased.revision, plain.revision)
+
+        let unknown = PricingTable.bundled(aliases: ["claude-mythos-5-3": "claude-mythos-5-1"])
+        XCTAssertEqual(unknown.match("claude-mythos-5-3")?.id, "claude-mythos-5-1", "an alias for an unknown model applies")
+        let withTyped = PricingTable.bundled(aliases: ["claude-nova-1": "no-such-model"],
+                                             customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        XCTAssertEqual(withTyped.price(model: "claude-nova-1", tokens: tokens, speed: nil).costUSD ?? 0, 2 + 8 + 0.2,
+                       accuracy: 1e-9, "an alias to nothing still falls through to the typed price")
+    }
+
+    func testPriceAliasesTheTableAlreadyPricesAreListed() {
+        let table = PricingTable.bundled(aliases: ["claude-mythos-5-2": "claude-mythos-5-1",
+                                                   "claude-haiku-4-5-20251001": "claude-opus-5",
+                                                   "claude-nova-1": "claude-opus-5", "gpt-x": "no-such-model"])
+        XCTAssertEqual(table.priceAliasesInTable, ["claude-mythos-5-2", "claude-haiku-4-5-20251001"])
+        XCTAssertEqual(PricingTable.bundled().priceAliasesInTable, [])
+        let merged = PricingTable.bundled(overrides: PricingTable.Document(models: ["claude-nova-1": ModelPrice(input: 1, output: 1)]),
+                                          aliases: ["claude-nova-1": "claude-opus-5"])
+        XCTAssertEqual(merged.priceAliasesInTable, ["claude-nova-1"], "pricing.json counts as the table")
+    }
+
+    func testCustomPricesTheTableAlreadyPricesAreListed() {
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000)
+        let custom = PricingTable.bundled(customPrices: [
+            "claude-opus-5-5": CustomModelPrice(input: 99, output: 99), "claude-haiku-4-5-20251001": CustomModelPrice(input: 1, output: 1),
+            "claude-nova-1": CustomModelPrice(input: 2, output: 8),
+        ])
+        XCTAssertEqual(custom.customPricesInTable, ["claude-opus-5-5", "claude-haiku-4-5-20251001"])
+        XCTAssertEqual(custom.price(model: "claude-nova-1", tokens: tokens, speed: nil).costUSD ?? 0, 2.8, accuracy: 1e-9)
+        XCTAssertEqual(PricingTable.bundled().customPricesInTable, [])
+        let merged = PricingTable.bundled(overrides: PricingTable.Document(models: ["claude-nova-1": ModelPrice(input: 1, output: 1)]),
+                                          customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        XCTAssertEqual(merged.customPricesInTable, ["claude-nova-1"], "pricing.json counts as the table")
+    }
+
+    func testCustomPricesWithNothingUsableAreDropped() {
+        let dropped = PricingTable.bundled(customPrices: [
+            "a": CustomModelPrice(input: 0, output: 5), "b": CustomModelPrice(input: 1, output: -1),
+            "c": CustomModelPrice(input: .nan, output: 1), "d": CustomModelPrice(input: 1, output: .infinity),
+            " ": CustomModelPrice(input: 1, output: 1),
+        ])
+        XCTAssertEqual(dropped.customPrices, [:])
+        XCTAssertEqual(dropped.revision, PricingTable.bundled().revision)
+    }
+
     func testBundledTableDecodes() {
-        XCTAssertEqual(BundledPricing.document.models.count, 33)
+        XCTAssertEqual(BundledPricing.document.models.count, 35)
         XCTAssertEqual(BundledPricing.document.webSearchPerThousand, 10)
     }
 

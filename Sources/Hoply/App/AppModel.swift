@@ -69,7 +69,7 @@ final class AppModel {
     var activeCount: Int { sessions.filter { $0.state != .ended }.count }
     var grouping: SessionGrouping {
         SessionGrouping(sessions: sessions, projects: history.unavailableReason == nil ? projectsByCwd : [:],
-                        limits: limitSamples, localModelPatterns: settings.localModelPatterns, now: Date())
+                        limits: limitSamples, localModelPatterns: settings.localModelPatterns, now: clock.now)
     }
     var limitSamples: [LimitSample] {
         let codex = Array(history.codexLimits.values)
@@ -660,9 +660,9 @@ final class AppModel {
             unresolvedCwds = []
             history.reopen(LedgerConfiguration(settings: updated))
         } else if updated.localModelPatterns != old.localModelPatterns || updated.referenceModel != old.referenceModel
-                    || updated.priceAliases != old.priceAliases {
+                    || updated.priceAliases != old.priceAliases || updated.customPrices != old.customPrices {
             history.updatePricing(localModelPatterns: updated.localModelPatterns, referenceModel: updated.referenceModel,
-                                  priceAliases: updated.priceAliases)
+                                  priceAliases: updated.priceAliases, customPrices: updated.customPrices)
         }
     }
 

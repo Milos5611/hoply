@@ -87,6 +87,24 @@ public struct ModelPrice: Codable, Sendable, Equatable {
     }
 }
 
+public struct CustomModelPrice: Codable, Sendable, Equatable {
+    public var input: Double
+    public var output: Double
+
+    public init(input: Double, output: Double) {
+        self.input = input
+        self.output = output
+    }
+
+    public var isValid: Bool {
+        input.isFinite && output.isFinite && input > 0 && output > 0
+    }
+
+    var modelPrice: ModelPrice {
+        ModelPrice(input: input, output: output, fast: ModelPrice.Fast(input: input, output: output))
+    }
+}
+
 public struct PricedUsage: Sendable, Equatable {
     public var costUSD: Double?
     public var apiEquivUSD: Double?
@@ -140,11 +158,14 @@ public struct PricingTable: Sendable, Equatable {
     public let localModelPatterns: [String]
     public let referenceModel: String
     public let aliases: [String: String]
+    public let customPrices: [String: CustomModelPrice]
     public let revision: String
+    private let customModels: [String: ModelPrice]
 
     public init(models: [String: ModelPrice], webSearchPerThousand: Double = 10,
                 localModelPatterns: [String] = PricingTable.defaultLocalModelPatterns,
-                referenceModel: String = PricingTable.defaultReferenceModel, aliases: [String: String] = [:]) {
+                referenceModel: String = PricingTable.defaultReferenceModel, aliases: [String: String] = [:],
+                customPrices: [String: CustomModelPrice] = [:]) {
         var lowered: [String: ModelPrice] = [:]
         for (key, value) in models { lowered[key.lowercased()] = value }
         self.models = lowered
@@ -160,8 +181,16 @@ public struct PricingTable: Sendable, Equatable {
             if !from.isEmpty, !to.isEmpty, from != to { cleaned[from] = to }
         }
         self.aliases = cleaned
+        var custom: [String: CustomModelPrice] = [:]
+        for (model, price) in customPrices where price.isValid {
+            let id = model.trimmingCharacters(in: .whitespaces).lowercased()
+            if !id.isEmpty { custom[id] = price }
+        }
+        self.customPrices = custom
+        customModels = custom.mapValues(\.modelPrice)
         revision = Self.hash(Document(models: lowered, webSearchPerThousand: webSearchPerThousand),
-                             patterns: self.localModelPatterns, reference: self.referenceModel, aliases: cleaned)
+                             patterns: self.localModelPatterns, reference: self.referenceModel, aliases: cleaned,
+                             customPrices: custom)
     }
 
     public var pricedModelIDs: [String] { models.keys.sorted() }
@@ -169,13 +198,15 @@ public struct PricingTable: Sendable, Equatable {
     public static func bundled(overrides: Document? = nil,
                                localModelPatterns: [String] = defaultLocalModelPatterns,
                                referenceModel: String = defaultReferenceModel,
-                               aliases: [String: String] = [:]) -> PricingTable {
+                               aliases: [String: String] = [:],
+                               customPrices: [String: CustomModelPrice] = [:]) -> PricingTable {
         let bundled = BundledPricing.document
         var models = bundled.models
         for (key, value) in overrides?.models ?? [:] { models[key] = value }
         return PricingTable(models: models,
                             webSearchPerThousand: overrides?.webSearchPerThousand ?? bundled.webSearchPerThousand ?? 10,
-                            localModelPatterns: localModelPatterns, referenceModel: referenceModel, aliases: aliases)
+                            localModelPatterns: localModelPatterns, referenceModel: referenceModel, aliases: aliases,
+                            customPrices: customPrices)
     }
 
     public func isLocal(_ model: String?) -> Bool {
@@ -205,13 +236,31 @@ public struct PricingTable: Sendable, Equatable {
         return patterns.filter { $0.lowercased() != exact }
     }
 
+    // The table wins, then an alias that resolves to a table model, and a typed price only when neither has the model.
     public func match(_ model: String) -> (id: String, price: ModelPrice)? {
         let lowered = model.lowercased()
-        if let target = aliases[lowered] ?? aliases[Self.normalize(lowered)], let hit = direct(target) { return hit }
-        return direct(lowered)
+        if let hit = direct(lowered, in: models) { return hit }
+        if let target = aliases[lowered] ?? aliases[Self.normalize(lowered)], let hit = direct(target, in: models) {
+            return hit
+        }
+        return direct(lowered, in: customModels)
     }
 
-    private func direct(_ lowered: String) -> (id: String, price: ModelPrice)? {
+    public func hasPrice(for model: String) -> Bool {
+        match(model.trimmingCharacters(in: .whitespaces)) != nil
+    }
+
+    public var priceAliasesInTable: Set<String> {
+        Set(aliases.keys.filter { direct($0, in: models) != nil })
+    }
+
+    public var customPricesInTable: Set<String> {
+        Set(customPrices.keys.filter { direct($0, in: models) != nil })
+    }
+
+    public var referenceModelHasPrice: Bool { hasPrice(for: referenceModel) }
+
+    private func direct(_ lowered: String, in models: [String: ModelPrice]) -> (id: String, price: ModelPrice)? {
         if let price = models[lowered] { return (lowered, price) }
         let normalized = Self.normalize(lowered)
         if let price = models[normalized] { return (normalized, price) }
@@ -233,7 +282,7 @@ public struct PricingTable: Sendable, Equatable {
         let isFast = speed?.lowercased() == "fast"
         let prompt = promptTokens ?? tokens.promptTokens
         if isLocal(model) {
-            let reference = models[referenceModel].flatMap { $0.rates(promptTokens: prompt, fast: false) }
+            let reference = match(referenceModel).flatMap { $0.price.rates(promptTokens: prompt, fast: false) }
             return PricedUsage(costUSD: 0, apiEquivUSD: reference?.cost(tokens), isLocal: true)
         }
         guard let model, let rates = match(model)?.price.rates(promptTokens: prompt, fast: isFast) else {
@@ -256,19 +305,21 @@ public struct PricingTable: Sendable, Equatable {
     }
 
     private static func hash(_ document: Document, patterns: [String], reference: String,
-                             aliases: [String: String]) -> String {
+                             aliases: [String: String], customPrices: [String: CustomModelPrice]) -> String {
         struct Canonical: Encodable {
             var document: Document
             var localModelPatterns: [String]
             var referenceModel: String
             // Nil (left out of the JSON) without aliases, so adding the field re-priced nobody's ledger.
             var aliases: [String: String]?
+            var customPrices: [String: CustomModelPrice]?
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = (try? encoder.encode(Canonical(document: document, localModelPatterns: patterns.sorted(),
                                                   referenceModel: reference,
-                                                  aliases: aliases.isEmpty ? nil : aliases))) ?? Data()
+                                                  aliases: aliases.isEmpty ? nil : aliases,
+                                                  customPrices: customPrices.isEmpty ? nil : customPrices))) ?? Data()
         return FNV1a.hex64(data)
     }
 }

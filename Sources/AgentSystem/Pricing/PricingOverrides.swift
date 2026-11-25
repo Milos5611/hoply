@@ -12,8 +12,10 @@ public enum PricingOverrides {
     }
 
     public static func table(overridesURL: URL? = defaultURL, localModelPatterns: [String],
-                             referenceModel: String, aliases: [String: String] = [:]) -> PricingTable {
+                             referenceModel: String, aliases: [String: String] = [:],
+                             customPrices: [String: CustomModelPrice] = [:]) -> PricingTable {
         PricingTable.bundled(overrides: overridesURL.flatMap { load(from: $0) },
-                             localModelPatterns: localModelPatterns, referenceModel: referenceModel, aliases: aliases)
+                             localModelPatterns: localModelPatterns, referenceModel: referenceModel, aliases: aliases,
+                             customPrices: customPrices)
     }
 }

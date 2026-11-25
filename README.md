@@ -206,16 +206,20 @@ nothing is counted twice:
   are recognized by their ids and counted once.
 
 Costs are API-equivalent list prices from a table bundled in the app. Local models (any model whose name contains
-`qwen`; change it in Settings → History) cost $0, and are also priced at a reference model (default
-`claude-sonnet-5-5`) to show what they saved. A model Hoply doesn't know shows as unpriced, never as $0; Settings →
-Pricing lets you price it as a model it does know. To add or correct a price, put the same shape as the bundled table
-in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
+`qwen`; change it in Settings → Pricing) cost $0, and are also priced at one reference model (default
+`claude-sonnet-5-5`, picked from the table in Settings → Pricing) to show what they saved. A model Hoply doesn't know
+shows as unpriced, never as $0, and so does a local model whose reference model has no price (Settings warns you).
+Settings → Pricing lists every unpriced model, also ones another Mac sent, and lets you price it as a model Hoply does
+know or enter its input and output price per million tokens; either re-prices its history at once. A price Hoply's
+table gets later takes over from one you typed and from a "Price as" choice. To add or correct a price in the table itself, put the same shape
+as the bundled table in `~/Library/Application Support/Hoply/pricing.json`, in USD per million tokens:
 
 ```json
 { "models": { "claude-opus-4-5": { "input": 5, "output": 25 } } }
 ```
 
-Cache prices default to 0.1× input for a read, 1.25× for a 5-minute write and 2× for a 1-hour write. You can set
+Cache prices default to 0.1× input for a read, 1.25× for a 5-minute write and 2× for a 1-hour write (also for a price
+you enter in Settings, which holds input and output only and charges the model's fast-mode calls the same). You can set
 `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, `fast` and `longContext` per model.
 
 </details>

@@ -10,7 +10,9 @@ enum PreviewData {
         settings.claudeLimitsEnabled = true
         settings.quietHoursEnabled = true
         settings.mutedProjectRoots = ["\(home)/Project/hoply"]
-        settings.priceAliases = ["claude-sonnet-4-5": "claude-sonnet-5"]
+        settings.priceAliases = ["claude-sonnet-4-5": "claude-sonnet-5", "claude-mythos-5-2": "claude-mythos-5-1"]
+        settings.customPrices = ["acme-coder-2": CustomModelPrice(input: 0.8, output: 2.4),
+                                 "claude-haiku-4-5": CustomModelPrice(input: 1.1, output: 5.5)]
         return settings
     }
 
@@ -626,7 +628,8 @@ enum PreviewData {
             insights: insights(now: now),
             unpricedModels: [UnpricedModel(model: "claude-nova-preview", calls: unpricedTotals.calls,
                                            tokens: unpricedTotals.tokens)],
-            pricedModels: ["claude-fable-5", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"],
+            pricedModels: ["claude-fable-5", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5", "claude-sonnet-5-5"],
+            customPricesInTable: ["claude-haiku-4-5"], priceAliasesInTable: ["claude-mythos-5-2"],
             codexLimits: codexLimits(now: now))
     }
 

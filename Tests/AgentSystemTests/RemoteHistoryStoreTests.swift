@@ -237,6 +237,11 @@ final class RemoteHistoryStoreTests: XCTestCase {
         XCTAssertEqual(tier?.costUSD ?? 0, (400_000 * 5 + 1_000 * 30) / 1_000_000, accuracy: 1e-9,
                        "four calls of 100k are not one call of 400k")
 
+        let listed = try await reader.unpricedModels()
+        XCTAssertEqual(listed.map(\.model), ["mystery-model"], "another Mac's unpriced model is listed too")
+        XCTAssertEqual(listed.first?.calls, 1)
+        XCTAssertEqual(listed.first?.tokens, tokens)
+
         let aliased = PricingTable.bundled(aliases: ["mystery-model": "claude-opus-5-5"])
         let repriced = try await store.setPricing(aliased)
         XCTAssertGreaterThan(repriced, 0)
@@ -246,11 +251,39 @@ final class RemoteHistoryStoreTests: XCTestCase {
         let stillNative = try await cost("native")
         XCTAssertEqual(stillNative?.costUSD, 0.25)
         let unpriced = try await reader.unpricedModels()
-        XCTAssertEqual(unpriced, [], "the unpriced list is this Mac's own")
+        XCTAssertEqual(unpriced, [], "a priced model leaves the list")
 
         let (_, reopened) = try open(directory, pricing: .bundled())
         let back = try await reopened.session(SessionKey(source: .claudeCode, id: "mystery"), device: air)
         XCTAssertEqual(back?.totals.hasUnpriced, true, "opening with the old table re-prices again")
+    }
+
+    func testUnpricedModelsMergeThisMacWithOthersAndACustomPriceRepricesThem() async throws {
+        let directory = try TempDirectory()
+        let (store, reader) = try open(directory)
+        let tokens = TokenCounts(input: 1_000_000, output: 100_000)
+        try await store.apply(local("l1", cwd: nil, calls: 1, at: 100, model: "claude-nova-1", tokens: tokens))
+        try await store.applyRemoteHistory([remote(sessions: [
+            session("r1", usage: [slice(model: "claude-nova-1", calls: 3, at: 500, tokens: tokens),
+                                  slice(model: "claude-other", calls: 1, at: 600, tokens: tokens)]),
+            session("r2", usage: [slice(model: "qwen3-coder", tokens: tokens), slice(model: nil, tokens: tokens)]),
+        ], projects: [project("p1", "hoply")])], device: mine)
+        let before = try await reader.unpricedModels()
+        XCTAssertEqual(before.map(\.model), ["claude-nova-1", "", "claude-other"], "most calls first, then by name")
+        let nova = try XCTUnwrap(before.first { $0.model == "claude-nova-1" })
+        XCTAssertEqual(nova.calls, 4)
+        XCTAssertEqual(nova.tokens.input, 2_000_000, "a remote row holds the sum of its calls")
+        XCTAssertEqual(nova.firstSeen, t0.addingTimeInterval(100))
+        XCTAssertEqual(nova.lastSeen, t0.addingTimeInterval(530))
+
+        let custom = PricingTable.bundled(customPrices: ["claude-nova-1": CustomModelPrice(input: 2, output: 8)])
+        let repriced = try await store.setPricing(custom)
+        XCTAssertGreaterThan(repriced, 0)
+        let after = try await reader.unpricedModels()
+        XCTAssertEqual(Set(after.map(\.model)), ["", "claude-other"], "the other Mac's rows are priced by the custom price too")
+        let r1 = try await reader.session(SessionKey(source: .claudeCode, id: "r1"), device: air)?.totals
+        XCTAssertEqual(r1?.hasUnpriced, true)
+        XCTAssertEqual(r1?.apiEquivUSD ?? 0, 2.8, accuracy: 1e-9)
     }
 
     // MARK: - Projects

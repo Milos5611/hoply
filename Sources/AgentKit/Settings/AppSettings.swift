@@ -19,6 +19,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var copilotMonthlyAllowance = 300
     public var copilotUSDPerPremiumRequest = 0.04
     public var priceAliases: [String: String] = [:]
+    public var customPrices: [String: CustomModelPrice] = [:]
     public var paletteEnabled = true
     public var paletteHotKey = HotKeyCombo.optionSpace
     public var approveFromHoply = false
@@ -67,6 +68,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         copilotUSDPerPremiumRequest = container.lenient(Double.self, .copilotUSDPerPremiumRequest)
             ?? defaults.copilotUSDPerPremiumRequest
         priceAliases = container.lenient([String: String].self, .priceAliases) ?? defaults.priceAliases
+        if let entries = container.lenient([String: LenientElement<CustomModelPrice>].self, .customPrices) {
+            for (model, entry) in entries {
+                let id = model.trimmingCharacters(in: .whitespaces).lowercased()
+                if !id.isEmpty, let price = entry.value, price.isValid { customPrices[id] = price }
+            }
+        }
         paletteEnabled = container.lenient(Bool.self, .paletteEnabled) ?? defaults.paletteEnabled
         paletteHotKey = container.lenient(HotKeyCombo.self, .paletteHotKey).flatMap { $0.isValid ? $0 : nil }
             ?? defaults.paletteHotKey

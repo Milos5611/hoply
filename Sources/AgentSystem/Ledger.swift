@@ -10,6 +10,7 @@ public struct LedgerConfiguration: Sendable, Equatable {
     public var localModelPatterns: [String]
     public var referenceModel: String
     public var priceAliases: [String: String]
+    public var customPrices: [String: CustomModelPrice]
     public var watchForChanges: Bool
     public var rescanInterval: Duration
     public var copilotPollInterval: Duration
@@ -23,8 +24,10 @@ public struct LedgerConfiguration: Sendable, Equatable {
                 referenceModel: String = PricingTable.defaultReferenceModel,
                 watchForChanges: Bool = true, rescanInterval: Duration = .seconds(60),
                 copilotPollInterval: Duration = .seconds(10), priceAliases: [String: String] = [:],
-                codexHome: String? = nil, folders: Set<AgentFolder> = Set(AgentFolder.allCases)) {
+                codexHome: String? = nil, folders: Set<AgentFolder> = Set(AgentFolder.allCases),
+                customPrices: [String: CustomModelPrice] = [:]) {
         self.priceAliases = priceAliases
+        self.customPrices = customPrices
         self.folders = folders
         self.codexHome = codexHome
         self.databasePath = databasePath
@@ -48,7 +51,8 @@ public struct LedgerConfiguration: Sendable, Equatable {
         }
         self.init(claudeConfigDirectory: path(.claude), copilotHome: path(.copilot),
                   localModelPatterns: settings.localModelPatterns, referenceModel: settings.referenceModel,
-                  priceAliases: settings.priceAliases, codexHome: path(.codex), folders: Set(readable))
+                  priceAliases: settings.priceAliases, codexHome: path(.codex), folders: Set(readable),
+                  customPrices: settings.customPrices)
     }
 }
 
@@ -63,7 +67,8 @@ public struct Ledger: Sendable {
         let pricing = PricingOverrides.table(overridesURL: configuration.pricingOverridesURL,
                                              localModelPatterns: configuration.localModelPatterns,
                                              referenceModel: configuration.referenceModel,
-                                             aliases: configuration.priceAliases)
+                                             aliases: configuration.priceAliases,
+                                             customPrices: configuration.customPrices)
         store = try Store(path: configuration.databasePath, pricing: pricing)
         reader = try StoreReader(path: configuration.databasePath)
         let folders = configuration.folders
@@ -140,12 +145,14 @@ public struct Ledger: Sendable {
 
     @discardableResult
     public func updatePricing(localModelPatterns: [String], referenceModel: String,
-                              priceAliases: [String: String]? = nil) async throws -> Int {
-        let aliases: [String: String]
-        if let priceAliases { aliases = priceAliases } else { aliases = await store.pricing.aliases }
+                              priceAliases: [String: String]? = nil,
+                              customPrices: [String: CustomModelPrice]? = nil) async throws -> Int {
+        let current = await store.pricing
         return try await store.setPricing(PricingOverrides.table(overridesURL: configuration.pricingOverridesURL,
                                                                  localModelPatterns: localModelPatterns,
-                                                                 referenceModel: referenceModel, aliases: aliases))
+                                                                 referenceModel: referenceModel,
+                                                                 aliases: priceAliases ?? current.aliases,
+                                                                 customPrices: customPrices ?? current.customPrices))
     }
 
     // MARK: - Session insight
@@ -179,6 +186,18 @@ public struct Ledger: Sendable {
 
     public func unpricedModels() async throws -> [UnpricedModel] {
         try await reader.unpricedModels()
+    }
+
+    public func referenceModelHasPrice() async -> Bool {
+        await store.pricing.referenceModelHasPrice
+    }
+
+    public func priceAliasesInTable() async -> Set<String> {
+        await store.pricing.priceAliasesInTable
+    }
+
+    public func customPricesInTable() async -> Set<String> {
+        await store.pricing.customPricesInTable
     }
 
     public func pricedModels() async -> [String] {
