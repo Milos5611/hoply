@@ -34,11 +34,11 @@ struct SessionTimelineCard: View {
                         .foregroundStyle(live ? Color.blue : Color.secondary)
                 }
                 VStack(spacing: 4) {
-                    TimelineBar(spans: spans, start: start, end: now)
+                    TimelineBar(spans: spans, start: start, end: now, reference: clock.now)
                     HStack {
-                        Text(Format.when(start, now: now))
+                        Text(Format.when(start, now: clock.now))
                         Spacer()
-                        Text(live ? "now" : Format.when(now, now: now))
+                        Text(live ? "now" : Format.when(now, now: clock.now))
                     }
                     .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -74,6 +74,7 @@ struct TimelineBar: View {
     let spans: [StateSpan]
     let start: Date
     let end: Date
+    let reference: Date
 
     private static let minimumWidth: CGFloat = 1.5
 
@@ -92,7 +93,7 @@ struct TimelineBar: View {
                         .fill(Self.color(for: span.state))
                         .frame(width: shown)
                         .offset(x: min(x, width - shown))
-                        .help(Self.tooltip(span, now: end))
+                        .help(Self.tooltip(span, now: end, reference: reference))
                 }
             }
         }
@@ -106,12 +107,12 @@ struct TimelineBar: View {
         StatePill.color(for: state.status).opacity(state == .idle || state == .ended ? 0.4 : 0.9)
     }
 
-    static func tooltip(_ span: StateSpan, now: Date) -> String {
+    static func tooltip(_ span: StateSpan, now: Date, reference: Date) -> String {
         let length = Format.timeSpent(span.duration(now: now))
         guard let end = span.end else {
-            return "\(span.state.status.label) since \(Format.when(span.start, now: now)) · \(length)"
+            return "\(span.state.status.label) since \(Format.when(span.start, now: reference)) · \(length)"
         }
-        return "\(span.state.status.label) · \(Format.when(span.start, now: now)) – \(Format.when(end, now: now)) · \(length)"
+        return "\(span.state.status.label) · \(Format.when(span.start, now: reference)) – \(Format.when(end, now: reference)) · \(length)"
     }
 }
 

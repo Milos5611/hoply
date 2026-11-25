@@ -87,6 +87,13 @@ private struct BranchRow: View {
                             .foregroundStyle(.red)
                     }
                     .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                    .tooltip(linesOnlyClaudeCode ? Self.claudeOnly : "Lines added and removed")
+                    if linesOnlyClaudeCode {
+                        Text("Claude Code only")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                            .tooltip(Self.claudeOnly)
+                    }
                 }
                 ForEach(summary.prURLs, id: \.self) { pull in
                     if let url = URL(string: pull) {
@@ -100,6 +107,12 @@ private struct BranchRow: View {
                 }
             }
         }
+    }
+
+    private static let claudeOnly = "Lines from Claude Code sessions only"
+
+    private var linesOnlyClaudeCode: Bool {
+        summary.sources.contains { $0 != .claudeCode }
     }
 
     private static func pullName(_ url: URL) -> String {

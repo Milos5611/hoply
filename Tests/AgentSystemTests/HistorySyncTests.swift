@@ -16,6 +16,7 @@ private actor FakeHistoryCloud: HistoryCloud {
     var restarts = 0
     var publishError: (any Error)?
     var fetchError: (any Error)?
+    var deleteError: (any Error)?
 
     var historyDays: [String: RemoteHistoryPublished] { days }
 
@@ -27,6 +28,7 @@ private actor FakeHistoryCloud: HistoryCloud {
     }
 
     func deleteHistory(days names: [String]) async throws {
+        if let deleteError { throw deleteError }
         deleted.append(names)
         for name in names { days[name] = nil }
     }
@@ -46,6 +48,7 @@ private actor FakeHistoryCloud: HistoryCloud {
     func set(fetchError: CloudLinkError?) { self.fetchError = fetchError }
     func set(publishFailure: (any Error)?) { publishError = publishFailure }
     func set(fetchFailure: (any Error)?) { fetchError = fetchFailure }
+    func set(deleteFailure: (any Error)?) { deleteError = deleteFailure }
 }
 
 final class HistorySyncTests: XCTestCase {
@@ -248,28 +251,71 @@ final class HistorySyncTests: XCTestCase {
         var health = await sync.health
         XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0, last: t0))
         XCTAssertNil(health.fetch, "the fetch worked")
+        await sync.reset()
+        health = await sync.health
+        XCTAssertNil(health.failure, "turning the link off and on starts a new run")
+
+        let t1 = t0.addingTimeInterval(1)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t1)
+        health = await sync.health
+        XCTAssertEqual(health.failure?.since, t1)
 
         let batch = CKError(.partialFailure, userInfo: [CKPartialErrorsByItemIDKey: [
             CKRecord.ID(recordName: "a"): CKError(.batchRequestFailed), CKRecord.ID(recordName: "b"): CKError(.unknownItem),
         ] as [CKRecord.ID: any Error]])
         await cloud.set(publishFailure: CloudLinkFailure.wrapping(batch))
-        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(6))
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t1.addingTimeInterval(6))
         health = await sync.health
-        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0,
-                                                          last: t0.addingTimeInterval(6)))
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t1,
+                                                          last: t1.addingTimeInterval(6)))
 
         await cloud.set(publishError: .quotaExceeded)
-        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(20))
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t1.addingTimeInterval(20))
         let retry = await sync.publishRetry
         XCTAssertEqual(retry.failures, 3, "a full iCloud still backs off")
         health = await sync.health
-        XCTAssertEqual(health.failure?.last, t0.addingTimeInterval(6), "the link shows a full iCloud; health ignores it")
+        XCTAssertEqual(health.failure?.last, t1.addingTimeInterval(6), "the link shows a full iCloud; health ignores it")
 
         await cloud.set(publishFailure: nil)
         _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(100))
         health = await sync.health
         XCTAssertNil(health.failure)
         let published = await cloud.published
+        XCTAssertEqual(published.count, 1)
+    }
+
+    func testAFailedScanStaysAFailureUntilAPassDoesWork() async throws {
+        let ledger = try ledger(try TempDirectory())
+        try await ledger.store.apply(usage("s1"))
+        let cloud = FakeHistoryCloud()
+        await cloud.set(days: [name(5): old])
+        await cloud.set(deleteFailure: rejected(.serverRejectedRequest))
+        let sync = HistorySync(cloud: cloud)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0)
+        var health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0, last: t0))
+
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(6))
+        health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0, last: t0),
+                       "a retry with nothing due until the next check is no success")
+        var published = await cloud.published
+        XCTAssertEqual(published.count, 0)
+
+        let check = t0.addingTimeInterval(RemoteHistoryPolicy.checkEvery)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: check)
+        health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0, last: check),
+                       "the next check scans again and keeps the streak")
+
+        await cloud.set(deleteFailure: nil)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil,
+                                now: check.addingTimeInterval(RemoteHistoryPolicy.checkEvery))
+        health = await sync.health
+        XCTAssertNil(health.failure, "a scan that works clears it")
+        let deleted = await cloud.deleted
+        XCTAssertEqual(deleted, [[name(5)]])
+        published = await cloud.published
         XCTAssertEqual(published.count, 1)
     }
 

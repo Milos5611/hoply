@@ -301,7 +301,8 @@ in detail. If its tokens appear as a separate "Copilot IDE" row, `TelemetryMappe
   otherwise "simplify" the code into a bug: a format quirk, a workaround, an ordering rule.
 - No new package dependencies without discussing it in an issue first.
 - Log through `Log` in AgentSystem (`os.Logger`; categories `icloud`, `history`, `ingest`, `store`), never in
-  AgentKit. Failures at error or notice level, successes at debug at most and never once per usage row. Error codes,
+  AgentKit. Failures at error or notice level; a failing operation that works again logs one line at notice, once per
+  failure streak; other successes at debug at most and never once per usage row. Error codes,
   record types, zone and operation names are `privacy: .public`; file paths, project names, session titles and device
   names `.private`; payloads, prompt or reply text, tokens and secrets are never logged.
 - New `AppSettings` fields decode leniently, key by key, in `init(from:)`, so a missing or wrongly typed key falls

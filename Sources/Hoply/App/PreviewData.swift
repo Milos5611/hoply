@@ -449,7 +449,9 @@ enum PreviewData {
         }
         long.append((.working, 12, 3))
         long.append((.yourTurn, 3, nil))
-        return [short, liveSpans(now: now), spans(now: now, long)]
+        let yesterday = spans(now: now, [(.working, 1_560, 1_541), (.needsPermission, 1_541, 1_539), (.working, 1_539, 1_492),
+                                         (.yourTurn, 1_492, 1_490)])
+        return [short, liveSpans(now: now), spans(now: now, long), yesterday]
     }
 
     static let coreStoryCopy = ProjectRef(id: 8, root: "\(home)/Work/CoreStory-copy", name: "CoreStory-copy", kind: .repo)

@@ -65,10 +65,14 @@ public actor HistorySync {
         var moreToFetch = false
         if !publishRetry.isWaiting(at: now) {
             do {
-                if try await publish(ledger: ledger, sharing: sharing, deviceName: deviceName, now: now) {
-                    result.talked = true
+                let pass = try await publish(ledger: ledger, sharing: sharing, deviceName: deviceName, now: now)
+                if pass.talked { result.talked = true }
+                // A pass with nothing due (a scan that failed waits for the next check) proves nothing about health.
+                if pass.worked {
+                    succeeded(.publish, retry: &publishRetry)
+                } else {
+                    publishRetry.succeeded()
                 }
-                succeeded(.publish, retry: &publishRetry)
             } catch {
                 try backOff(error, .publish, retry: &publishRetry, now: now)
             }
@@ -160,17 +164,18 @@ public actor HistorySync {
         return max(waits.min() ?? RemoteHistoryPolicy.checkEvery, 1)
     }
 
-    private func publish(ledger: Ledger?, sharing: Bool, deviceName: String?, now: Date) async throws -> Bool {
+    private func publish(ledger: Ledger?, sharing: Bool, deviceName: String?,
+                         now: Date) async throws -> (talked: Bool, worked: Bool) {
         let published = await cloud.historyDays
         guard sharing else {
             outbox = RemoteHistoryOutbox()
             store = nil
             let stale = RemoteHistoryOutbox.stale(published, ledgerDays: nil, enabled: false)
-            guard !stale.isEmpty else { return false }
+            guard !stale.isEmpty else { return (false, true) }
             try await cloud.deleteHistory(days: stale)
-            return true
+            return (true, true)
         }
-        guard let ledger else { return false }
+        guard let ledger else { return (false, false) }
         let id = ObjectIdentifier(ledger.store)
         if store != id {
             store = id
@@ -178,7 +183,7 @@ public actor HistorySync {
             lastCheck = nil
         }
         let due = now.timeIntervalSince(lastCheck ?? .distantPast) >= RemoteHistoryPolicy.checkEvery
-        guard due || !outbox.pending.isEmpty else { return false }
+        guard due || !outbox.pending.isEmpty else { return (false, false) }
         if due {
             outbox.note(await ledger.store.takeHistoryChanges())
             lastCheck = now
@@ -221,7 +226,7 @@ public actor HistorySync {
             }
             outbox.done(day)
         }
-        return talked
+        return (talked, true)
     }
 
     private func fetch(into ledger: Ledger) async throws -> (applied: Bool, more: Bool) {

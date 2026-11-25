@@ -130,8 +130,8 @@ Anything else that talks to your model server, such as a chat app, shows up in t
   kept apart from this Mac's own. Model-server tokens and passwords live in
   your Keychain, never in settings, URLs or logs.
 - Failures (an iCloud request refused, a file Hoply can't read, the database not opening) go to macOS's own log on
-  your Mac, under Hoply's bundle id: what failed and its error code, with file paths and names hidden unless you
-  enable private data. Never prompts, replies, tokens or passwords; nothing is sent anywhere.
+  your Mac, under Hoply's bundle id: what failed and its error code, with file paths and error details hidden unless
+  you enable private data. Never prompts, replies, tokens or passwords; nothing is sent anywhere.
 
 More detail in the [privacy policy](https://hoply.dev/privacy).
 
