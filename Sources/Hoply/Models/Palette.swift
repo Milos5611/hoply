@@ -109,7 +109,8 @@ final class Palette {
 
     // MARK: - Results
 
-    func rows(now: Date = Date()) -> [Row] {
+    func rows() -> [Row] {
+        let now = model?.clock.now ?? Date()
         let entries = entries()
         let byID = Dictionary(entries.map { ($0.item.id, $0) }) { first, _ in first }
         return PaletteRanker(frecency: frecency).rank(entries.map(\.item), query: query, now: now).compactMap { result in
@@ -218,7 +219,7 @@ final class Palette {
         let item = PaletteItem(
             id: PaletteItem.sessionID(session.key), kind: .session, title: title,
             subtitle: [source.displayName, session.title == nil ? nil : session.project?.title,
-                       Format.lastActive(session.lastAt)].compactMap { $0 }.joined(separator: " · "),
+                       Format.lastActive(session.lastAt, now: model.clock.now)].compactMap { $0 }.joined(separator: " · "),
             keywords: [session.cwd, session.key.id].filter { !$0.isEmpty }, lastActive: session.lastAt)
         return Entry(item: item, icon: .source(source), primary: canResume ? resume : details,
                      secondary: canResume ? details : session.cwd.isEmpty ? nil : folderCommand(session.cwd, model))

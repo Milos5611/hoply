@@ -92,6 +92,7 @@ enum LocalModelStyle {
 // MARK: - Live
 
 private struct LiveModelCard: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
     let server: ModelServer
     let state: ModelServers.State?
@@ -262,7 +263,7 @@ private struct LiveModelCard: View {
 
     private var lastSeenText: String {
         guard let lastSeen else { return "Not seen yet." }
-        let now = Date()
+        let now = clock.now
         return "Last seen \(Format.when(lastSeen, now: now)), \(Format.lastActive(lastSeen, now: now))."
     }
 }
@@ -574,6 +575,7 @@ struct SampleChart: View {
 }
 
 private struct SampleTooltip: View {
+    @Environment(\.clock) private var clock
     let point: SampleChart.Point
     let kind: SampleChart.Kind
     let tint: Color
@@ -582,7 +584,7 @@ private struct SampleTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(Format.when(point.start))
+            Text(Format.when(point.start, now: clock.now))
                 .font(.system(size: 11.5, weight: .semibold))
             row("Average", value(point.mean), color: tint)
             row("Peak", value(point.peak), color: tint.opacity(0.4))
@@ -650,6 +652,7 @@ private struct TokensPerDayCard: View {
 }
 
 private struct TokenDaysChart: View {
+    @Environment(\.clock) private var clock
     struct Bar: Identifiable {
         let day: Date
         let series: String
@@ -701,7 +704,7 @@ private struct TokenDaysChart: View {
             }
             .chartForegroundStyleScale(domain: [Self.prompt, Self.generated],
                                        range: [LocalModelStyle.promptTint, LocalModelStyle.tint])
-            .chartXScale(domain: (days.first?.day ?? Date())...nextDay(days.last?.day ?? Date()))
+            .chartXScale(domain: (days.first?.day ?? clock.now)...nextDay(days.last?.day ?? clock.now))
             .chartXSelection(value: $selection)
             .chartLegend(.hidden)
             .chartXAxis {

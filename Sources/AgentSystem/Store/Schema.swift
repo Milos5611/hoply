@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum Schema {
     public static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7]
@@ -257,14 +258,31 @@ public enum Schema {
         let current = try db.userVersion()
         guard current < migrations.count else { return }
         if current > 0 {
-            try Backups.rotate(db, databasePath: databasePath, keep: backupsToKeep)
-        }
-        for version in current..<migrations.count {
-            try db.transaction {
-                try db.execute(migrations[version])
-                try db.setUserVersion(version + 1)
+            do {
+                try Backups.rotate(db, databasePath: databasePath, keep: backupsToKeep)
+            } catch {
+                Log.store.error("""
+                    Backup before migrating the ledger from v\(current, privacy: .public) failed: \
+                    \(Log.code(of: error), privacy: .public)
+                    """)
+                throw error
             }
         }
+        for version in current..<migrations.count {
+            do {
+                try db.transaction {
+                    try db.execute(migrations[version])
+                    try db.setUserVersion(version + 1)
+                }
+            } catch {
+                Log.store.error("""
+                    Ledger migration to v\(version + 1, privacy: .public) failed: \(Log.code(of: error), privacy: .public) \
+                    (\(String(describing: error), privacy: .private))
+                    """)
+                throw error
+            }
+        }
+        Log.store.debug("Ledger migrated from v\(current, privacy: .public) to v\(migrations.count, privacy: .public)")
     }
 }
 

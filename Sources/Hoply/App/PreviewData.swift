@@ -44,6 +44,10 @@ enum PreviewData {
          ("storage-full", true, .storageFull(retryAt: now + 900))]
     }
 
+    static func historyFailure(now: Date) -> HistorySyncFailure {
+        HistorySyncFailure(operation: .publish, problem: .rejected, since: now - 95 * 60, last: now - 60)
+    }
+
     static let replyMessage = """
         The checkout flow now uses the new payment intents API. I updated `CheckoutService`, the webhook handler \
         and the three integration tests; all 48 tests pass locally.
@@ -579,6 +583,7 @@ enum PreviewData {
         let coreStory = summaries[0]
         let coreStoryDaily = series(points(month.filter { $0.project == 0 }) { $0.model }, lastDays: 30)
         let coreStorySessions = sessions.filter { $0.project?.id == coreStory.project?.id }
+        let coreStoryBranches = branches(of: coreStory, now: now)
         let unassigned = summaries.first { $0.project == nil }.map { summary in
             ProjectDetailData(range: .month, summary: summary,
                               daily: series(points(month.filter { $0.project == nil }) { $0.model }, lastDays: 30),
@@ -606,7 +611,8 @@ enum PreviewData {
             sessions: SessionPage(sessions: sessions, totalCount: 86), selectedSession: sessions.first,
             projects: ProjectsData(range: .month, projects: summaries),
             projectDetail: ProjectDetailData(range: .month, summary: coreStory, daily: coreStoryDaily,
-                                             sessions: SessionPage(sessions: coreStorySessions, totalCount: coreStory.sessionCount)),
+                                             sessions: SessionPage(sessions: coreStorySessions, totalCount: coreStory.sessionCount),
+                                             branches: ProjectBranches(rows: coreStoryBranches, coversOnlyThisMac: false)),
             unassignedDetail: unassigned,
             limits: limits(now: now, entries: entries),
             localModel: localModel(now: now, entries: entries, days: days),
@@ -939,6 +945,39 @@ enum PreviewData {
         }
     }
 
+    private static func branches(of project: ProjectSummary, now: Date) -> [BranchSummary] {
+        let total = project.totals
+        let pulls = "https://github.com/corestory/CoreStory-web/pull"
+        let slices: [(branch: String?, share: Double, sessions: Int, lines: (Int, Int)?, pulls: [String],
+                      sources: [AgentSource], first: Double, last: Double)] = [
+            ("feature/payment-intents", 0.46, 14, (2_184, 611), ["\(pulls)/488", "\(pulls)/482"],
+             [.claudeCode, .codexCLI, .copilotCLI], 11 * 24, 0.4 / 24),
+            ("fix/webhook-retries", 0.24, 9, (318, 97), ["\(pulls)/491"], [.claudeCode, .codexCLI], 6 * 24, 26),
+            ("main", 0.15, 11, nil, [], [.claudeCode, .copilotCLI], 20 * 24, 2 * 24),
+            ("experiment/nova-preview", 0.05, 2, nil, [], [.claudeCode], 3 * 24, 3 * 24 - 5),
+        ]
+        var rows: [BranchSummary] = []
+        var rest = total
+        for slice in slices {
+            var share = scaled(total, by: slice.share)
+            if slice.branch == "experiment/nova-preview" {
+                share.costUSD = 0
+                share.apiEquivUSD = 0
+                share.hasUnpriced = true
+            }
+            rest = rest.removing(share)
+            rows.append(BranchSummary(branch: slice.branch, totals: share, sessionCount: slice.sessions,
+                                      linesAdded: slice.lines?.0, linesRemoved: slice.lines?.1, prURLs: slice.pulls,
+                                      sources: slice.sources, firstActive: now.addingTimeInterval(-slice.first * 3_600),
+                                      lastActive: now.addingTimeInterval(-slice.last * 3_600)))
+        }
+        rest.hasUnpriced = false
+        rows.append(BranchSummary(branch: nil, totals: rest, sessionCount: project.sessionCount - 36,
+                                  sources: [.claudeCode], firstActive: now.addingTimeInterval(-14 * 86_400),
+                                  lastActive: now.addingTimeInterval(-9 * 86_400)))
+        return rows
+    }
+
     private static let unpricedTotals = LedgerTotals(tokens: TokenCounts(input: 4_100, output: 2_300, cacheRead: 61_000),
                                                      calls: 9, hasUnpriced: true)
 
@@ -1047,4 +1086,16 @@ extension PreviewData {
 
 private extension LedgerTotals {
     static func += (lhs: inout LedgerTotals, rhs: LedgerTotals) { lhs = lhs + rhs }
+
+    func removing(_ other: LedgerTotals) -> LedgerTotals {
+        LedgerTotals(costUSD: costUSD - other.costUSD, apiEquivUSD: apiEquivUSD - other.apiEquivUSD,
+                     tokens: TokenCounts(input: tokens.input - other.tokens.input,
+                                         output: tokens.output - other.tokens.output,
+                                         reasoning: tokens.reasoning - other.tokens.reasoning,
+                                         cacheRead: tokens.cacheRead - other.tokens.cacheRead,
+                                         cacheWrite5m: tokens.cacheWrite5m - other.tokens.cacheWrite5m,
+                                         cacheWrite1h: tokens.cacheWrite1h - other.tokens.cacheWrite1h),
+                     calls: calls - other.calls, hasUnpriced: hasUnpriced, aiu: aiu - other.aiu,
+                     premiumRequests: premiumRequests - other.premiumRequests)
+    }
 }

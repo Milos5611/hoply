@@ -87,6 +87,34 @@ public struct ProjectSummary: Sendable, Equatable, Identifiable {
     public var root: String? { project?.root }
 }
 
+public struct BranchSummary: Sendable, Equatable, Identifiable {
+    public var branch: String?
+    public var totals: LedgerTotals
+    public var sessionCount: Int
+    public var linesAdded: Int?
+    public var linesRemoved: Int?
+    public var prURLs: [String]
+    public var sources: [AgentSource]
+    public var firstActive: Date?
+    public var lastActive: Date?
+
+    public init(branch: String?, totals: LedgerTotals = .zero, sessionCount: Int = 0, linesAdded: Int? = nil,
+                linesRemoved: Int? = nil, prURLs: [String] = [], sources: [AgentSource] = [],
+                firstActive: Date? = nil, lastActive: Date? = nil) {
+        self.branch = branch
+        self.totals = totals
+        self.sessionCount = sessionCount
+        self.linesAdded = linesAdded
+        self.linesRemoved = linesRemoved
+        self.prURLs = prURLs
+        self.sources = sources
+        self.firstActive = firstActive
+        self.lastActive = lastActive
+    }
+
+    public var id: String { branch ?? "" }
+}
+
 public struct ModelShare: Sendable, Equatable, Hashable {
     public var model: String
     public var totals: LedgerTotals

@@ -215,6 +215,7 @@ struct UpdateSettings: View {
 
 private struct FeedFailureRow: View {
     let failure: UpdateFeedFailure
+    @Environment(\.clock) private var clock
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -222,7 +223,7 @@ private struct FeedFailureRow: View {
                 .fill(.orange)
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Update checks failing since \(Format.shortWhen(failure.since)): \(reason).")
+                Text("Update checks failing since \(Format.shortWhen(failure.since, now: clock.now)): \(reason).")
                     .fixedSize(horizontal: false, vertical: true)
                 Text("New versions can't show until a check succeeds. [hoply.dev/download](https://hoply.dev/download) always has the latest.")
                     .font(.system(size: 11))
@@ -243,7 +244,7 @@ private struct FeedFailureRow: View {
     }
 
     private var help: String {
-        let last = "Last failed check: \(Format.when(failure.last))"
+        let last = "Last failed check: \(Format.when(failure.last, now: clock.now))"
         return failure.detail.isEmpty ? last : "\(failure.detail)\n\(last)"
     }
 }

@@ -130,7 +130,7 @@ enum Format {
         "\(whole(min(max(fraction, 0), 1) * 100))%"
     }
 
-    static func age(since date: Date, now: Date = Date()) -> String {
+    static func age(since date: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         switch seconds {
         case ..<10: return "now"
@@ -172,9 +172,9 @@ enum Format {
         return formatter
     }()
 
-    static func resetTime(_ date: Date?) -> String {
+    static func resetTime(_ date: Date?, now: Date) -> String {
         guard let date else { return "" }
-        return "Resets \(clock(date))"
+        return "Resets \(clock(date, now: now))"
     }
 
     static func day(_ date: Date) -> String {
@@ -182,7 +182,7 @@ enum Format {
     }
 
     // A weekday alone repeats after 7 days, so a 30-day window's reset needs the date.
-    static func clock(_ date: Date, now: Date = Date()) -> String {
+    static func clock(_ date: Date, now: Date) -> String {
         let distance = abs(date.timeIntervalSince(now))
         let formatter = distance < 20 * 3_600 ? timeFormatter : distance < 6 * 86_400 ? dayTimeFormatter : dateTimeFormatter
         return formatter.string(from: date)
@@ -263,19 +263,19 @@ enum Format {
         return formatter
     }()
 
-    static func shortWhen(_ date: Date, now: Date = Date()) -> String {
+    static func shortWhen(_ date: Date, now: Date) -> String {
         Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
                                                         : shortDayFormatter.string(from: date)
     }
 
-    static func lastActive(_ date: Date, now: Date = Date()) -> String {
+    static func lastActive(_ date: Date, now: Date) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "just now" }
         if seconds < 86_400 { return "\(age(since: date, now: now)) ago" }
         return shortWhen(date, now: now)
     }
 
-    static func when(_ date: Date, now: Date = Date()) -> String {
+    static func when(_ date: Date, now: Date) -> String {
         Calendar.current.isDate(date, inSameDayAs: now) ? timeFormatter.string(from: date)
                                                         : dateTimeFormatter.string(from: date)
     }

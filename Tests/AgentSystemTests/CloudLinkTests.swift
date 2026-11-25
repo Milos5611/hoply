@@ -96,6 +96,27 @@ final class CloudLinkTests: XCTestCase {
         guard case .other = CloudLinkError(partial([.batchRequestFailed])) else { return XCTFail("no cause") }
     }
 
+    func testHistoryHealthIgnoresExactlyTheErrorsTheLinkHandles() {
+        for raw in 1...60 {
+            guard let code = CKError.Code(rawValue: raw) else { continue }
+            let error = CKError(code)
+            let counted: Bool
+            if case .other = CloudLinkError(error) { counted = true } else { counted = false }
+            XCTAssertEqual(HistorySyncHealth.problem(for: error as NSError) != nil, counted, "CKError \(raw)")
+        }
+    }
+
+    func testAnOtherFailureKeepsItsCloudKitCause() throws {
+        let wrapped = CloudLinkFailure.wrapping(CKError(.serverRejectedRequest))
+        guard case .other = CloudLinkError(wrapped) else { return XCTFail("callers still see .other") }
+        let failure = try XCTUnwrap(wrapped as? CloudLinkFailure)
+        XCTAssertEqual(HistorySyncHealth.problem(for: failure.cause), .rejected)
+        XCTAssertEqual(wrapped.localizedDescription, CKError(.serverRejectedRequest).localizedDescription)
+        XCTAssertEqual(CloudLinkFailure.wrapping(CKError(.networkFailure)) as? CloudLinkError, .network,
+                       "the link's own cases are thrown as before")
+        XCTAssertEqual(CloudLinkFailure.wrapping(CloudLinkError.noAccount) as? CloudLinkError, .noAccount)
+    }
+
     func testAMissingZoneIsRecognised() {
         XCTAssertTrue(CloudLink.zoneMissing(CKError(.zoneNotFound)))
         XCTAssertTrue(CloudLink.zoneMissing(CKError(.userDeletedZone)))

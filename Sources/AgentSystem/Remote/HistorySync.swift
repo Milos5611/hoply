@@ -1,5 +1,6 @@
 import AgentKit
 import Foundation
+import os
 
 public struct HistorySyncResult: Sendable, Equatable {
     public var talked: Bool
@@ -26,6 +27,7 @@ public actor HistorySync {
     private var origins: [String: String?] = [:]
     public private(set) var publishRetry = RemoteRetry()
     public private(set) var fetchRetry = RemoteRetry()
+    public private(set) var health = HistorySyncHealth()
 
     public init(cloud: any HistoryCloud, fileSystem: any ProjectFileSystem & Sendable = LocalProjectFileSystem()) {
         self.cloud = cloud
@@ -40,6 +42,7 @@ public actor HistorySync {
         fetchedFromStart = nil
         publishRetry = RemoteRetry()
         fetchRetry = RemoteRetry()
+        health = HistorySyncHealth()
     }
 
     public func fetchSoon() {
@@ -65,9 +68,9 @@ public actor HistorySync {
                 if try await publish(ledger: ledger, sharing: sharing, deviceName: deviceName, now: now) {
                     result.talked = true
                 }
-                publishRetry.succeeded()
+                succeeded(.publish, retry: &publishRetry)
             } catch {
-                try Self.backOff(error, retry: &publishRetry, now: now)
+                try backOff(error, .publish, retry: &publishRetry, now: now)
             }
         }
         if let ledger, !fetchRetry.isWaiting(at: now),
@@ -78,25 +81,65 @@ public actor HistorySync {
                 moreToFetch = fetched.more
                 lastFetch = fetched.more ? nil : now
                 result.talked = true
-                fetchRetry.succeeded()
+                if fetched.applied { Log.history.debug("History fetch applied other Macs' changes") }
+                succeeded(.fetch, retry: &fetchRetry)
             } catch {
-                try Self.backOff(error, retry: &fetchRetry, now: now)
+                try backOff(error, .fetch, retry: &fetchRetry, now: now)
             }
         }
         result.wait = wait(ledger: ledger, sharing: sharing, moreToFetch: moreToFetch, now: now)
         return result
     }
 
-    private static func backOff(_ error: any Error, retry: inout RemoteRetry, now: Date) throws {
+    private func succeeded(_ operation: HistorySyncOperation, retry: inout RemoteRetry) {
+        let failures = retry.failures
+        if failures > 0 || health.failure(of: operation) != nil {
+            Log.history.notice("""
+                History \(operation.rawValue, privacy: .public) recovered after \(failures, privacy: .public) \
+                failure(s)
+                """)
+        }
+        retry.succeeded()
+        health.succeeded(operation)
+    }
+
+    private func backOff(_ error: any Error, _ operation: HistorySyncOperation, retry: inout RemoteRetry,
+                         now: Date) throws {
         if error is CancellationError { throw error }
         try Task.checkCancellation()
-        switch CloudLinkError(error) {
+        let link = CloudLinkError(error)
+        let code = Log.code(of: error)
+        switch link {
         case .unavailable, .noAccount:
+            Log.history.notice("""
+                History \(operation.rawValue, privacy: .public) stopped: \(link.name, privacy: .public) \
+                (\(code, privacy: .public))
+                """)
             throw error
         case .limited(let retryAfter):
             retry.failed(retryAfter: retryAfter, now: now)
-        case .quotaExceeded, .network, .other:
+        case .quotaExceeded, .network:
             retry.failed(now: now)
+        case .other:
+            retry.failed(now: now)
+            health.failed(operation, error: (error as? CloudLinkFailure)?.cause ?? error as NSError, at: now)
+        }
+        let wait = Int((retry.retryAt ?? now).timeIntervalSince(now).rounded(.up))
+        let failures = retry.failures
+        let problem = health.failure(of: operation)?.problem.rawValue ?? "not counted"
+        switch link {
+        case .network, .limited:
+            Log.history.notice("""
+                History \(operation.rawValue, privacy: .public) failed: \(link.name, privacy: .public) \
+                (\(code, privacy: .public)), failure \(failures, privacy: .public), retry in \
+                \(wait, privacy: .public) s
+                """)
+        default:
+            Log.history.error("""
+                History \(operation.rawValue, privacy: .public) failed: \(link.name, privacy: .public) \
+                (\(code, privacy: .public)), health \(problem, privacy: .public), failure \
+                \(failures, privacy: .public), retry in \(wait, privacy: .public) s
+                """)
         }
     }
 

@@ -1,5 +1,6 @@
 import AgentKit
 import Foundation
+import os
 
 public actor Store {
     public static var defaultDatabaseURL: URL {
@@ -21,22 +22,37 @@ public actor Store {
     public init(path: String = Store.defaultDatabaseURL.path, pricing: PricingTable = .bundled(),
                 resolver: ProjectResolver = ProjectResolver(home: UserHome.path),
                 fileSystem: any ProjectFileSystem & Sendable = LocalProjectFileSystem()) throws {
-        if Backups.isPersistent(path) {
-            try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-        }
-        let db = try SQLiteConnection(path: path)
-        try Schema.configure(db)
-        try Schema.migrate(db, databasePath: path)
-        try Self.closeLeftoverStateSpans(db, now: Date())
-        if try db.queryOne("SELECT EXISTS (SELECT 1 FROM usage)", [], { $0.bool(0) }) == true {
-            try? Backups.rotateIfDue(db, databasePath: path, keep: 2, interval: 7 * 86_400)
-        }
-        _ = try Self.reprice(db, pricing)
+        let db: SQLiteConnection
         let opened = Date()
-        _ = try Self.rollUpSamples(db, now: opened)
+        let projectMax: Int64
+        do {
+            if Backups.isPersistent(path) {
+                try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+            }
+            db = try SQLiteConnection(path: path)
+            try Schema.configure(db)
+            try Schema.migrate(db, databasePath: path)
+            try Self.closeLeftoverStateSpans(db, now: opened)
+            if try db.queryOne("SELECT EXISTS (SELECT 1 FROM usage)", [], { $0.bool(0) }) == true {
+                do {
+                    try Backups.rotateIfDue(db, databasePath: path, keep: 2, interval: 7 * 86_400)
+                } catch {
+                    Log.store.error("Weekly ledger backup failed: \(Log.code(of: error), privacy: .public)")
+                }
+            }
+            _ = try Self.reprice(db, pricing)
+            _ = try Self.rollUpSamples(db, now: opened)
+            projectMax = try db.queryOne("SELECT COALESCE(MAX(id), 0) FROM projects") { $0.int64(0) } ?? 0
+        } catch {
+            Log.store.error("""
+                Opening the ledger failed: \(Log.code(of: error), privacy: .public) at \(path, privacy: .private) \
+                (\(String(describing: error), privacy: .private))
+                """)
+            throw error
+        }
         self.lastRollup = opened
-        self.knownProjectMax = try db.queryOne("SELECT COALESCE(MAX(id), 0) FROM projects") { $0.int64(0) } ?? 0
+        self.knownProjectMax = projectMax
         self.db = db
         self.databasePath = path
         self.pricing = pricing

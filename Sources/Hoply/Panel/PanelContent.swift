@@ -61,6 +61,7 @@ struct PanelSections: View {
 
 struct StatStrip: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.clock) private var clock
     let oldestWait: Date?
 
     var body: some View {
@@ -72,7 +73,7 @@ struct StatStrip: View {
             }
             StatTile(label: "Need you", value: "\(model.attentionCount)",
                      valueColor: model.attentionCount > 0 ? .orange : .primary,
-                     tag: oldestWait.map { Format.age(since: $0) }, tagColor: .orange,
+                     tag: oldestWait.map { Format.age(since: $0, now: clock.now) }, tagColor: .orange,
                      prominent: model.attentionCount > 0) {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: 15))

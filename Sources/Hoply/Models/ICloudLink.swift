@@ -2,6 +2,7 @@ import AgentKit
 import AgentSystem
 import AppKit
 import Observation
+import os
 
 @Observable
 final class ICloudLink {
@@ -29,7 +30,10 @@ final class ICloudLink {
     private static let launchProjectLimit = 40
     private static let launchSessionLimit = 40
 
-    private(set) var status: Status = .off
+    private(set) var status: Status = .off {
+        didSet { Self.logTransition(from: oldValue, to: status) }
+    }
+    private(set) var historyFailure: HistorySyncFailure?
     private(set) var lastSync: Date?
     private(set) var isAvailable: Bool
     @ObservationIgnored weak var model: AppModel?
@@ -65,6 +69,45 @@ final class ICloudLink {
     @ObservationIgnored private var clearing: Task<Void, Never>?
 
     private struct AccountRestricted: Error {}
+
+    private static func name(of status: Status) -> String {
+        switch status {
+        case .off: "off"
+        case .unavailable: "unavailable"
+        case .connecting: "connecting"
+        case .running: "running"
+        case .noAccount: "noAccount"
+        case .restricted: "restricted"
+        case .storageFull: "storageFull"
+        case .limited: "limited"
+        case .offline: "offline"
+        case .failed: "failed"
+        case .removing: "removing"
+        case .removeFailed: "removeFailed"
+        }
+    }
+
+    private static func isFailing(_ status: Status) -> Bool {
+        switch status {
+        case .noAccount, .restricted, .storageFull, .limited, .offline, .failed, .removeFailed: true
+        case .off, .unavailable, .connecting, .running, .removing: false
+        }
+    }
+
+    private static func logTransition(from old: Status, to new: Status) {
+        let (from, to) = (name(of: old), name(of: new))
+        guard from != to, isFailing(old) || isFailing(new) else { return }
+        guard isFailing(new) else {
+            Log.icloud.debug("Link status \(from, privacy: .public) -> \(to, privacy: .public)")
+            return
+        }
+        switch new {
+        case .failed, .removeFailed:
+            Log.icloud.error("Link status \(from, privacy: .public) -> \(to, privacy: .public)")
+        default:
+            Log.icloud.notice("Link status \(from, privacy: .public) -> \(to, privacy: .public)")
+        }
+    }
 
     private struct LaunchRecents {
         var store: ObjectIdentifier
@@ -152,6 +195,7 @@ final class ICloudLink {
         needsPrepare = true
         fetchRequested = true
         failures = 0
+        historyFailure = nil
         published = nil
         publishedAt = nil
         fetchedAt = nil
@@ -177,6 +221,7 @@ final class ICloudLink {
 
     private func stop() {
         isRunning = false
+        historyFailure = nil
         let cloud = link()
         let runner = runner
         runner?.cancel()
@@ -224,8 +269,16 @@ final class ICloudLink {
                 wait = delay
             }
             guard !Task.isCancelled else { return }
+            await refreshHistoryHealth()
             await nap(max(wait, 1))
         }
+    }
+
+    private func refreshHistoryHealth() async {
+        let health = await historySync?.health
+        guard isRunning, !Task.isCancelled else { return }
+        let failure = model?.settings.sharesHistory == true ? health?.failure : nil
+        if failure != historyFailure { historyFailure = failure }
     }
 
     private func connect(_ cloud: CloudLink) async throws {
@@ -573,9 +626,10 @@ final class ICloudLink {
 }
 
 extension ICloudLink {
-    func show(available: Bool, status: Status = .off, lastSync: Date? = nil) {
+    func show(available: Bool, status: Status = .off, lastSync: Date? = nil, historyFailure: HistorySyncFailure? = nil) {
         isAvailable = available
         self.status = status
         self.lastSync = lastSync
+        self.historyFailure = historyFailure
     }
 }

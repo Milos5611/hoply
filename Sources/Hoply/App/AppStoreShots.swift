@@ -121,6 +121,7 @@ enum AppStoreShots {
         let host = NSHostingView(rootView: composition
             .frame(width: points.width, height: points.height)
             .environment(model)
+            .environment(\.clock, model.clock)
             .environment(\.edition, .appStore)
             // An offscreen window is never key, so prominent buttons would draw in their inactive grey.
             .environment(\.controlActiveState, .key))

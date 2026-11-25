@@ -1,6 +1,7 @@
 import AgentKit
 import CloudKit
 import Foundation
+import os
 import Security
 import SystemConfiguration
 
@@ -15,6 +16,10 @@ public enum CloudLinkError: Error, Equatable, Sendable {
     public init(_ error: any Error) {
         if let link = error as? CloudLinkError {
             self = link
+            return
+        }
+        if let failure = error as? CloudLinkFailure {
+            self = failure.link
             return
         }
         guard let error = error as? CKError else {
@@ -43,6 +48,17 @@ public enum CloudLinkError: Error, Equatable, Sendable {
         }
     }
 
+    var name: String {
+        switch self {
+        case .unavailable: "unavailable"
+        case .noAccount: "noAccount"
+        case .network: "network"
+        case .limited: "limited"
+        case .quotaExceeded: "quotaExceeded"
+        case .other: "other"
+        }
+    }
+
     var rank: Int {
         switch self {
         case .unavailable: 0
@@ -52,6 +68,22 @@ public enum CloudLinkError: Error, Equatable, Sendable {
         case .network: 4
         case .other: 5
         }
+    }
+}
+
+// Keeps the CloudKit error behind an `.other`, so history health can tell a rejected request from the rest;
+// `CloudLinkError(_:)` unwraps it, so callers see the same cases as before.
+struct CloudLinkFailure: Error, LocalizedError {
+    let link: CloudLinkError
+    let cause: NSError
+
+    var errorDescription: String? { cause.localizedDescription }
+
+    static func wrapping(_ error: any Error) -> any Error {
+        if error is CloudLinkError || error is CloudLinkFailure { return error }
+        let link = CloudLinkError(error)
+        guard case .other = link else { return link }
+        return CloudLinkFailure(link: link, cause: error as NSError)
     }
 }
 
@@ -225,13 +257,13 @@ public actor CloudLink {
             @unknown default: return .couldNotDetermine
             }
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "accountStatus", RemoteSchema.containerID)
         }
     }
 
     public func prepare() async throws {
         guard try await accountStatus() == .available else { throw CloudLinkError.noAccount }
-        try await run { link, database in
+        try await run("prepare", RemoteSchema.zoneName) { link, database in
             try await link.ensureZone(database)
             let stale = link.leftovers
             guard !stale.isEmpty else { return }
@@ -253,14 +285,15 @@ public actor CloudLink {
         do {
             image = try RemoteSchema.record(transcript)
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "encode", RemoteSchema.RecordType.transcript)
         }
         // Remembered before the save, so a withdraw after a crash mid-save still deletes it.
         if state.transcripts[image.name] == nil {
             state.transcripts[image.name] = transcript.updatedAt
             saveState()
         }
-        try await runTranscripts { link, database in
+        try await runTranscripts("save", "\(RemoteSchema.RecordType.transcript) in \(RemoteSchema.transcriptZoneName)") {
+            link, database in
             let record = Self.record(from: image, zone: link.transcriptZoneID)
             let saved = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys,
                                                          atomically: true).saveResults
@@ -277,7 +310,7 @@ public actor CloudLink {
             try await Self.delete(names.map { transcriptRecordID($0) }, in: database)
         } catch where Self.zoneMissing(error) {
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "delete", RemoteSchema.transcriptZoneName)
         }
         for name in names { state.transcripts[name] = nil }
         saveState()
@@ -291,7 +324,7 @@ public actor CloudLink {
         do {
             images = try parts.map { try RemoteSchema.record($0) }
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "encode", RemoteSchema.RecordType.historyDay)
         }
         let previous = state.history[day]
         let extra = RemoteHistoryOutbox.extraParts(device: device, day: day, previous: previous, parts: parts.count)
@@ -299,7 +332,8 @@ public actor CloudLink {
         state.history[day] = RemoteHistoryPublished(fingerprint: nil, parts: max(previous?.parts ?? 0, parts.count),
                                                     at: first.updatedAt)
         saveState()
-        try await runHistory { link, database in
+        try await runHistory("save", "\(RemoteSchema.RecordType.historyDay) in \(RemoteSchema.historyZoneName)") {
+            link, database in
             for image in images {
                 let record = Self.record(from: image, zone: link.historyZoneID)
                 let saved = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys,
@@ -324,7 +358,7 @@ public actor CloudLink {
             try await Self.delete(names.map { historyRecordID($0) }, in: database)
         } catch where Self.zoneMissing(error) {
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "delete", RemoteSchema.historyZoneName)
         }
         for day in known { state.history[day] = nil }
         saveState()
@@ -332,7 +366,7 @@ public actor CloudLink {
 
     // The page's token is kept only by `acknowledgeHistory`, once the caller has applied the page.
     public func fetchHistory() async throws -> RemoteHistoryPage {
-        try await runHistory { link, database in
+        try await runHistory("fetch", RemoteSchema.historyZoneName) { link, database in
             var token = (link.historyCursor ?? link.state.historyToken).flatMap(Self.token(from:))
             var fromStart = token == nil
             let changes: HistoryChanges
@@ -378,7 +412,7 @@ public actor CloudLink {
     }
 
     public func close(requestID: String) async throws {
-        try await run { link, database in
+        try await run("delete", "\(RemoteSchema.RecordType.request) in \(RemoteSchema.zoneName)") { link, database in
             try await Self.delete([link.recordID(requestID)], in: database)
         }
         state.openRequests.removeAll { $0 == requestID }
@@ -386,7 +420,7 @@ public actor CloudLink {
     }
 
     public func fetchAnswers() async throws -> [RemoteAnswer] {
-        try await run { link, database in
+        try await run("fetch", RemoteSchema.zoneName) { link, database in
             var token = link.state.changeToken.flatMap(Self.token(from:))
             var restarted = false
             var answers: [RemoteAnswer] = []
@@ -411,7 +445,7 @@ public actor CloudLink {
 
     // The fetch's change token is kept only now, so answers fetched but never acknowledged come back next time.
     public func acknowledge(_ answerIDs: [String]) async throws {
-        try await run { link, database in
+        try await run("delete", "\(RemoteSchema.RecordType.answer) in \(RemoteSchema.zoneName)") { link, database in
             try await Self.delete(answerIDs.map { link.recordID($0) }, in: database)
         }
         guard let fetchedToken else { return }
@@ -428,13 +462,14 @@ public actor CloudLink {
         let history = state.history.keys.sorted().flatMap { day in
             state.history[day].map { RemoteHistoryOutbox.recordNames(device: device, day: day, published: $0) } ?? []
         }
-        for ids in [names.map { recordID($0) }, transcripts.map { transcriptRecordID($0) },
-                    history.map { historyRecordID($0) }] where !ids.isEmpty {
+        for (zone, ids) in [(RemoteSchema.zoneName, names.map { recordID($0) }),
+                            (RemoteSchema.transcriptZoneName, transcripts.map { transcriptRecordID($0) }),
+                            (RemoteSchema.historyZoneName, history.map { historyRecordID($0) })] where !ids.isEmpty {
             do {
                 try await Self.delete(ids, in: database)
             } catch where Self.zoneMissing(error) {
             } catch {
-                throw CloudLinkError(error)
+                throw failed(error, "withdraw", zone)
             }
         }
         state.openRequests = []
@@ -479,7 +514,39 @@ public actor CloudLink {
     }
 
     private func saveState() {
-        try? state.save(to: stateURL)
+        do {
+            try state.save(to: stateURL)
+        } catch {
+            Log.icloud.error("Saving the link state failed: \(Log.code(of: error), privacy: .public)")
+        }
+    }
+
+    private nonisolated func failed(_ error: any Error, _ operation: String, _ target: String) -> any Error {
+        Self.log(error, operation: operation, target: target)
+        return CloudLinkFailure.wrapping(error)
+    }
+
+    static func log(_ error: any Error, operation: String, target: String) {
+        let code = Log.code(of: error)
+        let retry = (error as? CKError)?.retryAfterSeconds
+        let retryText = retry.map { ", retry after \(Int($0.rounded(.up))) s" } ?? ""
+        let detail = (error as NSError).localizedDescription
+        switch CloudLinkError(error) {
+        case .network, .limited:
+            Log.icloud.notice("""
+                CloudKit \(operation, privacy: .public) on \(target, privacy: .public) failed: \
+                \(code, privacy: .public)\(retryText, privacy: .public) (\(detail, privacy: .private))
+                """)
+        case .unavailable, .noAccount, .quotaExceeded, .other:
+            Log.icloud.error("""
+                CloudKit \(operation, privacy: .public) on \(target, privacy: .public) failed: \
+                \(code, privacy: .public)\(retryText, privacy: .public) (\(detail, privacy: .private))
+                """)
+        }
+    }
+
+    private static func logZoneMissing(_ zone: String, operation: String) {
+        Log.icloud.notice("Zone \(zone, privacy: .public) missing during \(operation, privacy: .public); recreating it")
     }
 
     private func save(_ make: () throws -> RemoteRecord) async throws {
@@ -488,9 +555,9 @@ public actor CloudLink {
         do {
             image = try make()
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, "encode", "record")
         }
-        try await run { link, database in
+        try await run("save", "\(image.type) in \(RemoteSchema.zoneName)") { link, database in
             let record = Self.record(from: image, zone: link.zoneID)
             let saved = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys,
                                                          atomically: true).saveResults
@@ -498,11 +565,13 @@ public actor CloudLink {
         }
     }
 
-    private func run<T: Sendable>(_ body: (isolated CloudLink, CKDatabase) async throws -> T) async throws -> T {
+    private func run<T: Sendable>(_ operation: String, _ target: String,
+                                  _ body: (isolated CloudLink, CKDatabase) async throws -> T) async throws -> T {
         let database = try cloudContainer().privateCloudDatabase
         do {
             return try await body(self, database)
         } catch where Self.zoneMissing(error) {
+            Self.logZoneMissing(RemoteSchema.zoneName, operation: operation)
             state.zoneReady = false
             state.subscriptionReady = false
             state.changeToken = nil
@@ -512,37 +581,41 @@ public actor CloudLink {
                 try await ensureZone(database)
                 return try await body(self, database)
             } catch {
-                throw CloudLinkError(error)
+                throw failed(error, operation, target)
             }
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, operation, target)
         }
     }
 
-    private func runTranscripts(_ body: (isolated CloudLink, CKDatabase) async throws -> Void) async throws {
+    private func runTranscripts(_ operation: String, _ target: String,
+                                _ body: (isolated CloudLink, CKDatabase) async throws -> Void) async throws {
         let database = try cloudContainer().privateCloudDatabase
         do {
             try await body(self, database)
         } catch where Self.zoneMissing(error) {
+            Self.logZoneMissing(RemoteSchema.transcriptZoneName, operation: operation)
             state.transcriptZoneReady = false
             saveState()
             do {
                 try await ensureTranscriptZone(database)
                 try await body(self, database)
             } catch {
-                throw CloudLinkError(error)
+                throw failed(error, operation, target)
             }
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, operation, target)
         }
     }
 
-    private func runHistory<T: Sendable>(_ body: (isolated CloudLink, CKDatabase) async throws -> T) async throws -> T {
+    private func runHistory<T: Sendable>(_ operation: String, _ target: String,
+                                         _ body: (isolated CloudLink, CKDatabase) async throws -> T) async throws -> T {
         let database = try cloudContainer().privateCloudDatabase
         do {
             try await ensureHistoryZone(database)
             return try await body(self, database)
         } catch where Self.zoneMissing(error) {
+            Self.logZoneMissing(RemoteSchema.historyZoneName, operation: operation)
             state.historyZoneReady = false
             state.historyToken = nil
             historyCursor = nil
@@ -551,10 +624,10 @@ public actor CloudLink {
                 try await ensureHistoryZone(database)
                 return try await body(self, database)
             } catch {
-                throw CloudLinkError(error)
+                throw failed(error, operation, target)
             }
         } catch {
-            throw CloudLinkError(error)
+            throw failed(error, operation, target)
         }
     }
 
@@ -615,7 +688,7 @@ public actor CloudLink {
     private struct HistoryChanges: Sendable {
         var records: [CKRecord]
         var names: [String]
-        var failure: CloudLinkError?
+        var failure: (any Error)?
         var deleted: [String]
         var token: CKServerChangeToken
         var more: Bool
@@ -625,11 +698,11 @@ public actor CloudLink {
                                        since token: CKServerChangeToken?) async throws -> HistoryChanges {
         let changes = try await database.recordZoneChanges(inZoneWith: zone, since: token, resultsLimit: 100)
         var records: [CKRecord] = []
-        var failure: CloudLinkError?
+        var failure: (any Error)?
         for result in changes.modificationResultsByID.values {
             switch result {
             case .success(let modification): records.append(modification.record)
-            case .failure(let error): failure = failure ?? CloudLinkError(error)
+            case .failure(let error): failure = failure ?? CloudLinkFailure.wrapping(error)
             }
         }
         return HistoryChanges(records: records, names: changes.modificationResultsByID.keys.map(\.recordName),

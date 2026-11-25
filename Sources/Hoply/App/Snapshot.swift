@@ -3,10 +3,12 @@ import AppKit
 import SwiftUI
 
 enum Snapshot {
+    static let referenceDate = Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 14, minute: 30))!
+
     static func render(to directory: URL) {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let now = Date()
+            let now = referenceDate
             for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                 let model = AppModel.preview(now: now)
                 let looks = NSAppearance(named: appearance)
@@ -87,6 +89,16 @@ enum Snapshot {
                                model: model, appearance: looks, surface: popover,
                                to: directory.appendingPathComponent("panel-settings-iphone-\(state)-\(name).png"))
                 }
+                var failing = PreviewData.settings
+                failing.iCloudLink = true
+                failing.iPhoneLaunch = true
+                model.showPreview(settings: failing)
+                model.iCloudLink.show(available: true, status: .running, lastSync: now - 12,
+                                      historyFailure: PreviewData.historyFailure(now: now))
+                try render(PhoneSettings().toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+                               .padding(12).frame(width: 448),
+                           model: model, appearance: looks, surface: popover,
+                           to: directory.appendingPathComponent("panel-settings-iphone-history-failing-\(name).png"))
                 model.showPreview(settings: PreviewData.settings)
                 model.iCloudLink.show(available: false)
                 for (state, query) in [("empty", ""), ("query", "core"), ("actions", ">"), ("no-results", "zzqx")] {
@@ -217,11 +229,11 @@ enum Snapshot {
                 model.modelServers.show(states)
 
                 model.history.showProjectDetail(PreviewData.history(now: now))
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_600), model: model,
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 2_080), model: model,
                            appearance: looks, to: directory.appendingPathComponent("dashboard-project-detail-\(name).png"))
                 let edits = PreviewData.projectEdits(now: now)
                 model.projectEdits.beginMerge(PreviewData.projectRefs[0], into: PreviewData.projectRefs[1])
-                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 1_720), model: model,
+                try render(DashboardView(plainSidebar: true).frame(width: 1180, height: 2_200), model: model,
                            appearance: looks,
                            to: directory.appendingPathComponent("dashboard-project-detail-merge-\(name).png"))
                 model.projectEdits.show(edits, error: ProjectEditText.describe(ProjectEditError.unknownProject(8)))
@@ -367,6 +379,7 @@ enum Snapshot {
                                surface: Color = Color(nsColor: .windowBackgroundColor), to file: URL) throws {
         let host = NSHostingView(rootView: view
             .environment(model)
+            .environment(\.clock, model.clock)
             .background(surface))
         let frame = NSRect(origin: .zero, size: host.fittingSize)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)

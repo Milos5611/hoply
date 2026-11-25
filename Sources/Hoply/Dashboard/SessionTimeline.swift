@@ -4,9 +4,13 @@ import SwiftUI
 struct SessionTimelineCard: View {
     let spans: [StateSpan]
 
+    @Environment(\.clock) private var clock
+
     var body: some View {
         if let first = spans.first {
-            if spans.contains(where: \.isOpen) {
+            if spans.contains(where: \.isOpen), let fixed = clock.fixed {
+                card(from: first.start, now: max(fixed, first.start))
+            } else if spans.contains(where: \.isOpen) {
                 TimelineView(.periodic(from: .now, by: 15)) { context in
                     card(from: first.start, now: max(context.date, first.start))
                 }
@@ -32,9 +36,9 @@ struct SessionTimelineCard: View {
                 VStack(spacing: 4) {
                     TimelineBar(spans: spans, start: start, end: now)
                     HStack {
-                        Text(Format.when(start))
+                        Text(Format.when(start, now: now))
                         Spacer()
-                        Text(live ? "now" : Format.when(now))
+                        Text(live ? "now" : Format.when(now, now: now))
                     }
                     .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -105,9 +109,9 @@ struct TimelineBar: View {
     static func tooltip(_ span: StateSpan, now: Date) -> String {
         let length = Format.timeSpent(span.duration(now: now))
         guard let end = span.end else {
-            return "\(span.state.status.label) since \(Format.when(span.start)) · \(length)"
+            return "\(span.state.status.label) since \(Format.when(span.start, now: now)) · \(length)"
         }
-        return "\(span.state.status.label) · \(Format.when(span.start)) – \(Format.when(end)) · \(length)"
+        return "\(span.state.status.label) · \(Format.when(span.start, now: now)) – \(Format.when(end, now: now)) · \(length)"
     }
 }
 

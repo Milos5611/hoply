@@ -1,7 +1,8 @@
 import AgentKit
-import AgentSystem
+import CloudKit
 import Foundation
 import XCTest
+@testable import AgentSystem
 
 private actor FakeHistoryCloud: HistoryCloud {
     nonisolated let device = "mac-a"
@@ -13,8 +14,8 @@ private actor FakeHistoryCloud: HistoryCloud {
     var fetches = 0
     var acknowledgedAfter: [Int] = []
     var restarts = 0
-    var publishError: CloudLinkError?
-    var fetchError: CloudLinkError?
+    var publishError: (any Error)?
+    var fetchError: (any Error)?
 
     var historyDays: [String: RemoteHistoryPublished] { days }
 
@@ -43,6 +44,8 @@ private actor FakeHistoryCloud: HistoryCloud {
     func set(pages: [RemoteHistoryPage]) { self.pages = pages }
     func set(publishError: CloudLinkError?) { self.publishError = publishError }
     func set(fetchError: CloudLinkError?) { self.fetchError = fetchError }
+    func set(publishFailure: (any Error)?) { publishError = publishFailure }
+    func set(fetchFailure: (any Error)?) { fetchError = fetchFailure }
 }
 
 final class HistorySyncTests: XCTestCase {
@@ -229,6 +232,70 @@ final class HistorySyncTests: XCTestCase {
         _ = try await sync.sync(ledger: ledger, sharing: false, deviceName: nil, now: t0.addingTimeInterval(30))
         fetches = await cloud.fetches
         XCTAssertEqual(fetches, 4)
+    }
+
+    private func rejected(_ code: CKError.Code) -> any Error {
+        CloudLinkFailure.wrapping(CKError(code))
+    }
+
+    func testARejectedPublishShowsUntilAPublishSucceeds() async throws {
+        let ledger = try ledger(try TempDirectory())
+        try await ledger.store.apply(usage("s1"))
+        let cloud = FakeHistoryCloud()
+        await cloud.set(publishFailure: rejected(.serverRejectedRequest))
+        let sync = HistorySync(cloud: cloud)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0)
+        var health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0, last: t0))
+        XCTAssertNil(health.fetch, "the fetch worked")
+
+        let batch = CKError(.partialFailure, userInfo: [CKPartialErrorsByItemIDKey: [
+            CKRecord.ID(recordName: "a"): CKError(.batchRequestFailed), CKRecord.ID(recordName: "b"): CKError(.unknownItem),
+        ] as [CKRecord.ID: any Error]])
+        await cloud.set(publishFailure: CloudLinkFailure.wrapping(batch))
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(6))
+        health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .publish, problem: .rejected, since: t0,
+                                                          last: t0.addingTimeInterval(6)))
+
+        await cloud.set(publishError: .quotaExceeded)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(20))
+        let retry = await sync.publishRetry
+        XCTAssertEqual(retry.failures, 3, "a full iCloud still backs off")
+        health = await sync.health
+        XCTAssertEqual(health.failure?.last, t0.addingTimeInterval(6), "the link shows a full iCloud; health ignores it")
+
+        await cloud.set(publishFailure: nil)
+        _ = try await sync.sync(ledger: ledger, sharing: true, deviceName: nil, now: t0.addingTimeInterval(100))
+        health = await sync.health
+        XCTAssertNil(health.failure)
+        let published = await cloud.published
+        XCTAssertEqual(published.count, 1)
+    }
+
+    func testARejectedFetchShowsUntilAFetchSucceeds() async throws {
+        let ledger = try ledger(try TempDirectory())
+        let cloud = FakeHistoryCloud()
+        await cloud.set(fetchFailure: rejected(.invalidArguments))
+        let sync = HistorySync(cloud: cloud)
+        _ = try await sync.sync(ledger: ledger, sharing: false, deviceName: nil, now: t0)
+        var health = await sync.health
+        XCTAssertEqual(health.failure, HistorySyncFailure(operation: .fetch, problem: .rejected, since: t0, last: t0))
+        XCTAssertNil(health.publish)
+
+        await cloud.set(fetchError: .network)
+        _ = try await sync.sync(ledger: ledger, sharing: false, deviceName: nil, now: t0.addingTimeInterval(6))
+        health = await sync.health
+        XCTAssertEqual(health.fetch?.last, t0, "being offline neither counts nor clears")
+
+        await cloud.set(fetchFailure: nil)
+        await cloud.set(pages: [RemoteHistoryPage(days: [remoteDay("mac-b")])])
+        let result = try await sync.sync(ledger: ledger, sharing: false, deviceName: nil, now: t0.addingTimeInterval(100))
+        XCTAssertTrue(result.applied)
+        health = await sync.health
+        XCTAssertNil(health.failure)
+        let fetches = await cloud.fetches
+        XCTAssertEqual(fetches, 3)
     }
 
     func testClearingReceivedHistoryStartsTheFetchOver() async throws {

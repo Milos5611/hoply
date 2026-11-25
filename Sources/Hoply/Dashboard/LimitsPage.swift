@@ -3,12 +3,13 @@ import Charts
 import SwiftUI
 
 struct LimitsPage: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let history = model.history
         let data = history.limits
-        let now = Date()
+        let now = clock.now
         let live = model.claudeLimits
         let windows = claudeWindows(data, now: now)
         let codex = codexWindows(data)
@@ -290,7 +291,7 @@ struct LimitWindowCard: View {
 
     private var resetTitle: String {
         guard let resetsAt = projection.resetsAt else { return "Not started" }
-        return hasReset ? "Reset at \(Format.clock(resetsAt, now: now))" : Format.resetTime(resetsAt)
+        return hasReset ? "Reset at \(Format.clock(resetsAt, now: now))" : Format.resetTime(resetsAt, now: now)
     }
 
     private var resetDetail: String {
@@ -728,6 +729,7 @@ private struct LimitWindowPlot: ChartContent {
 }
 
 struct LimitTooltip: View {
+    @Environment(\.clock) private var clock
     struct Row: Identifiable {
         let kind: LimitKind
         let name: String
@@ -742,7 +744,7 @@ struct LimitTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(Format.when(time))
+            Text(Format.when(time, now: clock.now))
                 .font(.system(size: 11.5, weight: .semibold))
             if rows.isEmpty {
                 Text("No window running")

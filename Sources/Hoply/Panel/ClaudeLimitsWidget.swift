@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ClaudeLimitsWidget: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.clock) private var clock
 
     private let claude = SourceBadge.color(for: .claudeCode)
 
@@ -21,14 +22,14 @@ struct ClaudeLimitsWidget: View {
     }
 
     private var fiveHourPace: LimitPace? {
-        model.claudeLimits?.fiveHour?.pace(.fiveHour, at: model.claudeLimitsFetchedAt ?? Date())
+        model.claudeLimits?.fiveHour?.pace(.fiveHour, at: model.claudeLimitsFetchedAt ?? clock.now)
     }
 
     @ViewBuilder
     private var tile: some View {
         if let limits = model.claudeLimits, let fiveHour = limits.fiveHour {
             WidgetTile(title: "5-hour", symbol: "asterisk", tint: claude,
-                       footer: model.claudeLimitsError ?? Format.resetTime(fiveHour.resetsAt),
+                       footer: model.claudeLimitsError ?? Format.resetTime(fiveHour.resetsAt, now: clock.now),
                        footerColor: model.claudeLimitsError == nil ? .secondary : .red) {
                 HStack(spacing: 10) {
                     RingGauge(fraction: fiveHour.utilization / 100, tint: Self.tint(fiveHour.utilization),

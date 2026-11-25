@@ -300,6 +300,10 @@ in detail. If its tokens appear as a separate "Copilot IDE" row, `TelemetryMappe
 - **Comments: default to none.** No `///` doc comments. Write a one- or two-line `//` only where a reader would
   otherwise "simplify" the code into a bug: a format quirk, a workaround, an ordering rule.
 - No new package dependencies without discussing it in an issue first.
+- Log through `Log` in AgentSystem (`os.Logger`; categories `icloud`, `history`, `ingest`, `store`), never in
+  AgentKit. Failures at error or notice level, successes at debug at most and never once per usage row. Error codes,
+  record types, zone and operation names are `privacy: .public`; file paths, project names, session titles and device
+  names `.private`; payloads, prompt or reply text, tokens and secrets are never logged.
 - New `AppSettings` fields decode leniently, key by key, in `init(from:)`, so a missing or wrongly typed key falls
   back to its default and never resets saved settings.
 - `~/.claude`, `~/.codex` and `~/.copilot` are read-only to Hoply. The only exception is connecting an agent, which

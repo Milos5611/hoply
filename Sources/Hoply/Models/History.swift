@@ -38,11 +38,19 @@ struct OpenedProject: Equatable {
     var filter: ProjectFilter { project.map { .project($0.id) } ?? .unassigned }
 }
 
+struct ProjectBranches: Equatable {
+    var rows: [BranchSummary]
+    var coversOnlyThisMac: Bool
+
+    var isShown: Bool { rows.contains { $0.branch != nil } }
+}
+
 struct ProjectDetailData: Equatable {
     var range: HistoryRange
     var summary: ProjectSummary
     var daily: DailySpendSeries
     var sessions: SessionPage
+    var branches: ProjectBranches?
 }
 
 struct LimitsData: Equatable {
@@ -774,11 +782,17 @@ final class History {
                     let sessions = try await reader.sessions(in: interval, project: opened.filter,
                                                              limit: Self.pageSize, offset: projectSessionsOffset,
                                                              scope: scope)
+                    var branches: ProjectBranches?
+                    if scope == .all || scope == .thisMac, opened.project?.isRemoteOnly != true {
+                        branches = ProjectBranches(
+                            rows: try await reader.branches(in: interval, project: opened.filter),
+                            coversOnlyThisMac: scope == .all && !remoteDevices.isEmpty)
+                    }
                     detail = ProjectDetailData(
                         range: range, summary: summary,
                         daily: try await reader.dailySpend(days: days, split: .model, project: opened.filter, now: now,
                                                            scope: scope),
-                        sessions: sessions)
+                        sessions: sessions, branches: branches)
                     if projectAutoSelect {
                         selected = sessions.sessions.first
                     } else if let current = selected {

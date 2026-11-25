@@ -47,6 +47,7 @@ struct SessionsPage: View {
 }
 
 struct SessionTable: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
     let sessions: [SessionSummary]
     @Binding var selection: SessionSummary.ID?
@@ -107,7 +108,7 @@ struct SessionTable: View {
             }
             .width(min: 52, ideal: 60)
             TableColumn("Last active") { session in
-                Text(session.lastAt.map { Format.shortWhen($0) } ?? "–")
+                Text(session.lastAt.map { Format.shortWhen($0, now: clock.now) } ?? "–")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -188,6 +189,7 @@ struct Pager: View {
 }
 
 struct SessionDetail: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
     @Environment(\.edition) private var edition
     let session: SessionSummary?
@@ -241,7 +243,7 @@ struct SessionDetail: View {
                         Label("Unassigned", systemImage: "questionmark.folder")
                     }
                     if let first = session.firstAt, let last = session.lastAt {
-                        Label("\(Format.when(first)) – \(Format.when(last)) · \(Format.duration(from: first, to: last))",
+                        Label("\(Format.when(first, now: clock.now)) – \(Format.when(last, now: clock.now)) · \(Format.duration(from: first, to: last))",
                               systemImage: "clock")
                     }
                 }
@@ -297,7 +299,7 @@ struct SessionDetail: View {
                 ContextGauge(context: context, source: session.key.source)
             }
         }
-        let rows = SubagentRow.rows(ledger: insight?.subagents ?? [], live: live?.subagents ?? [])
+        let rows = SubagentRow.rows(ledger: insight?.subagents ?? [], live: live?.subagents ?? [], now: clock.now)
         if !rows.isEmpty {
             Card(prominent: true, padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -497,7 +499,7 @@ struct SubagentRow: Identifiable, Equatable {
     var totals: LedgerTotals?
     var isWorking: Bool
 
-    static func rows(ledger: [SubagentSummary], live: [LiveSubagent], now: Date = Date()) -> [SubagentRow] {
+    static func rows(ledger: [SubagentSummary], live: [LiveSubagent], now: Date) -> [SubagentRow] {
         var rows = ledger.map { summary in
             let running = live.first { $0.id == summary.agentID }
             return SubagentRow(id: summary.agentID, name: summary.agentType ?? running?.type ?? summary.name,

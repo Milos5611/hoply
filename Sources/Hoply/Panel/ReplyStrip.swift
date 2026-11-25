@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ReplyStrip: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.clock) private var clock
     let reply: TurnReplyRequest
 
     @State private var text = ""
@@ -35,7 +36,7 @@ struct ReplyStrip: View {
                 .font(.system(size: 12))
                 .onSubmit(send)
             HStack(spacing: 6) {
-                Text("Waits until \(Format.clock(reply.received.addingTimeInterval(TurnReply.holdLimit)))")
+                Text("Waits until \(Format.clock(reply.received.addingTimeInterval(TurnReply.holdLimit), now: clock.now))")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

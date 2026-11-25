@@ -254,6 +254,60 @@ public actor StoreReader {
         return summaries
     }
 
+    public func branches(in range: DateInterval, project: ProjectFilter) throws -> [BranchSummary] {
+        var filter = "ts >= ? AND ts < ?"
+        var values: [any SQLiteBindable] = Self.bounds(range)
+        Self.append(project, column: "project_id", to: &filter, values: &values)
+        let rows = Self.rows(.thisMac, where: filter, values)
+        var summaries = try db.query("""
+            SELECT NULLIF(s.branch, '') AS branch, \(Self.totals(prefix: "u.", scoped: true)),
+                   COUNT(DISTINCT \(Self.sessionIdentity("u."))), MAX(u.ts), MIN(u.ts)
+            FROM (\(rows.sql)) u LEFT JOIN sessions s ON s.source = u.source AND s.id = u.session_id
+            GROUP BY 1
+            ORDER BY branch IS NULL, COALESCE(SUM(u.api_equiv_usd), 0) DESC, MAX(u.ts) DESC, branch
+            """, rows.values) { row in
+            BranchSummary(branch: row.optionalText(0), totals: Self.totals(row, from: 1),
+                          sessionCount: row.int(1 + Self.totalsColumnCount),
+                          firstActive: row.optionalDouble(3 + Self.totalsColumnCount).map(Date.init(timeIntervalSince1970:)),
+                          lastActive: row.optionalDouble(2 + Self.totalsColumnCount).map(Date.init(timeIntervalSince1970:)))
+        }
+        guard !summaries.isEmpty else { return [] }
+
+        struct Facts {
+            var sources: Set<AgentSource> = []
+            var added: Int?
+            var removed: Int?
+            var urls: [(url: String, lastAt: Double)] = []
+        }
+        var facts: [String?: Facts] = [:]
+        for (branch, source, added, removed, url, lastAt) in try db.query("""
+            SELECT NULLIF(s.branch, ''), u.source, s.lines_added, s.lines_removed, s.pr_url, COALESCE(s.last_at, 0)
+            FROM (SELECT DISTINCT source, session_id FROM (\(rows.sql))) u
+            LEFT JOIN sessions s ON s.source = u.source AND s.id = u.session_id
+            """, rows.values, { row in
+            (row.optionalText(0), AgentSource(rawValue: row.text(1)), row.optionalInt(2), row.optionalInt(3),
+             row.optionalText(4), row.double(5))
+        }) {
+            if let source { facts[branch, default: Facts()].sources.insert(source) }
+            if let added { facts[branch, default: Facts()].added = (facts[branch]?.added ?? 0) + added }
+            if let removed { facts[branch, default: Facts()].removed = (facts[branch]?.removed ?? 0) + removed }
+            if let url { facts[branch, default: Facts()].urls.append((url, lastAt)) }
+        }
+        for index in summaries.indices {
+            let found = facts[summaries[index].branch] ?? Facts()
+            summaries[index].sources = AgentSource.allCases.filter(found.sources.contains)
+            // A Claude session with a cost record and no line counts stores 0 and 0, so a zero sum is unknown.
+            if (found.added ?? 0) + (found.removed ?? 0) > 0 {
+                summaries[index].linesAdded = found.added ?? 0
+                summaries[index].linesRemoved = found.removed ?? 0
+            }
+            var seen: Set<String> = []
+            summaries[index].prURLs = found.urls.sorted { ($1.lastAt, $0.url) < ($0.lastAt, $1.url) }
+                .compactMap { seen.insert($0.url).inserted ? $0.url : nil }
+        }
+        return summaries
+    }
+
     public func spendByModel(in range: DateInterval, scope: MacScope = .thisMac) throws -> [SpendSlice] {
         let rows = Self.rows(scope, where: "ts >= ? AND ts < ?", Self.bounds(range))
         return try db.query("""

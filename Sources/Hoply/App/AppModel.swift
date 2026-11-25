@@ -25,6 +25,7 @@ final class AppModel {
     private(set) var replies: [TurnReplyRequest] = []
     private(set) var sample: AppModel?
     private(set) var isSampleData = false
+    private(set) var clock = HoplyClock.live
     var showingSettings = false
     let history = History()
     let modelServers: ModelServers
@@ -746,6 +747,7 @@ final class AppModel {
 extension AppModel {
     static func preview(now: Date = Date()) -> AppModel {
         let model = AppModel(live: false)
+        model.clock = HoplyClock(fixed: now)
         model.settings.notificationsEnabled = false
         model.policy.preferences = NotificationPreferences(settings: model.settings)
         model.ingest(PreviewData.events(now: now))

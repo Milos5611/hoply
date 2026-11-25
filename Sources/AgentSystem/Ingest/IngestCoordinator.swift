@@ -1,5 +1,6 @@
 import AgentKit
 import Foundation
+import os
 
 public struct IngestUpdate: Sendable, Equatable {
     public var progress: IngestProgress
@@ -57,6 +58,7 @@ public actor IngestCoordinator {
     private var copilotTask: Task<Void, Never>?
     private var recording = 0
     private var telemetryCwds: [SessionKey: String] = [:]
+    private var failingFiles: Set<String> = []
 
     public init(store: Store, claude: ClaudeTranscriptIngester? = ClaudeTranscriptIngester(),
                 copilot: CopilotStoreIngester? = nil, codex: CodexRolloutIngester? = nil,
@@ -94,6 +96,7 @@ public actor IngestCoordinator {
             if let copilot { copilotCursor = try await store.cursors(source: .copilotCLI)[copilot.databasePath] }
         } catch {
             progress.lastError = "Could not read ingest cursors: \(error)"
+            Log.ingest.error("Reading ingest cursors failed: \(Log.code(of: error), privacy: .public)")
         }
         guard generation == runGeneration else { return }
         await refreshSessionIndex()
@@ -193,6 +196,7 @@ public actor IngestCoordinator {
             reset = true
         } catch {
             progress.lastError = "Reindex failed: \(error)"
+            Log.ingest.error("Reindex failed: \(Log.code(of: error), privacy: .public)")
             emit(force: true)
         }
         cursorResets -= 1
@@ -241,6 +245,16 @@ public actor IngestCoordinator {
         copilotPolling = false
         resumeIdleWaiters()
         progress.copilot = status
+        if previous != status {
+            switch status {
+            case .unsupported(let detail):
+                Log.ingest.error("Copilot CLI store schema unsupported: \(detail, privacy: .public)")
+            case .failed(let detail):
+                Log.ingest.error("Reading the Copilot CLI store failed: \(detail, privacy: .private)")
+            default:
+                break
+            }
+        }
         if previous != status || !pendingChanges.isEmpty { emit(force: true) }
     }
 
@@ -307,6 +321,7 @@ public actor IngestCoordinator {
             pendingChanges.formUnion(try await store.apply(TelemetryUsage.ledgerBatch(records, prompts: prompts)))
         } catch {
             progress.lastError = "Telemetry usage: \(error)"
+            Log.ingest.error("Storing telemetry usage failed: \(Log.code(of: error), privacy: .public)")
         }
         recording -= 1
         resumeIdleWaiters()
@@ -423,8 +438,18 @@ public actor IngestCoordinator {
                 if stopped { return }
                 if chunk.atEnd || chunk.bytesConsumed == 0 { break }
             }
+            if failingFiles.remove(path) != nil {
+                Log.ingest.notice("Reading \(path, privacy: .private) works again")
+            }
         } catch {
             progress.lastError = "\(URL(fileURLWithPath: path).lastPathComponent): \(error)"
+            // Once per file until it reads again: the 60 s rescan retries an unreadable file forever.
+            if failingFiles.insert(path).inserted {
+                Log.ingest.error("""
+                    Reading \(path, privacy: .private) failed: \(Log.code(of: error), privacy: .public) \
+                    (\(String(describing: error), privacy: .private))
+                    """)
+            }
         }
         if inBackfill {
             backfillRemaining.remove(path)
@@ -514,6 +539,7 @@ public actor IngestCoordinator {
             }
         } catch {
             progress.lastError = "session_index.jsonl: \(error)"
+            Log.ingest.error("Reading Codex session_index.jsonl failed: \(Log.code(of: error), privacy: .public)")
             return
         }
         codexTitles = names
@@ -525,6 +551,7 @@ public actor IngestCoordinator {
                                                                  rank: CodexSessionIndex.titleRank))
         } catch {
             progress.lastError = "Codex titles: \(error)"
+            Log.ingest.error("Storing Codex titles failed: \(Log.code(of: error), privacy: .public)")
         }
     }
 

@@ -91,6 +91,7 @@ struct ProjectListView: View {
 }
 
 struct ProjectTile: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
     let summary: ProjectSummary
     let share: Double?
@@ -106,7 +107,7 @@ struct ProjectTile: View {
                         Metric(value: Format.tokens(summary.totals.tokens.total), label: "tokens")
                         Metric(value: Format.count(summary.sessionCount),
                                label: summary.sessionCount == 1 ? "session" : "sessions")
-                        Metric(value: summary.lastActive.map { Format.lastActive($0) } ?? "–", label: "last active")
+                        Metric(value: summary.lastActive.map { Format.lastActive($0, now: clock.now) } ?? "–", label: "last active")
                     }
                     .lineLimit(1)
                     ModelLine(models: summary.topModels, copilot: Format.copilot(summary.totals))
@@ -283,6 +284,7 @@ struct ModelLine: View {
 // MARK: - Detail
 
 struct ProjectDetailView: View {
+    @Environment(\.clock) private var clock
     @Environment(AppModel.self) private var model
     @Environment(\.dashboardStandIn) private var standIn
     let opened: OpenedProject
@@ -314,6 +316,9 @@ struct ProjectDetailView: View {
                     DashboardCard(title: "By model", subtitle: range.label) {
                         ModelBreakdown(models: summary.topModels)
                     }
+                }
+                if let branches = detail?.branches, branches.isShown {
+                    BranchBreakdown(branches: branches, range: range)
                 }
                 sessions(detail, range: range)
                 if let project = opened.project, model.history.isReady {
@@ -419,7 +424,7 @@ struct ProjectDetailView: View {
         return HStack(spacing: 12) {
             HeadlineTile(label: "Spend", totals: totals, symbol: "dollarsign.circle")
             HeadlineTile(label: "Sessions", value: Format.count(summary.sessionCount),
-                         detail: summary.lastActive.map { "last active \(Format.lastActive($0))" } ?? "No sessions in range",
+                         detail: summary.lastActive.map { "last active \(Format.lastActive($0, now: clock.now))" } ?? "No sessions in range",
                          symbol: "list.bullet.rectangle", tint: .teal)
             HeadlineTile(label: "Tokens", value: Format.tokens(tokens.total),
                          detail: tokens.total > 0

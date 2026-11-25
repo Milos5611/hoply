@@ -6,6 +6,7 @@ struct StatePill: View {
     var failed = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.clock) private var clock
 
     var body: some View {
         let color = Self.color(for: status, failed: failed)
@@ -28,7 +29,7 @@ struct StatePill: View {
 
     private var label: String {
         if failed { return "Failed" }
-        if let until = status.limitedUntil { return "Limited · resets \(Format.clock(until))" }
+        if let until = status.limitedUntil { return "Limited · resets \(Format.clock(until, now: clock.now))" }
         return status.label
     }
 

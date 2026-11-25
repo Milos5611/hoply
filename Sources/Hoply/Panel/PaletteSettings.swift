@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PaletteSettings: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.clock) private var clock
     @State private var recorder = HotKeyRecorder()
 
     var body: some View {
@@ -42,7 +43,7 @@ struct PaletteSettings: View {
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    let status = Self.status(model.hotKey)
+                    let status = Self.status(model.hotKey, now: clock.now)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle()
                             .fill(status.color)
@@ -72,7 +73,7 @@ struct PaletteSettings: View {
         model.hotKey.setSuspended(false)
     }
 
-    static func status(_ hotKey: HotKey) -> (text: String, color: Color) {
+    static func status(_ hotKey: HotKey, now: Date) -> (text: String, color: Color) {
         switch hotKey.status {
         case .off:
             return ("Off", .secondary)
@@ -82,7 +83,7 @@ struct PaletteSettings: View {
             guard let fired = hotKey.lastFired else {
                 return ("Registered · not pressed yet. Press \(combo.displayString) to test it.", .orange)
             }
-            return ("Working · last pressed \(Format.clock(fired))", .green)
+            return ("Working · last pressed \(Format.clock(fired, now: now))", .green)
         }
     }
 }

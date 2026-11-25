@@ -20,6 +20,7 @@ enum SessionPlace: Equatable {
 
 struct SessionRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.clock) private var clock
     let session: AgentSession
     let status: SessionStatus
     var place: SessionPlace?
@@ -125,21 +126,21 @@ struct SessionRow: View {
         session.model.map { " · \(Format.model($0))" } ?? ""
     }
 
-    private var age: String { Format.age(since: session.stateSince) }
+    private var age: String { Format.age(since: session.stateSince, now: clock.now) }
 
     private var ageColor: Color {
         status.needsAction || failed ? StatePill.color(for: status, failed: failed) : .secondary
     }
 
     private var stateHelp: String {
-        let since = Format.clock(session.stateSince)
+        let since = Format.clock(session.stateSince, now: clock.now)
         var text: String
         switch status {
         case .permission: text = "Waiting for your approval since \(since)"
         case .input: text = "Asked you a question at \(since)"
         case .limited(let until):
             let plan = LimitProvider(source: session.key.source)?.displayName ?? "plan"
-            text = "Waiting since \(since). The \(plan) plan limit is reached; it resets at \(Format.clock(until))"
+            text = "Waiting since \(since). The \(plan) plan limit is reached; it resets at \(Format.clock(until, now: clock.now))"
         case .yourTurn: text = failed ? "The turn failed at \(since)" : "Finished its turn at \(since)"
         case .working: text = "Working since \(since)"
         case .idle: text = "Idle since \(since)"
